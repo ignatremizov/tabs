@@ -1,5 +1,5 @@
 // view/nodeview.js: NodeView class
-// Copyright (C) 2025 Selene ToyKeeper
+// Copyright (C) 2025 Selene ToyKeeper & Ignat Remizov
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 "use strict";
@@ -149,76 +149,131 @@ export class NodeView extends Node {
     // title row text
     // full row: [3/14] @ Label Text ~ <a href="link">Link Title</a>
     // ... where "[3/14]" is num children open/total, and "@" is a favicon
-    let mainText = '';
     let urlTitle = this.title ? this.title : this.url;  // handle blank title
-    // FIXME: instead of innerHTML, use safer Element creation and innerText
-    if (this.label) {
-      if (this.url) {  // label ~ href
-        mainText = `<a class="node-link" draggable="false" href="${this.url}"><span class="node-label">${this.label}</span><span class="node-label-url-sep"></span><span class="url-title">${urlTitle}</span></a>`;
+
+    // Build DOM safely without innerHTML
+    const doc = this.tree.document;
+    this.$row.textContent = '';  // clear existing content
+
+    // node stats
+    if (this.hasKids() && this.isCollapsed()) {
+      const openChildren = this.countNodes(
+        function (node) { return node.isLoaded(); }
+      );
+      const totalChildren = this.countNodes();
+      const $stats = doc.createElement('span');
+      $stats.className = 'node-stats';
+      if (openChildren > 0) {
+        $stats.append('[');
+        const $open = doc.createElement('span');
+        $open.className = 'node-stat-open';
+        $open.textContent = openChildren;
+        $stats.append($open, '/');
+        const $total = doc.createElement('span');
+        $total.className = 'node-stat-total';
+        $total.textContent = totalChildren;
+        $stats.append($total, '] ');
+      } else {
+        $stats.append('[');
+        const $total = doc.createElement('span');
+        $total.className = 'node-stat-total';
+        $total.textContent = totalChildren;
+        $stats.append($total, '] ');
       }
-      else {  // label only
-        mainText = `<span class="node-label">${this.label}</span>`;
-      }
+      this.$row.append($stats);
     }
-    else if (this.url) {  // href only
-      mainText = `<a class="node-link" draggable="false" href="${this.url}"><span class="url-title">${urlTitle}</span></a>`;
-    }
-    else {  // totally blank
-      if (this.isWindow()) {
-        const windowIdMaybe = this.windowId ? ' ' + this.windowId : '';
-        mainText = `<span class="node-notitle">Window${windowIdMaybe}</span>`;
-      }
-      else if (this.isRoot())
-        mainText = `<span class="node-notitle">Session</span>`;
-      else
-        mainText = `<span class="node-notitle">node ${this.id}</span>`;
-    }
-    if (this.isWindow() && (! this.isLoaded())) {  // note closed windows
-      //const mtime = fmtDate(this.mtime);  // FIXME: mtime isn't good for this
-      //mainText = mainText + ` (closed ${mtime})`;
-      mainText = mainText + ' (closed)';
-    }
-    // indicate when there's a long note attached
-    let noteIcon = '';
-    if (this.note)
-      noteIcon = '<span class="node-note-icon">📎 </span>';  // paperclip
+
     // checkbox
-    let ckbox = '';
     if (this.hasCheckbox()) {
       let cbType = this.getCheckboxType();
       let cbText = this.checkbox;
-      if (' ' === this.checkbox) cbText = '&nbsp;';
+      if (' ' === this.checkbox) cbText = '\u00A0';  // non-breaking space
       if ('percent' === cbType) {
         if (! this.checkboxPx) this.checkboxPx = 0.0;
         cbText = String(Math.floor((this.checkboxPx * 100))) + '%';
         if (this.checkboxPx > 0.999) cbType = cbType + ' done';
       }
-      ckbox = `<div class="node-checkbox ${cbType}">${cbText}</div>`;
+      const $ckbox = doc.createElement('div');
+      $ckbox.className = 'node-checkbox ' + cbType;
+      $ckbox.textContent = cbText;
+      this.$row.append($ckbox);
     }
-    // node stats
-    let statsText = '';
-    // unsure if always include stats or only when collapsed
-    //if (this.hasKids()) {  // always
-    if (this.hasKids() && this.isCollapsed()) {  // only when collapsed
-      //  count all open descendants
-      const openChildren = this.countNodes(
-        function (node) { return node.isLoaded(); }
-      );
-      const totalChildren = this.countNodes();
-      // only show "open" if non-zero
-      if (openChildren > 0)
-        statsText = `<span class="node-stats">[<span class="node-stat-open">${openChildren}</span>/<span class="node-stat-total">${totalChildren}</span>]</span> `;
-      else
-        statsText = `<span class="node-stats">[<span class="node-stat-total">${totalChildren}</span>]</span> `;
-    }
+
     // favicon
-    let faviconText = '';
     if (this.faviconUrl) {
-      // onerror hides the image if it fails to load
-      faviconText = `<img class="favicon" src="${this.faviconUrl}" alt="" onerror="this.style.display='none'">`;
+      const $favicon = doc.createElement('img');
+      $favicon.className = 'favicon';
+      $favicon.src = this.faviconUrl;
+      $favicon.alt = '';
+      $favicon.onerror = function() { this.style.display = 'none'; };
+      this.$row.append($favicon);
     }
-    // combined output
-    this.$row.innerHTML = `${statsText}${ckbox}${faviconText}${noteIcon}<span class="row-title">${mainText}</span>`;
+
+    // note icon
+    if (this.note) {
+      const $noteIcon = doc.createElement('span');
+      $noteIcon.className = 'node-note-icon';
+      $noteIcon.textContent = '📎 ';
+      this.$row.append($noteIcon);
+    }
+
+    // title (build DOM elements for label/url/etc)
+    const $title = doc.createElement('span');
+    $title.className = 'row-title';
+
+    if (this.label) {
+      if (this.url) {  // label ~ href
+        const $a = doc.createElement('a');
+        $a.className = 'node-link';
+        $a.draggable = false;
+        $a.href = this.url;
+        const $labelSpan = doc.createElement('span');
+        $labelSpan.className = 'node-label';
+        $labelSpan.textContent = this.label;
+        const $sep = doc.createElement('span');
+        $sep.className = 'node-label-url-sep';
+        const $urlSpan = doc.createElement('span');
+        $urlSpan.className = 'url-title';
+        $urlSpan.textContent = urlTitle;
+        $a.append($labelSpan, $sep, $urlSpan);
+        $title.append($a);
+      }
+      else {  // label only
+        const $labelSpan = doc.createElement('span');
+        $labelSpan.className = 'node-label';
+        $labelSpan.textContent = this.label;
+        $title.append($labelSpan);
+      }
+    }
+    else if (this.url) {  // href only
+      const $a = doc.createElement('a');
+      $a.className = 'node-link';
+      $a.draggable = false;
+      $a.href = this.url;
+      const $urlSpan = doc.createElement('span');
+      $urlSpan.className = 'url-title';
+      $urlSpan.textContent = urlTitle;
+      $a.append($urlSpan);
+      $title.append($a);
+    }
+    else {  // totally blank
+      const $noTitle = doc.createElement('span');
+      $noTitle.className = 'node-notitle';
+      if (this.isWindow()) {
+        const windowIdMaybe = this.windowId ? ' ' + this.windowId : '';
+        $noTitle.textContent = 'Window' + windowIdMaybe;
+      }
+      else if (this.isRoot())
+        $noTitle.textContent = 'Session';
+      else
+        $noTitle.textContent = 'node ' + this.id;
+      $title.append($noTitle);
+    }
+    if (this.isWindow() && (! this.isLoaded())) {  // note closed windows
+      $title.append(' (closed)');
+    }
+    this.$row.append($title);
+
     this.$row.setAttribute('draggable', true);
   }
 
@@ -256,18 +311,34 @@ export class NodeView extends Node {
     }
 
     function hide ($elem) {
-      $elem.innerHTML = '';
+      $elem.textContent = '';
       $elem.classList.add('hidden');
     }
 
-    function setOrHide ($elem, val, text, html) {
+    function setOrHide ($elem, val, text) {
       if (val) {
         $elem.classList.remove('hidden');
-        if (text) $elem.innerText = text;
-        else if (html) $elem.innerHTML = html;
+        if (text) $elem.textContent = text;
         hasContent = true;
       } else {
-        $elem.innerHTML = '';
+        $elem.textContent = '';
+        $elem.classList.add('hidden');
+      }
+    }
+
+    // Helper to create a labeled detail row: "<b>Label:</b>&nbsp;<span>value</span>"
+    function setLabeledDetail($elem, label, value) {
+      if (value !== null && value !== undefined && value !== '') {
+        $elem.classList.remove('hidden');
+        $elem.textContent = '';  // clear
+        const $b = doc.createElement('b');
+        $b.textContent = label + ':';
+        const $span = doc.createElement('span');
+        $span.textContent = value;
+        $elem.append($b, '\u00A0', $span);
+        hasContent = true;
+      } else {
+        $elem.textContent = '';
         $elem.classList.add('hidden');
       }
     }
@@ -282,7 +353,18 @@ export class NodeView extends Node {
     const wasLoaded = (!!this.wasLoaded) && (! this.loaded);
     let $wasLoaded = getOrCreate('detail-was-loaded', 'div');
     if (mode <= 1) hide($wasLoaded);
-    else setOrHide($wasLoaded, wasLoaded, null, `<b>Was Loaded</b>`);
+    else {
+      if (wasLoaded) {
+        $wasLoaded.classList.remove('hidden');
+        $wasLoaded.textContent = '';
+        const $b = doc.createElement('b');
+        $b.textContent = 'Was Loaded';
+        $wasLoaded.append($b);
+        hasContent = true;
+      } else {
+        hide($wasLoaded);
+      }
+    }
 
     // long note
     let $note = getOrCreate('detail-note', 'div');
@@ -291,36 +373,22 @@ export class NodeView extends Node {
     // link title
     let $title = getOrCreate('detail-title', 'div');
     if (mode <= 1) hide($title);
-    else {
-      let $titleLabel = getOrCreate('detail-title-label', 'b', $title);
-      let $titleValue = getOrCreate('detail-title-value', 'span', $title);
-      setOrHide($title, this.title);
-      setOrHide($titleLabel, true, '', 'Title:&nbsp;');
-      setOrHide($titleValue, this.title, this.title);
-    }
+    else setLabeledDetail($title, 'Title', this.title);
 
     // link URL
     let $url = getOrCreate('detail-url', 'div');
     if (mode <= 1) hide($url);
-    else {
-      let $urlLabel = getOrCreate('detail-url-label', 'b', $url);
-      let $urlValue = getOrCreate('detail-url-value', 'span', $url);
-      setOrHide($url, this.url);
-      setOrHide($urlLabel, true, '', 'URL:&nbsp;');
-      setOrHide($urlValue, this.url, this.url);
-    }
+    else setLabeledDetail($url, 'URL', this.url);
 
     // node ID
     let $nodeId = getOrCreate('detail-node-id', 'div');
     if (mode <= 1) hide($nodeId);
-    else setOrHide($nodeId, this.id, null,
-      `<b>ID:</b>&nbsp;<span>${this.id}</span>`);
+    else setLabeledDetail($nodeId, 'ID', this.id);
 
     // tab ID
     let $tabId = getOrCreate('detail-node-tabid', 'div');
     if (mode <= 1) hide($tabId);
-    else setOrHide($tabId, this.tabId, null,
-      `<b>Tab:</b>&nbsp;<span>${this.tabId}</span>`);
+    else setLabeledDetail($tabId, 'Tab', this.tabId);
 
     // ctime, mtime, atime, ...
     for (const tstamp of ['ctime', 'mtime', 'atime']) {
@@ -329,8 +397,11 @@ export class NodeView extends Node {
       const fmt = fmtDate(this[tstamp]);
       // always show ctime, show others only if they're different
       const toShow = (tstamp === 'ctime') || (this[tstamp] !== this.ctime);
-      setOrHide($tstampDiv, toShow, null,
-        `<b>${tstamp}:</b>&nbsp;<span>${fmt}</span>`);
+      if (toShow) {
+        setLabeledDetail($tstampDiv, tstamp, fmt);
+      } else {
+        hide($tstampDiv);
+      }
     }
 
     if (! hasContent) $detailsBox.classList.add('hidden');

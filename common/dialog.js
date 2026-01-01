@@ -1,5 +1,5 @@
 // common/dialog.js: Promise-based dialog box widgets
-// Copyright (C) 2025 Selene ToyKeeper
+// Copyright (C) 2025 Selene ToyKeeper & Ignat Remizov
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 "use strict";
@@ -43,7 +43,7 @@ class Dialog {
       if (description) {
         const $description = doc.createElement('div');
         $description.id = 'dialogDescription';
-        $description.innerHTML = description;
+        $description.textContent = description;
         $form.appendChild($description);
       }
 
@@ -66,7 +66,7 @@ class Dialog {
         if (textAreaLabel) {
           const $label = doc.createElement('div');
           $label.id = 'dialogTextAreaLabel';
-          $label.innerHTML = textAreaLabel;
+          $label.textContent = textAreaLabel;
           $form.appendChild($label);
         }
 
@@ -240,7 +240,10 @@ class Dialog {
       // new checkbox value
       const $newLabel = doc.createElement('span');
       $newLabel.id = 'newValue';
-      $newLabel.innerHTML = 'New value: <small>(click or type letter)</small>';
+      $newLabel.append('New value: ');
+      const $small = doc.createElement('small');
+      $small.textContent = '(click or type letter)';
+      $newLabel.append($small);
       $form.appendChild($newLabel);
 
       // checkbox classes available
