@@ -44,6 +44,7 @@ export class TreeView extends Tree {
       'Enter': 'loadOrEditNode',
       'd': 'deleteNode',
       'u': 'unloadNode',
+      'Shift+U': 'forceToggleLoad',
       'o': 'addNodeAsNextVisibleRow',
       'Shift+O': 'addNodeAsPrevVisibleRow',
       ///// edit nodes
@@ -948,31 +949,8 @@ export class TreeView extends Tree {
     let cursor = this.whichCursor(event);
     // abort if nothing to unload
     if (! cursor) return;
-
-    // if collapsed with children, unload all child tabs too
-    if (cursor.isCollapsed() && cursor.hasKids()) {
-      const loadedTabs = cursor.getLoadedTabs();
-      const count = loadedTabs.length + (cursor.isLoaded() ? 1 : 0);
-      // if nothing to unload, just do a simple unload (toggles wasLoaded)
-      if (count === 0) {
-        cursor.unload({ reason: 'userAction' });
-        this.setStatus(`unloaded ${cursor.toLine()}`);
-        return;
-      }
-      // confirm on keyboard if multiple tabs, but not on mouse click
-      if (! this.isMouseEvent(event) && (count > 1)) {
-        const confirmed = await this.confirmDialog('Unload Tabs', `Unload ${count} tabs?`);
-        if (! confirmed) return;
-      }
-      for (const tab of loadedTabs) {
-        tab.unload({ reason: 'userAction' });
-      }
-      cursor.unload({ reason: 'userAction' });
-      this.setStatus(`unloaded ${count} tabs`);
-    } else {
-      cursor.unload({ reason: 'userAction' });
-      this.setStatus(`unloaded ${cursor.toLine()}`);
-    }
+    const skipDialog = this.isMouseEvent(event);
+    return this.batchUnloadCollapsed(cursor, skipDialog);
   }
 
   async action_loadNode (event) {
@@ -1011,15 +989,15 @@ export class TreeView extends Tree {
   }
 
   // Helper: batch load collapsed node's children, or fall back to single load
-  async batchLoadCollapsed (cursor, event, allowEdit) {
+  async batchLoadCollapsed (cursor, event, allowEdit, forceNoDialog = false) {
     // if collapsed with unloaded children, batch load them
     if (cursor.isCollapsed() && cursor.hasKids()) {
       const allTabs = cursor.getLoadedAndUnloadedTabs();
       const unloadedTabs = allTabs.filter(tab => tab.isUnloadedTab());
       const count = unloadedTabs.length + (cursor.isUnloadedTab() || cursor.isUnloadedWindow() ? 1 : 0);
       if (count > 0) {
-        // confirm on keyboard if multiple tabs, but not on mouse click
-        if (! this.isMouseEvent(event) && (count > 1)) {
+        // confirm on keyboard if multiple tabs, but not on mouse click (unless forced)
+        if (!forceNoDialog && !this.isMouseEvent(event) && (count > 1)) {
           const confirmed = await this.confirmDialog('Load Tabs', `Load ${count} tabs?`);
           if (! confirmed) return;
         }
@@ -1050,6 +1028,50 @@ export class TreeView extends Tree {
     // if note or focused tab or window, edit it
     else {
       if (allowEdit) this.action_editNotes(event);
+    }
+  }
+
+  // Force load or unload without confirmation dialog
+  // Acts like Enter for unloaded tabs, like 'u' for loaded tabs
+  async action_forceToggleLoad (event) {
+    debug('action_forceToggleLoad');
+    let cursor = this.whichCursor(event);
+    if (! cursor) return;
+
+    // Determine if we're loading or unloading based on current state
+    const isUnloaded = cursor.isUnloadedTab() || cursor.isUnloadedWindow();
+
+    if (isUnloaded) {
+      // Load: use batch load but skip dialog (pass forceNoDialog=true)
+      return this.batchLoadCollapsed(cursor, event, false, true);
+    } else {
+      // Unload: batch unload without dialog
+      return this.batchUnloadCollapsed(cursor, true);
+    }
+  }
+
+  // Helper: batch unload collapsed node's children
+  async batchUnloadCollapsed (cursor, skipDialog = false) {
+    if (cursor.isCollapsed() && cursor.hasKids()) {
+      const loadedTabs = cursor.getLoadedTabs();
+      const count = loadedTabs.length + (cursor.isLoaded() ? 1 : 0);
+      if (count === 0) {
+        cursor.unload({ reason: 'userAction' });
+        this.setStatus(`unloaded ${cursor.toLine()}`);
+        return;
+      }
+      if (!skipDialog && (count > 1)) {
+        const confirmed = await this.confirmDialog('Unload Tabs', `Unload ${count} tabs?`);
+        if (! confirmed) return;
+      }
+      for (const tab of loadedTabs) {
+        tab.unload({ reason: 'userAction' });
+      }
+      cursor.unload({ reason: 'userAction' });
+      this.setStatus(`unloaded ${count} tabs`);
+    } else {
+      cursor.unload({ reason: 'userAction' });
+      this.setStatus(`unloaded ${cursor.toLine()}`);
     }
   }
 
