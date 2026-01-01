@@ -942,48 +942,109 @@ export class TreeView extends Tree {
     this.setCursor(newCursor);
   }
 
-  action_unloadNode (event) {
+  async action_unloadNode (event) {
     debug('action_unloadNode');
     // choose mouse or keyboard cursor based on event type
     let cursor = this.whichCursor(event);
     // abort if nothing to unload
     if (! cursor) return;
-    //if (! cursor.isLoaded()) return;
 
-    cursor.unload({ reason: 'userAction' });
-    this.setStatus(`unloaded ${cursor.toLine()}`);
+    // if collapsed with children, unload all child tabs too
+    if (cursor.isCollapsed() && cursor.hasKids()) {
+      const loadedTabs = cursor.getLoadedTabs();
+      const count = loadedTabs.length + (cursor.isLoaded() ? 1 : 0);
+      // if nothing to unload, just do a simple unload (toggles wasLoaded)
+      if (count === 0) {
+        cursor.unload({ reason: 'userAction' });
+        this.setStatus(`unloaded ${cursor.toLine()}`);
+        return;
+      }
+      // confirm on keyboard if multiple tabs, but not on mouse click
+      if (! this.isMouseEvent(event) && (count > 1)) {
+        const confirmed = await this.confirmDialog('Unload Tabs', `Unload ${count} tabs?`);
+        if (! confirmed) return;
+      }
+      for (const tab of loadedTabs) {
+        tab.unload({ reason: 'userAction' });
+      }
+      cursor.unload({ reason: 'userAction' });
+      this.setStatus(`unloaded ${count} tabs`);
+    } else {
+      cursor.unload({ reason: 'userAction' });
+      this.setStatus(`unloaded ${cursor.toLine()}`);
+    }
   }
 
-  action_loadNode (event) {
+  async action_loadNode (event) {
     debug('action_loadNode');
-    return this.action_loadOrEditNode(event, false);
+    // choose mouse or keyboard cursor based on event type
+    let cursor = this.whichCursor(event);
+    if (! cursor) return;
+    return this.batchLoadCollapsed(cursor, event, false);
   }
 
-  action_loadOrEditNode (event, allowEdit = true) {
+  async action_loadOrEditNode (event, allowEdit = true) {
     debug('action_loadOrEditNode');
     if ('command' !== event.type) {
       event.preventDefault();
       event.stopPropagation();
     }
-    // abort if nothing to do
     if (! this.cursor) return;
-    let cursor = this.cursor;
+    return this.batchLoadCollapsed(this.cursor, event, allowEdit);
+  }
 
+  // Helper: check if event is from mouse (click or dblclick)
+  isMouseEvent (event) {
+    return ['click', 'dblclick'].includes(event.type);
+  }
+
+  // Helper: show a simple confirmation dialog
+  async confirmDialog (title, description) {
+    const result = await this.inputDialog({
+      doc: document,
+      title: title,
+      input: false,
+      description: description,
+      buttons: ['OK', 'Cancel']
+    });
+    return result && ('OK' === result.button);
+  }
+
+  // Helper: batch load collapsed node's children, or fall back to single load
+  async batchLoadCollapsed (cursor, event, allowEdit) {
+    // if collapsed with unloaded children, batch load them
+    if (cursor.isCollapsed() && cursor.hasKids()) {
+      const allTabs = cursor.getLoadedAndUnloadedTabs();
+      const unloadedTabs = allTabs.filter(tab => tab.isUnloadedTab());
+      const count = unloadedTabs.length + (cursor.isUnloadedTab() || cursor.isUnloadedWindow() ? 1 : 0);
+      if (count > 0) {
+        // confirm on keyboard if multiple tabs, but not on mouse click
+        if (! this.isMouseEvent(event) && (count > 1)) {
+          const confirmed = await this.confirmDialog('Load Tabs', `Load ${count} tabs?`);
+          if (! confirmed) return;
+        }
+        for (const tab of unloadedTabs) {
+          await tab.load({ reason: 'userAction' });
+        }
+        await cursor.load({ reason: 'userAction' });
+        this.setStatus(`loaded ${count} tabs`);
+        return;
+      }
+    }
+
+    // single node load/edit behavior
     // if unloaded tab, load it
     if (cursor.isUnloadedTab()) {
-      cursor.load({ reason: 'userAction' });
+      await cursor.load({ reason: 'userAction' });
       this.setStatus(`loaded ${cursor.toLine()}`);
     }
     // if loaded tab but not focused, focus it
-    else if (cursor.isLoaded()
-      && (!cursor.isActive())
-      && (!cursor.isWindow())
-    ) {
+    else if (cursor.isLoaded() && (!cursor.isActive()) && (!cursor.isWindow())) {
       cursor.setActive(true, { reason: 'userAction' });
     }
     // if unloaded window, load it
     else if (cursor.isUnloadedWindow()) {
-      cursor.load({ reason: 'userAction' });
+      await cursor.load({ reason: 'userAction' });
       this.setStatus(`loaded ${cursor.toLine()}`);
     }
     // if note or focused tab or window, edit it
