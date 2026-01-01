@@ -12,14 +12,9 @@ mkdir -p build
 rm -rf build/*
 
 # copy root-level files
-cp -v \
-  LICENSE \
-  Makefile \
-  *.js \
-  *.md \
-  *.html \
-  make-zip.sh \
-  build
+for f in LICENSE LICENSE.* Makefile *.js *.md *.html make-zip.sh ; do
+  [ -e "$f" ] && cp -v "$f" build
+done
 
 # manifest differs per browser
 if [ 'firefox' = "$BROWSER" ]; then
@@ -32,13 +27,11 @@ fi
 SUBDIRS="bkgd common docs img options themes view"
 for d in $SUBDIRS ; do
   mkdir -p "build/$d"
-  cp \
-    "$d"/*.js \
-    "$d"/*.html \
-    "$d"/*.css \
-    "$d"/*.md \
-    "$d"/*.png \
-    "build/$d"
+  for ext in js html css md png ; do
+    for f in "$d"/*.$ext ; do
+      [ -e "$f" ] && cp "$f" "build/$d"
+    done
+  done
 done
 
 mkdir -p dist
