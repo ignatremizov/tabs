@@ -16,12 +16,14 @@ help:
 # make a zip file suitable for loading into
 # about:debugging#/runtime/this-firefox -> Load Temporary Add-On
 firefox-zip:
+	./bin/update-version.sh
 	./make-zip.sh firefox
 
 chrome-zip:
 	./make-zip.sh chromium
 
 firefox-sign:
+	./bin/update-version.sh
 	./bin/sign-firefox.sh
 
 todo:

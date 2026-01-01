@@ -5,7 +5,13 @@
 
 BROWSER=${1:-chromium}
 PROGRAM="ignatremizov-tabs"
-VERSION=$(grep '"version"' manifest.json | sed -rn 's/.*: "(.*)".*/\1/p')
+
+# get version from the appropriate manifest file
+if [ 'firefox' = "$BROWSER" ]; then
+  VERSION=$(grep '"version"' manifest-ff.json | sed -rn 's/.*: "(.*)".*/\1/p')
+else
+  VERSION=$(grep '"version"' manifest.json | sed -rn 's/.*: "(.*)".*/\1/p')
+fi
 
 # clean the build area
 mkdir -p build
