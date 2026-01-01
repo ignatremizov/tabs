@@ -4,7 +4,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 BROWSER=${1:-chromium}
-PROGRAM="tktsto"
+PROGRAM="ignatremizov-tabs"
 VERSION=$(grep '"version"' manifest.json | sed -rn 's/.*: "(.*)".*/\1/p')
 
 # clean the build area

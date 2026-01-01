@@ -1,4 +1,4 @@
-# TK Tree Style Tab Outliner
+# Ignat's copy of TK's Tree Style Tab Outliner
 
 Windows, tabs, bookmarks, notes, and more... all mixed together in one place,
 a highly structured living document that you and your browsers build together
