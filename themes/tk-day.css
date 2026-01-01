@@ -32,6 +32,7 @@ foo {
 :root {
   /***** globals *****/
   --shadow-color: #00000080;
+  --row-hover-bg: #00000018;  /* darker background on hover */
   --fancy-text-shadow:
     #00000060 -0.05em  0      0.02em, /* outline */
     #00000060  0.05em  0      0.02em,

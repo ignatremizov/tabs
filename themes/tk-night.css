@@ -39,6 +39,7 @@ foo {
     #000000a0  0.10em 0.15em 0.25em;
   /***** main tree view *****/
   --tree-view-bg: #191919;
+  --row-hover-bg: #ffffff18;  /* lighter background on hover */
   --label-loaded-fg: #12ee6a;
   --label-was-loaded-fg: #e70e9d;
   --label-unloaded-fg: #1aab54;

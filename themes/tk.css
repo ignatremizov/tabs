@@ -313,6 +313,17 @@ body:not(.unfocused) *:hover::-webkit-scrollbar-thumb {
   padding-left: 2px;
 }
 
+.row:hover {
+  background: var(--row-hover-bg);
+  border-radius: var(--cursor-radius-collapsed);
+}
+
+/* Don't show hover bg when row is cursor or already has special styling */
+.row.cursor:hover,
+.row.marked:hover {
+  background: unset;
+}
+
 .favicon {
   width: 1em;
   height: 1em;
