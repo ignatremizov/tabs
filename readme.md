@@ -211,6 +211,7 @@ Client (browser extension):
     - [x] Window nodes
     - [x] Basic metadata: node IDs, timestamps, tab state, etc
     - [x] favicons
+      - [x] backfill missing favicons in unloaded tabs via Google's favicon service
 - Tab / Window / browsing functions
     - [x] Handle browser events, like opening or closing tabs and windows
     - [x] Load / unload tabs

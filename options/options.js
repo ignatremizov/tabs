@@ -208,6 +208,21 @@ function initAppearanceForm () {
   // Checkboxes
   setupCheckbox('showFavicons', 'showFavicons', true);
   setupCheckbox('compactMode', 'compactMode', false);
+
+  // Backfill favicons button
+  const $backfillBtn = document.getElementById('backfillFavicons');
+  const $backfillStatus = document.getElementById('backfillFaviconsStatus');
+  $backfillBtn.addEventListener('click', async () => {
+    $backfillBtn.disabled = true;
+    $backfillStatus.textContent = ' Working...';
+    try {
+      const result = await emit('bkgd_backfillFavicons', {});
+      $backfillStatus.textContent = ` Done! Updated ${result.updated} nodes, skipped ${result.skipped}.`;
+    } catch (err) {
+      $backfillStatus.textContent = ` Error: ${err.message || err}`;
+    }
+    $backfillBtn.disabled = false;
+  });
 }
 
 function initSessionRestoreForm () {

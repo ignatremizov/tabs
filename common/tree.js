@@ -1001,6 +1001,11 @@ export class Tree {
     }
   }
 
+  async tree_refreshAll (msg, sender, sendResponse) {
+    // Base implementation does nothing - TreeView overrides this to re-render
+    debug('tree_refreshAll()');
+  }
+
   async tree_windowClosed (msg, sender, sendResponse) {
     await this.treeLoaded;  // wait until tree is ready
 

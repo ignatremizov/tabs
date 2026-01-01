@@ -1717,6 +1717,12 @@ export class TreeView extends Tree {
     return super.tree_nodeAdded(msg, sender, sendResponse);
   }
 
+  tree_refreshAll (msg, sender, sendResponse) {
+    // Re-render the entire tree (used after batch updates like favicon backfill)
+    debug('TreeView.tree_refreshAll()');
+    this.$renderWholeTree();
+  }
+
   async onMessage (msg, sender, sendResponse) {
     // if message not for us, let parent class handle it
     if (!(msg && msg.msg && msg.msg.startsWith('treeview_')))

@@ -790,6 +790,56 @@ class Bkgd {
     return this.importBackupFileGeneric(msg, this.importTabsOutlinerExport);
   }
 
+  async bkgd_backfillFavicons (msg) {
+    // Backfill missing favicons using Google's favicon service
+    // This is idempotent - nodes with faviconUrl already set are skipped
+    await this.treeLoaded;
+    log('bkgd_backfillFavicons: starting');
+
+    let updated = 0;
+    let skipped = 0;
+
+    // Find all nodes with a URL but no faviconUrl
+    const nodesToUpdate = this.tree.root.findNodes(
+      (node) => {
+        // Must have a URL
+        if (!node.url) return false;
+        // Skip if already has a faviconUrl
+        if (node.faviconUrl) return false;
+        // Skip windows
+        if (node.isWindow()) return false;
+        return true;
+      }
+    );
+
+    for (const node of nodesToUpdate) {
+      try {
+        // Extract domain from URL
+        const url = new URL(node.url);
+        const domain = url.hostname;
+        // Skip empty domains or special URLs
+        if (!domain || domain === 'localhost') {
+          skipped++;
+          continue;
+        }
+        // Use Google's favicon service
+        const faviconUrl = `https://www.google.com/s2/favicons?sz=32&domain=${domain}`;
+        // Update the node (this will save to IDB)
+        node.faviconUrl = faviconUrl;
+        await this.tree.db.saveNode(node);
+        updated++;
+      } catch (err) {
+        // Invalid URL or other error - skip this node
+        skipped++;
+      }
+    }
+
+    log(`bkgd_backfillFavicons: done - updated ${updated}, skipped ${skipped}`);
+    // Notify views to re-render with the new favicons
+    await emit('tree_refreshAll', {});
+    return { updated, skipped, total: nodesToUpdate.length };
+  }
+
   async importBackupFileGeneric (msg, handler) {
     const response = {};
     let total = 0;
