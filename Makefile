@@ -10,6 +10,7 @@ help:
 	@echo "  firefox-zip  - Build Firefox extension zip file"
 	@echo "  chrome-zip   - Build Chrome/Chromium extension zip file"
 	@echo "  firefox-sign - Sign Firefox extension via AMO (requires .env JWT_ISSUER/JWT_SECRET)"
+	@echo "  test         - Open unit tests in browser"
 	@echo "  todo         - List TODO/FIXME comments in source files"
 	@echo "  help         - Show this help message"
 
@@ -25,6 +26,11 @@ chrome-zip:
 firefox-sign:
 	./bin/update-version.sh
 	./bin/sign-firefox.sh
+
+# Open unit tests in browser
+test:
+	@echo "Opening tests/dom-safety.test.html in browser..."
+	@open tests/dom-safety.test.html 2>/dev/null || xdg-open tests/dom-safety.test.html 2>/dev/null || echo "Please open tests/dom-safety.test.html manually"
 
 todo:
 	grep -1 -n -E 'TODO|FIXME' *.js */*.js */*.html */*.css | less -S

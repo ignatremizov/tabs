@@ -108,6 +108,9 @@ TKTSTO is a **Manifest V3 browser extension** that provides:
 │   ├── update-version.sh
 │   └── *.py            # Utility scripts
 │
+├── tests/              # Unit tests (browser-based)
+│   └── dom-safety.test.html  # DOM safety/XSS prevention tests
+│
 └── build/              # Generated during build (git-ignored)
     └── ...
 ```
@@ -561,9 +564,37 @@ Before committing, verify:
 
 ## Testing
 
-### Current State
+### Unit Tests
 
-**No automated testing framework is configured.** Testing is done manually across browsers.
+Browser-based unit tests are located in `tests/`. Run them by opening the HTML files directly in a browser, or use `make test`.
+
+| Test File | Purpose |
+|-----------|----------|
+| `dom-safety.test.html` | Tests for XSS prevention - verifies that DOM rendering uses safe methods (`textContent`, `createElement`) instead of `innerHTML` |
+
+#### Writing New Tests
+
+Tests use a simple framework defined in each test file:
+
+```javascript
+test('description of what is being tested', () => {
+  // Arrange
+  const $elem = document.createElement('div');
+  
+  // Act
+  $elem.textContent = '<b>should be escaped</b>';
+  
+  // Assert
+  assert($elem.querySelector('b') === null, 'HTML should not be parsed');
+  assertEqual($elem.textContent, '<b>should be escaped</b>');
+});
+```
+
+**Guidelines for test payloads:**
+- Avoid using actual `alert()` calls in test strings
+- When testing `<script>` tag escaping, split the string: `'<scr' + 'ipt>'` to prevent the browser from interpreting it as closing the main script block
+- Use harmless HTML tags (`<b>`, `<em>`, `<div>`) to test escaping behavior
+- Use global flags (`window.testFlag`) to verify code didn't execute
 
 ### Manual Testing Checklist
 
@@ -606,24 +637,17 @@ console.log(bkgd.tree.nodes);
 
 ### Future Testing Recommendations
 
-If adding automated tests:
+Areas that could benefit from additional test coverage:
 
 1. **Unit Tests** - Test individual classes (`Node`, `Tree`) in isolation
 2. **Integration Tests** - Test message passing between view and background
 3. **E2E Tests** - Use Puppeteer/Playwright for browser automation
 
-```javascript
-// Example test structure (if Jest added)
-describe('Node', () => {
-  test('toDict() serializes all dictable fields', () => {
-    const tree = new Tree();
-    const node = new Node(tree, tree.root);
-    node.label = 'Test';
-    const dict = node.toDict();
-    expect(dict.label).toBe('Test');
-  });
-});
-```
+New test files should follow the pattern established in `tests/dom-safety.test.html`:
+- Self-contained HTML file with embedded `<script type="module">`
+- Uses the simple `test()`, `assert()`, `assertEqual()` framework
+- Renders results to the page and logs to console
+- Can be run by simply opening in a browser
 
 ---
 

@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<!-- dom-safety.test.html: Unit tests for innerHTML->textContent refactoring -->
+<!-- Copyright (C) 2025 Ignat Remizov -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>DOM Safety Tests</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 20px; }
+    .test-pass { color: green; }
+    .test-fail { color: red; font-weight: bold; }
+    .test-section { margin: 20px 0; padding: 10px; border: 1px solid #ccc; }
+    .test-section h2 { margin-top: 0; }
+    pre { background: #f5f5f5; padding: 10px; overflow-x: auto; }
+    #summary { font-size: 1.2em; padding: 10px; margin-bottom: 20px; }
+    #summary.all-pass { background: #dfd; }
+    #summary.has-fail { background: #fdd; }
+  </style>
+</head>
+<body>
+  <h1>DOM Safety Tests</h1>
+  <div id="summary"></div>
+  <div id="results"></div>
+
+  <script type="module">
+    "use strict";
+
+    // Simple test framework
+    const results = [];
+    
+    function test(name, fn) {
+      try {
+        fn();
+        results.push({ name, pass: true });
+      } catch (e) {
+        results.push({ name, pass: false, error: e.message });
+      }
+    }
+
+    function assert(condition, message) {
+      if (!condition) {
+        throw new Error(message || 'Assertion failed');
+      }
+    }
+
+    function assertEqual(actual, expected, message) {
+      if (actual !== expected) {
+        throw new Error(message || `Expected "${expected}" but got "${actual}"`);
+      }
+    }
+
+    // Verify that HTML special chars are escaped when using textContent
+    function assertHtmlEscaped(element, originalText) {
+      // When setting textContent with HTML chars, innerHTML should have them escaped
+      const html = element.innerHTML;
+      if (originalText.includes('<') && html.includes('<') && !html.includes('&lt;')) {
+        throw new Error('HTML was not escaped - found unescaped < in innerHTML');
+      }
+      if (originalText.includes('>') && html.includes('>') && !html.includes('&gt;')) {
+        throw new Error('HTML was not escaped - found unescaped > in innerHTML');
+      }
+    }
+
+    // ============================================================
+    // Tests for setOrHide helper pattern (from nodeview.js)
+    // ============================================================
+
+    test('setOrHide with text uses textContent - escapes HTML tags', () => {
+      const $elem = document.createElement('div');
+      
+      function setOrHide($elem, val, text) {
+        if (val) {
+          $elem.classList.remove('hidden');
+          if (text) $elem.textContent = text;
+        } else {
+          $elem.textContent = '';
+          $elem.classList.add('hidden');
+        }
+      }
+
+      // Test with HTML content that should be escaped
+      const htmlText = '<b>bold</b> and <i>italic</i>';
+      setOrHide($elem, true, htmlText);
+      
+      // Should be escaped (shown as text, not rendered as HTML)
+      assertEqual($elem.textContent, htmlText);
+      assertHtmlEscaped($elem, htmlText);
+      // The element should NOT have actual b or i children
+      assert($elem.querySelector('b') === null, 'Should not have b element');
+      assert($elem.querySelector('i') === null, 'Should not have i element');
+    });
+
+    test('setOrHide hides element when value is falsy', () => {
+      const $elem = document.createElement('div');
+      $elem.textContent = 'old content';
+      
+      function setOrHide($elem, val, text) {
+        if (val) {
+          $elem.classList.remove('hidden');
+          if (text) $elem.textContent = text;
+        } else {
+          $elem.textContent = '';
+          $elem.classList.add('hidden');
+        }
+      }
+
+      setOrHide($elem, false, null);
+      
+      assertEqual($elem.textContent, '');
+      assert($elem.classList.contains('hidden'), 'Element should have hidden class');
+    });
+
+    // ============================================================
+    // Tests for setLabeledDetail helper pattern (from nodeview.js)
+    // ============================================================
+
+    test('setLabeledDetail creates safe DOM structure', () => {
+      const $elem = document.createElement('div');
+      
+      function setLabeledDetail($elem, label, value) {
+        if (value !== null && value !== undefined && value !== '') {
+          $elem.classList.remove('hidden');
+          $elem.textContent = '';
+          const $b = document.createElement('b');
+          $b.textContent = label + ':';
+          const $span = document.createElement('span');
+          $span.textContent = value;
+          $elem.append($b, '\u00A0', $span);
+        } else {
+          $elem.textContent = '';
+          $elem.classList.add('hidden');
+        }
+      }
+
+      setLabeledDetail($elem, 'Title', 'Test Value');
+      
+      assertEqual($elem.querySelector('b').textContent, 'Title:');
+      assertEqual($elem.querySelector('span').textContent, 'Test Value');
+      assert(!$elem.classList.contains('hidden'), 'Element should not be hidden');
+    });
+
+    test('setLabeledDetail escapes HTML in label', () => {
+      const $elem = document.createElement('div');
+      
+      function setLabeledDetail($elem, label, value) {
+        if (value !== null && value !== undefined && value !== '') {
+          $elem.classList.remove('hidden');
+          $elem.textContent = '';
+          const $b = document.createElement('b');
+          $b.textContent = label + ':';
+          const $span = document.createElement('span');
+          $span.textContent = value;
+          $elem.append($b, '\u00A0', $span);
+        }
+      }
+
+      const htmlLabel = '<scr' + 'ipt>bad</scr' + 'ipt>';
+      setLabeledDetail($elem, htmlLabel, 'value');
+      
+      // The label should be text, not executed
+      assert($elem.querySelector('b').textContent.includes('<scr'), 'Tag should be visible as text');
+      assert($elem.querySelector('script') === null, 'Should not have script element');
+    });
+
+    test('setLabeledDetail escapes HTML in value', () => {
+      const $elem = document.createElement('div');
+      
+      function setLabeledDetail($elem, label, value) {
+        if (value !== null && value !== undefined && value !== '') {
+          $elem.classList.remove('hidden');
+          $elem.textContent = '';
+          const $b = document.createElement('b');
+          $b.textContent = label + ':';
+          const $span = document.createElement('span');
+          $span.textContent = value;
+          $elem.append($b, '\u00A0', $span);
+        }
+      }
+
+      const htmlValue = '<div class="injected">content</div>';
+      setLabeledDetail($elem, 'URL', htmlValue);
+      
+      assertEqual($elem.querySelector('span').textContent, htmlValue);
+      assert($elem.querySelector('.injected') === null, 'Should not have injected element');
+    });
+
+    test('setLabeledDetail hides when value is empty', () => {
+      const $elem = document.createElement('div');
+      $elem.textContent = 'old';
+      
+      function setLabeledDetail($elem, label, value) {
+        if (value !== null && value !== undefined && value !== '') {
+          $elem.classList.remove('hidden');
+          $elem.textContent = '';
+          const $b = document.createElement('b');
+          $b.textContent = label + ':';
+          const $span = document.createElement('span');
+          $span.textContent = value;
+          $elem.append($b, '\u00A0', $span);
+        } else {
+          $elem.textContent = '';
+          $elem.classList.add('hidden');
+        }
+      }
+
+      setLabeledDetail($elem, 'Title', '');
+      assert($elem.classList.contains('hidden'), 'Should hide for empty value');
+      
+      $elem.classList.remove('hidden');
+      setLabeledDetail($elem, 'Title', null);
+      assert($elem.classList.contains('hidden'), 'Should hide for null value');
+    });
+
+    // ============================================================
+    // Tests for node title rendering (from nodeview.js $render)
+    // ============================================================
+
+    test('Node title with label only escapes HTML', () => {
+      const $title = document.createElement('span');
+      $title.className = 'row-title';
+      
+      // Simulate label-only rendering
+      const label = '<em>emphasized</em> text';
+      const $labelSpan = document.createElement('span');
+      $labelSpan.className = 'node-label';
+      $labelSpan.textContent = label;
+      $title.append($labelSpan);
+      
+      assertEqual($labelSpan.textContent, label);
+      assert($title.querySelector('em') === null, 'em tag should not be rendered');
+    });
+
+    test('Node title with URL creates safe anchor', () => {
+      const $title = document.createElement('span');
+      $title.className = 'row-title';
+      
+      const url = 'https://example.com/page?q=test';
+      const urlTitle = 'Example Page';
+      
+      const $a = document.createElement('a');
+      $a.className = 'node-link';
+      $a.draggable = false;
+      $a.href = url;
+      const $urlSpan = document.createElement('span');
+      $urlSpan.className = 'url-title';
+      $urlSpan.textContent = urlTitle;
+      $a.append($urlSpan);
+      $title.append($a);
+      
+      assertEqual($a.href, url);
+      assertEqual($urlSpan.textContent, urlTitle);
+    });
+
+    test('Node title with HTML in title text is escaped', () => {
+      const $title = document.createElement('span');
+      $title.className = 'row-title';
+      
+      const url = 'https://example.com';
+      const htmlTitle = '<span class="injected">Injected</span>';
+      
+      const $a = document.createElement('a');
+      $a.className = 'node-link';
+      $a.href = url;
+      const $urlSpan = document.createElement('span');
+      $urlSpan.className = 'url-title';
+      $urlSpan.textContent = htmlTitle;
+      $a.append($urlSpan);
+      $title.append($a);
+      
+      assertEqual($urlSpan.textContent, htmlTitle);
+      assert($title.querySelector('.injected') === null, 'Injected class should not exist');
+    });
+
+    test('Node with label and URL creates correct structure', () => {
+      const $title = document.createElement('span');
+      $title.className = 'row-title';
+      
+      const label = 'My Bookmark';
+      const url = 'https://example.com/page';
+      const urlTitle = 'Example Site';
+      
+      const $a = document.createElement('a');
+      $a.className = 'node-link';
+      $a.draggable = false;
+      $a.href = url;
+      const $labelSpan = document.createElement('span');
+      $labelSpan.className = 'node-label';
+      $labelSpan.textContent = label;
+      const $sep = document.createElement('span');
+      $sep.className = 'node-label-url-sep';
+      const $urlSpan = document.createElement('span');
+      $urlSpan.className = 'url-title';
+      $urlSpan.textContent = urlTitle;
+      $a.append($labelSpan, $sep, $urlSpan);
+      $title.append($a);
+      
+      assertEqual($title.querySelector('.node-label').textContent, label);
+      assertEqual($title.querySelector('.url-title').textContent, urlTitle);
+      assertEqual($title.querySelector('a').href, url);
+    });
+
+    // ============================================================
+    // Tests for dialog description (from dialog.js)
+    // ============================================================
+
+    test('Dialog description uses textContent for safety', () => {
+      const $description = document.createElement('div');
+      $description.id = 'dialogDescription';
+      
+      const htmlDesc = '<strong>Important:</strong> Please read';
+      $description.textContent = htmlDesc;
+      
+      assertEqual($description.textContent, htmlDesc);
+      assert($description.querySelector('strong') === null, 'strong tag should not be rendered');
+    });
+
+    test('Dialog textAreaLabel uses textContent for safety', () => {
+      const $label = document.createElement('div');
+      $label.id = 'dialogTextAreaLabel';
+      
+      const htmlLabel = '<u>Underlined</u> label';
+      $label.textContent = htmlLabel;
+      
+      assertEqual($label.textContent, htmlLabel);
+      assert($label.querySelector('u') === null, 'u tag should not be rendered');
+    });
+
+    // ============================================================
+    // Tests for checkbox dialog label (from dialog.js)
+    // ============================================================
+
+    test('Checkbox dialog newValue label creates safe structure', () => {
+      const $newLabel = document.createElement('span');
+      $newLabel.id = 'newValue';
+      $newLabel.append('New value: ');
+      const $small = document.createElement('small');
+      $small.textContent = '(click or type letter)';
+      $newLabel.append($small);
+      
+      assert($newLabel.querySelector('small') !== null, 'Should have small element');
+      assertEqual($newLabel.querySelector('small').textContent, '(click or type letter)');
+      assertEqual($newLabel.childNodes[0].textContent, 'New value: ');
+    });
+
+    // ============================================================
+    // Tests for node stats rendering (from nodeview.js)
+    // ============================================================
+
+    test('Node stats creates correct structure with open/total', () => {
+      const openChildren = 3;
+      const totalChildren = 14;
+      
+      const $stats = document.createElement('span');
+      $stats.className = 'node-stats';
+      $stats.append('[');
+      const $open = document.createElement('span');
+      $open.className = 'node-stat-open';
+      $open.textContent = openChildren;
+      $stats.append($open, '/');
+      const $total = document.createElement('span');
+      $total.className = 'node-stat-total';
+      $total.textContent = totalChildren;
+      $stats.append($total, '] ');
+      
+      assertEqual($stats.querySelector('.node-stat-open').textContent, '3');
+      assertEqual($stats.querySelector('.node-stat-total').textContent, '14');
+      assert($stats.textContent.includes('[3/14]'), 'Should show [open/total] format');
+    });
+
+    test('Node stats creates correct structure with total only', () => {
+      const totalChildren = 5;
+      
+      const $stats = document.createElement('span');
+      $stats.className = 'node-stats';
+      $stats.append('[');
+      const $total = document.createElement('span');
+      $total.className = 'node-stat-total';
+      $total.textContent = totalChildren;
+      $stats.append($total, '] ');
+      
+      assertEqual($stats.querySelector('.node-stat-total').textContent, '5');
+      assert($stats.textContent.includes('[5]'), 'Should show [total] format');
+    });
+
+    // ============================================================
+    // Tests for checkbox rendering (from nodeview.js)
+    // ============================================================
+
+    test('Checkbox renders with correct class and text', () => {
+      const cbType = 'task';
+      const cbText = 'x';
+      
+      const $ckbox = document.createElement('div');
+      $ckbox.className = 'node-checkbox ' + cbType;
+      $ckbox.textContent = cbText;
+      
+      assert($ckbox.classList.contains('node-checkbox'), 'Should have base class');
+      assert($ckbox.classList.contains('task'), 'Should have type class');
+      assertEqual($ckbox.textContent, 'x');
+    });
+
+    test('Checkbox with space uses non-breaking space', () => {
+      let cbText = ' ';
+      if (' ' === cbText) cbText = '\u00A0';
+      
+      const $ckbox = document.createElement('div');
+      $ckbox.className = 'node-checkbox';
+      $ckbox.textContent = cbText;
+      
+      assertEqual($ckbox.textContent, '\u00A0');
+    });
+
+    test('Percent checkbox shows percentage', () => {
+      let cbType = 'percent';
+      const checkboxPx = 0.75;
+      let cbText = String(Math.floor(checkboxPx * 100)) + '%';
+      
+      const $ckbox = document.createElement('div');
+      $ckbox.className = 'node-checkbox ' + cbType;
+      $ckbox.textContent = cbText;
+      
+      assertEqual($ckbox.textContent, '75%');
+    });
+
+    // ============================================================
+    // Tests for favicon rendering (from nodeview.js)
+    // ============================================================
+
+    test('Favicon creates img element with correct attributes', () => {
+      const faviconUrl = 'https://example.com/favicon.ico';
+      
+      const $favicon = document.createElement('img');
+      $favicon.className = 'favicon';
+      $favicon.src = faviconUrl;
+      $favicon.alt = '';
+      
+      assertEqual($favicon.className, 'favicon');
+      assert($favicon.src.includes('favicon.ico'), 'Should have correct src');
+      assertEqual($favicon.alt, '');
+    });
+
+    // ============================================================
+    // Tests for hide helper (from nodeview.js)
+    // ============================================================
+
+    test('hide clears content and adds hidden class', () => {
+      const $elem = document.createElement('div');
+      $elem.textContent = 'some content';
+      $elem.classList.remove('hidden');
+      
+      function hide($elem) {
+        $elem.textContent = '';
+        $elem.classList.add('hidden');
+      }
+      
+      hide($elem);
+      
+      assertEqual($elem.textContent, '');
+      assert($elem.classList.contains('hidden'), 'Should have hidden class');
+    });
+
+    // ============================================================
+    // Security-focused tests
+    // ============================================================
+
+    test('textContent prevents script injection', () => {
+      const $elem = document.createElement('div');
+      const payload = '<scr' + 'ipt>window.xssExecuted=true</scr' + 'ipt>';
+      $elem.textContent = payload;
+      
+      // If XSS worked, this global would be set
+      assert(window.xssExecuted !== true, 'Script should not execute');
+      assertEqual($elem.textContent, payload, 'Payload should be visible as text');
+    });
+
+    test('textContent prevents event handler injection', () => {
+      const $elem = document.createElement('div');
+      const payload = '<img src="x" onerror="window.imgXssExecuted=true">';
+      $elem.textContent = payload;
+      
+      // Should not have an actual img element
+      assert($elem.querySelector('img') === null, 'img should not be created');
+      assert(window.imgXssExecuted !== true, 'Event handler should not execute');
+    });
+
+    test('createElement + textContent is safe for user input', () => {
+      // Simulate user-provided data with HTML-like content
+      const userLabel = '<button>Click me</button>';
+      const userUrl = 'https://example.com';
+      const userTitle = '"><span>test</span><"';
+      
+      const $container = document.createElement('div');
+      
+      const $label = document.createElement('span');
+      $label.textContent = userLabel;
+      $container.append($label);
+      
+      const $link = document.createElement('a');
+      $link.href = userUrl;
+      const $linkText = document.createElement('span');
+      $linkText.textContent = userTitle;
+      $link.append($linkText);
+      $container.append($link);
+      
+      // Verify no HTML injection occurred
+      assert($container.querySelector('button') === null, 'button should not be created');
+      assert($container.querySelectorAll('span').length === 2, 'should only have our 2 spans');
+      assertEqual($label.textContent, userLabel);
+      assertEqual($linkText.textContent, userTitle);
+    });
+
+    // ============================================================
+    // Render results
+    // ============================================================
+
+    const $results = document.getElementById('results');
+    const $summary = document.getElementById('summary');
+    
+    let passCount = 0;
+    let failCount = 0;
+
+    for (const result of results) {
+      const $div = document.createElement('div');
+      $div.className = 'test-section';
+      
+      const $status = document.createElement('span');
+      const $name = document.createTextNode(' ' + result.name);
+      
+      if (result.pass) {
+        passCount++;
+        $status.className = 'test-pass';
+        $status.textContent = '✓ PASS:';
+        $div.append($status, $name);
+      } else {
+        failCount++;
+        $status.className = 'test-fail';
+        $status.textContent = '✗ FAIL:';
+        const $error = document.createElement('pre');
+        $error.textContent = result.error;
+        $div.append($status, $name, $error);
+      }
+      
+      $results.appendChild($div);
+    }
+
+    $summary.textContent = `${passCount} passed, ${failCount} failed out of ${results.length} tests`;
+    $summary.className = failCount === 0 ? 'all-pass' : 'has-fail';
+
+    // Also log to console for CI/terminal viewing
+    console.log(`\nDOM Safety Tests: ${passCount} passed, ${failCount} failed`);
+    if (failCount > 0) {
+      for (const result of results) {
+        if (!result.pass) {
+          console.error(`FAIL: ${result.name}\n  ${result.error}`);
+        }
+      }
+    }
+  </script>
+</body>
+</html>

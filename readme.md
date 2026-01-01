@@ -127,6 +127,20 @@ between multiple devices, convert the snapshots to other formats, and archive
 old data that you don't need in the tree any more.
 
 
+## Testing
+
+Unit tests are located in the `tests/` directory. To run them:
+
+```bash
+make test
+```
+
+Or simply open `tests/dom-safety.test.html` in a browser.
+
+Tests use a simple browser-based framework with no external dependencies,
+following the project's vanilla JavaScript philosophy.
+
+
 ## Usage
 
 The extension should show a tutorial thingy after being installed for the first
