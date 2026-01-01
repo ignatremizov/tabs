@@ -227,7 +227,7 @@ Client (browser extension):
     - [x] Remember window positions/sizes
     - [x] Open new windows when necessary, while moving loaded pages
     - [x] Handle the browser's built-in session management
-    - [ ] Incognito windows (might work, just haven't tested yet)
+    - [x] Incognito windows (note: users need to give permission in each browser extension settings page)
 - Tree editing via keyboard
     - [x] Cursor movement
     - [x] Move nodes with keystrokes
