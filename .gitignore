@@ -1,8 +1,43 @@
+# Backup and temporary files
 *~
 *.old
-.*.sw?
-active/
+*.bak
+*.tmp
+*.temp
+*.swp
+*.swo
+*.swn
+*.sublime-workspace
+*.sublime-project
+*.log
+diff.txt
+
+# macOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Editor directories and files
+.vscode/
+.idea/
+*.code-workspace
+.project
+.classpath
+.settings/
+.history/
+
+# Local environment files (secrets)
+.env
+.env.*
+!.env.example
+
+# Build and distribution directories
 build/
 dist/
+active/
 ignore/
+
+# Project-specific
 todo.otl
