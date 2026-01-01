@@ -276,8 +276,16 @@ export class TreeView extends Tree {
   }
 
   storageObserver (changes) {
-    if (changes.expandedRowPrefix) {
-      this.updateStyleOptions();
+    // Watch for all appearance-related settings changes
+    const appearanceKeys = [
+      'expandedRowPrefix', 'fontSize', 'fontFamily', 'rowHeight',
+      'indentWidth', 'showFavicons', 'compactMode'
+    ];
+    for (const key of appearanceKeys) {
+      if (changes[key]) {
+        this.updateStyleOptions();
+        break;  // Only need to update once
+      }
     }
     if (changes.theme) {
       this.updateTheme();
@@ -319,16 +327,62 @@ export class TreeView extends Tree {
   async updateStyleOptions () {
     let styleText = '';
     let data;
+
+    // Fetch all appearance settings at once
+    data = await api.storage.local.get({
+      'expandedRowPrefix': true,
+      'fontSize': '1.15rem',
+      'fontFamily': 'Arial, Tahoma, Geneva, sans-serif',
+      'rowHeight': '1.5rem',
+      'indentWidth': '0.8rem',
+      'showFavicons': true,
+      'compactMode': false
+    });
+
+    // Build :root CSS variables for styling
+    styleText += '\n:root {';
+    styleText += `\n  --global-font-size: ${data.fontSize};`;
+    styleText += `\n  --font-family: ${data.fontFamily};`;
+    styleText += `\n  --row-min-height: ${data.rowHeight};`;
+    styleText += `\n  --row-line-height: ${data.rowHeight};`;
+    styleText += `\n  --indent-width: ${data.indentWidth};`;
+    styleText += '\n}';
+
     // '+' marker drawn before expanded rows?
-    data = await api.storage.local.get({ 'expandedRowPrefix': true });
-    let expandedRowPrefix = '';
     if (data.expandedRowPrefix) {
-      styleText = styleText
-        + "\n.expanded.row::before {"
-        + `\n  content: "+";`
-        + '\n  margin-left: -2px;'
-        + '\n}';
+      styleText += "\n.expanded.row::before {";
+      styleText += `\n  content: "+";`;
+      styleText += '\n  margin-left: -2px;';
+      styleText += '\n}';
     }
+
+    // Hide favicons if disabled
+    if (!data.showFavicons) {
+      styleText += '\n.favicon {';
+      styleText += '\n  display: none !important;';
+      styleText += '\n}';
+    }
+
+    // Compact mode - reduce padding and margins
+    if (data.compactMode) {
+      styleText += '\n.row {';
+      styleText += '\n  padding-top: 0 !important;';
+      styleText += '\n  padding-bottom: 0 !important;';
+      styleText += '\n}';
+      styleText += '\n.nodes {';
+      styleText += '\n  margin-top: 0 !important;';
+      styleText += '\n  margin-bottom: 0 !important;';
+      styleText += '\n}';
+    }
+
+    // Apply indent width to tree structure
+    styleText += '\n.nodes {';
+    styleText += `\n  margin-left: ${data.indentWidth};`;
+    styleText += '\n}';
+    styleText += '\n.root-nodes {';
+    styleText += '\n  margin-left: 0;';
+    styleText += '\n}';
+
     // apply the changes
     this.$styleOptions.textContent = styleText;
   }

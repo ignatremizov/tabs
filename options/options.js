@@ -105,6 +105,111 @@ function initThemeForm () {
   });
 }
 
+function initAppearanceForm () {
+  // Helper to set up a dropdown + custom text input pair
+  // The dropdown provides quick presets, the text input allows custom values
+  // Custom input overrides the dropdown when it has a value
+  function setupSelectWithCustom(selectId, customId, storageKey, defaultValue, presetValues) {
+    const $select = document.getElementById(selectId);
+    const $custom = document.getElementById(customId);
+    let debounceTimer;
+
+    // Load saved value
+    api.storage.local.get({ [storageKey]: defaultValue }).then((result) => {
+      const savedValue = result[storageKey];
+      // Check if saved value matches a preset
+      if (presetValues.includes(savedValue)) {
+        $select.value = savedValue;
+        $custom.value = '';
+      } else {
+        // Custom value - show in custom input, set dropdown to default
+        $select.value = defaultValue;
+        $custom.value = savedValue;
+      }
+    });
+
+    // Dropdown change - save immediately and clear custom input
+    $select.addEventListener('change', () => {
+      $custom.value = '';  // Clear custom when using dropdown
+      api.storage.local.set({ [storageKey]: $select.value });
+    });
+
+    // Custom input - save with debounce, overrides dropdown
+    $custom.addEventListener('input', () => {
+      clearTimeout(debounceTimer);
+      debounceTimer = setTimeout(() => {
+        const value = $custom.value.trim();
+        if (value) {
+          api.storage.local.set({ [storageKey]: value });
+        }
+      }, 500);
+    });
+
+    // Save immediately on blur or Enter
+    $custom.addEventListener('blur', () => {
+      clearTimeout(debounceTimer);
+      const value = $custom.value.trim();
+      if (value) {
+        api.storage.local.set({ [storageKey]: value });
+      } else {
+        // If custom is cleared, use dropdown value
+        api.storage.local.set({ [storageKey]: $select.value });
+      }
+    });
+    $custom.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        clearTimeout(debounceTimer);
+        const value = $custom.value.trim();
+        if (value) {
+          api.storage.local.set({ [storageKey]: value });
+        }
+      }
+    });
+  }
+
+  // Helper for checkbox inputs
+  function setupCheckbox(elementId, storageKey, defaultValue) {
+    const $el = document.getElementById(elementId);
+    api.storage.local.get({ [storageKey]: defaultValue }).then((result) => {
+      $el.checked = result[storageKey];
+    });
+    $el.addEventListener('click', () => {
+      api.storage.local.set({ [storageKey]: $el.checked });
+    });
+  }
+
+  // Font size - dropdown + custom
+  setupSelectWithCustom('fontSize', 'fontSizeCustom', 'fontSize', '1.15rem',
+    ['0.85rem', '1rem', '1.15rem', '1.3rem', '1.5rem']);
+
+  // Font family - dropdown + custom
+  setupSelectWithCustom('fontFamily', 'fontFamilyCustom', 'fontFamily',
+    'Arial, Tahoma, Geneva, sans-serif',
+    [
+      'Arial, Tahoma, Geneva, sans-serif',
+      "'DejaVu Sans', Arial, sans-serif",
+      "'Quicksand Medium', Tahoma, Geneva, sans-serif",
+      "'Segoe UI', Tahoma, Geneva, sans-serif",
+      'Verdana, Geneva, sans-serif',
+      "'Trebuchet MS', Arial, sans-serif",
+      'Georgia, serif',
+      "'Courier New', monospace",
+      'monospace'
+    ]);
+
+  // Row height - dropdown + custom
+  setupSelectWithCustom('rowHeight', 'rowHeightCustom', 'rowHeight', '1.5rem',
+    ['1.2rem', '1.5rem', '1.8rem', '2.2rem']);
+
+  // Indent width - dropdown + custom
+  setupSelectWithCustom('indentWidth', 'indentWidthCustom', 'indentWidth', '0.8rem',
+    ['0.5rem', '0.8rem', '1.2rem', '1.6rem']);
+
+  // Checkboxes
+  setupCheckbox('showFavicons', 'showFavicons', true);
+  setupCheckbox('compactMode', 'compactMode', false);
+}
+
 function initSessionRestoreForm () {
   // generate an onClicked handler
   function fileUploadHandler($id, signalName, allowedExtensions = ['.json']) {
@@ -197,6 +302,7 @@ document.addEventListener('DOMContentLoaded', () => {
   log('options.js loaded');
   initClientIdForm();
   initThemeForm();
+  initAppearanceForm();
   initBackupsForm();
   initSessionRestoreForm();
 });
