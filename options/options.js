@@ -107,7 +107,7 @@ function initThemeForm () {
 
 function initSessionRestoreForm () {
   // generate an onClicked handler
-  function fileUploadHandler($id, signalName) {
+  function fileUploadHandler($id, signalName, allowedExtensions = ['.json']) {
     function onClicked () {
       log(`${$id}-button clicked`);
       const $button = document.getElementById(`${$id}-button`);
@@ -123,8 +123,17 @@ function initSessionRestoreForm () {
         log(`loading ${file.name} (${file.type}) (${file.size} bytes) ...`);
         const reader = new FileReader();
 
-        if ('application/json' !== file.type) {
-          alert(`Unsupported file type "${file.type}", must be "application/json".`);
+        // Check file extension instead of MIME type (more reliable for .tree files)
+        const fileName = file.name.toLowerCase();
+        const hasValidExtension = allowedExtensions.some(ext => fileName.endsWith(ext));
+        if (!hasValidExtension) {
+          alert(`Unsupported file type. Allowed extensions: ${allowedExtensions.join(', ')}`);
+          return;
+        }
+
+        // HTML parsing from "Save Page As..." of TO is not yet implemented
+        if (fileName.endsWith('.html') || fileName.endsWith('.htm')) {
+          alert('HTML file import is not yet implemented.\n\nPlease use Tabs Outliner\'s "Export tree" feature instead, which creates a .tree file.');
           return;
         }
 
@@ -169,14 +178,14 @@ function initSessionRestoreForm () {
   // handle tktsto imports
   base = 'tktsto-file';
   const importBackupButtonClicked = fileUploadHandler(
-    base, 'bkgd_importBackupFile');
+    base, 'bkgd_importBackupFile', ['.json']);
   document.getElementById(`${base}-button`).addEventListener("click",
     importBackupButtonClicked);
 
-  // handle tabs-outliner imports
+  // handle tabs-outliner imports (.tree and .html are native Tabs Outliner exports)
   base = 'tabs-outliner-file';
   const tabsOutlinerButtonClicked = fileUploadHandler(
-    base, 'bkgd_importTabsOutliner');
+    base, 'bkgd_importTabsOutliner', ['.html', '.tree']);
   document.getElementById(`${base}-button`).addEventListener("click",
     tabsOutlinerButtonClicked);
 
