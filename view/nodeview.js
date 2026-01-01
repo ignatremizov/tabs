@@ -211,8 +211,12 @@ export class NodeView extends Node {
       else
         statsText = `<span class="node-stats">[<span class="node-stat-total">${totalChildren}</span>]</span> `;
     }
-    // TODO: favicon
+    // favicon
     let faviconText = '';
+    if (this.faviconUrl) {
+      // onerror hides the image if it fails to load
+      faviconText = `<img class="favicon" src="${this.faviconUrl}" alt="" onerror="this.style.display='none'">`;
+    }
     // combined output
     this.$row.innerHTML = `${statsText}${ckbox}${faviconText}${noteIcon}<span class="row-title">${mainText}</span>`;
     this.$row.setAttribute('draggable', true);

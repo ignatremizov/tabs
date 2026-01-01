@@ -313,6 +313,13 @@ body:not(.unfocused) *:hover::-webkit-scrollbar-thumb {
   padding-left: 2px;
 }
 
+.favicon {
+  width: 1em;
+  height: 1em;
+  vertical-align: middle;
+  margin-right: 0.25em;
+}
+
 .row a {
   text-decoration: none;
 }

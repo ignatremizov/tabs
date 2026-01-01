@@ -705,9 +705,16 @@ export class Node {
   async setTabFields (changes, args) {
     if (! args) return;
     // abort on no-op
-    if ({} === changes) return;
+    if (Object.keys(changes).length === 0) return;
     // Do The Thing
-    for (const [key, value] of Object.entries(changes)) this[key] = value;
+    for (const [key, value] of Object.entries(changes)) {
+      // Map browser API's favIconUrl to our faviconUrl property
+      if (key === 'favIconUrl') {
+        this.faviconUrl = value;
+      } else {
+        this[key] = value;
+      }
+    }
     if (undefined !== changes.loaded) this.wasLoaded = changes.loaded;
     // bump timestamp
     this.bump('mtime', args);

@@ -272,7 +272,15 @@ class Bkgd {
         // detect whether tab is already in tree
         // (it usually should be, since findMatchingWindow() attaches tabIds)
         const tabNode = this.tree.getNodeByTabId(tab.id);
-        if (tabNode) continue;
+        if (tabNode) {
+          // Update faviconUrl for existing tabs (may not have been saved before)
+          if (tab.favIconUrl && (tabNode.faviconUrl !== tab.favIconUrl)) {
+            await tabNode.setTabFields(
+              { favIconUrl: tab.favIconUrl },
+              { reason: 'mergeOpenWindowsIntoTree' });
+          }
+          continue;
+        }
         // if not, add new tab to the tree
         // TODO: ... in an appropriate position
         let destParent = winNode;
@@ -292,6 +300,7 @@ class Bkgd {
           tabId: tab.id,
           title: tab.title,
           url: tab.url,
+          faviconUrl: tab.favIconUrl,
           loaded: true,
           active: tab.active,
           discarded: tab.discarded,
@@ -975,7 +984,7 @@ class Bkgd {
           // parse data.url
           if (d.url) details.url = d.url;
           // parse data.favIconUrl
-          if (d.favIconUrl) details.favIconUrl = d.favIconUrl;
+          if (d.favIconUrl) details.faviconUrl = d.favIconUrl;
           // parse data.lastAccessed
           if (d.lastAccessed) details.atime = Number(d.lastAccessed);
         }
