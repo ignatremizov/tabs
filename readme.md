@@ -114,6 +114,10 @@ However, installing from source is easy:
   is copy some files and zip them.  Then you should be able to load that .zip
   file as an extension.
 
+  **Note:** Firefox builds require version 142+ due to the mandatory
+  `data_collection_permissions` field (required for Firefox desktop 140+ and
+  Firefox for Android 142+). The extension declares it collects no data.
+
 To create a signed Firefox `.xpi` (for non-temporary installs), you need AMO
 API credentials:
 

@@ -2,11 +2,11 @@
   "manifest_version": 3,
   "name": "Ignat's copy of TK's Tree Style Tab Outliner",
   "description": "Outliner, tree-style tabs, bookmarks, and notes all in one",
-  "version": "0.0.1.260101125",
+  "version": "0.0.1.260101244",
   "browser_specific_settings": {
     "gecko": {
       "id": "tktsto-ignat@ignatremizov.com",
-      "strict_min_version": "128.0"
+      "strict_min_version": "142.0"
        ,
        "data_collection_permissions": {
          "required": ["none"]
