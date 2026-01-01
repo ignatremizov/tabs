@@ -4,6 +4,14 @@
 
 all: firefox-zip chrome-zip
 
+help:
+	@echo "Available targets:"
+	@echo "  all          - Build both Firefox and Chrome zip files"
+	@echo "  firefox-zip  - Build Firefox extension zip file"
+	@echo "  chrome-zip   - Build Chrome/Chromium extension zip file"
+	@echo "  todo         - List TODO/FIXME comments in source files"
+	@echo "  help         - Show this help message"
+
 # make a zip file suitable for loading into
 # about:debugging#/runtime/this-firefox -> Load Temporary Add-On
 firefox-zip:
