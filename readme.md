@@ -114,6 +114,13 @@ However, installing from source is easy:
   is copy some files and zip them.  Then you should be able to load that .zip
   file as an extension.
 
+To create a signed Firefox `.xpi` (for non-temporary installs), you need AMO
+API credentials:
+
+- Create API keys at https://addons.mozilla.org/developers/ ("API Keys").
+- Put them in `.env` as `JWT_ISSUER` and `JWT_SECRET`.
+- Run `make firefox-sign`.
+
 FUTURE: I also recommend installing [the backup/sync server](server/readme.md),
 so you can automatically save snapshots of your session, sync your session
 between multiple devices, convert the snapshots to other formats, and archive

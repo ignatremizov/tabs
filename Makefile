@@ -9,6 +9,7 @@ help:
 	@echo "  all          - Build both Firefox and Chrome zip files"
 	@echo "  firefox-zip  - Build Firefox extension zip file"
 	@echo "  chrome-zip   - Build Chrome/Chromium extension zip file"
+	@echo "  firefox-sign - Sign Firefox extension via AMO (requires .env JWT_ISSUER/JWT_SECRET)"
 	@echo "  todo         - List TODO/FIXME comments in source files"
 	@echo "  help         - Show this help message"
 
@@ -19,6 +20,9 @@ firefox-zip:
 
 chrome-zip:
 	./make-zip.sh chromium
+
+firefox-sign:
+	./bin/sign-firefox.sh
 
 todo:
 	grep -1 -n -E 'TODO|FIXME' *.js */*.js */*.html */*.css | less -S
