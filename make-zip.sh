@@ -18,7 +18,7 @@ mkdir -p build
 rm -rf build/*
 
 # copy root-level files
-for f in LICENSE LICENSE.* Makefile *.js *.md *.html make-zip.sh ; do
+for f in LICENSE LICENSE.* Makefile *.js *.md *.html ; do
   [ -e "$f" ] && cp -v "$f" build
 done
 
