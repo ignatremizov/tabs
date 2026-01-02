@@ -109,7 +109,8 @@ TKTSTO is a **Manifest V3 browser extension** that provides:
 │   └── *.py            # Utility scripts
 │
 ├── tests/              # Unit tests (browser-based)
-│   └── dom-safety.test.html  # DOM safety/XSS prevention tests
+│   ├── dom-safety.test.html  # DOM safety/XSS prevention tests
+│   └── tree-node.test.html   # Tree/Node behavior tests
 │
 └── build/              # Generated during build (git-ignored)
     └── ...
@@ -566,11 +567,14 @@ Before committing, verify:
 
 ### Unit Tests
 
-Browser-based unit tests are located in `tests/`. Run them by opening the HTML files directly in a browser, or use `make test`.
+Browser-based unit tests are located in `tests/`. Run them with `make test` (starts a local HTTP server and opens the pages), or open the test pages via `http://` (module-based tests won't run from `file://` due to browser CORS rules).
 
 | Test File | Purpose |
 |-----------|----------|
 | `dom-safety.test.html` | Tests for XSS prevention - verifies that DOM rendering uses safe methods (`textContent`, `createElement`) instead of `innerHTML` |
+| `tree-node.test.html` | Tests for Tree/Node behavior, including browser event ordering edge cases |
+
+`tree-node.test.html` supports `?env=firefox` and `?env=chrome` to force browser-specific rules; otherwise it auto-detects via user agent.
 
 #### Writing New Tests
 
@@ -647,7 +651,7 @@ New test files should follow the pattern established in `tests/dom-safety.test.h
 - Self-contained HTML file with embedded `<script type="module">`
 - Uses the simple `test()`, `assert()`, `assertEqual()` framework
 - Renders results to the page and logs to console
-- Can be run by simply opening in a browser
+- Can be run by simply opening in a browser (use `http://` if importing modules)
 
 ---
 

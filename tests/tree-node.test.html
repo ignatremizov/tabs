@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<!-- tree-node.test.html: Unit tests for Tree/Node behavior -->
+<!-- Copyright (C) 2025 Ignat Remizov -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Tree/Node Tests</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 20px; }
+    .test-pass { color: green; }
+    .test-fail { color: red; font-weight: bold; }
+    .test-section { margin: 20px 0; padding: 10px; border: 1px solid #ccc; }
+    .test-section h2 { margin-top: 0; }
+    pre { background: #f5f5f5; padding: 10px; overflow-x: auto; }
+    #summary { font-size: 1.2em; padding: 10px; margin-bottom: 20px; }
+    #summary.all-pass { background: #dfd; }
+    #summary.has-fail { background: #fdd; }
+  </style>
+</head>
+<body>
+  <h1>Tree/Node Tests</h1>
+  <div id="summary"></div>
+  <div id="results"></div>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    let env = params.get('env');
+    if (! env) {
+      const ua = navigator.userAgent || '';
+      env = ua.includes('Firefox') ? 'firefox' : 'chrome';
+    }
+    window.testEnv = env;
+
+    function ensureApi(api) {
+      if (!api.runtime) api.runtime = {};
+      if (!api.runtime.sendMessage) api.runtime.sendMessage = async () => ({});
+      if (!api.runtime.onMessage) api.runtime.onMessage = {};
+      if (!api.runtime.onMessage.addListener) {
+        api.runtime.onMessage.addListener = () => {};
+      }
+
+      if (!api.tabs) api.tabs = {};
+      if (!api.tabs.remove) api.tabs.remove = async () => {};
+      if (!api.tabs.get) api.tabs.get = async () => ({});
+      if (!api.tabs.move) api.tabs.move = async () => {};
+      if (!api.tabs.update) api.tabs.update = async () => ({});
+      if (!api.tabs.query) api.tabs.query = async () => ([]);
+
+      if (!api.windows) api.windows = {};
+      if (!api.windows.remove) api.windows.remove = async () => {};
+      if (!api.windows.get) api.windows.get = async () => ({});
+    }
+
+    if ('firefox' === env) {
+      if (!window.browser) window.browser = {};
+      ensureApi(window.browser);
+    } else {
+      if (!window.chrome) window.chrome = {};
+      ensureApi(window.chrome);
+    }
+
+    if (!window.chrome) window.chrome = {};
+    ensureApi(window.chrome);
+  </script>
+  <script type="module">
+    "use strict";
+
+    async function main() {
+      const env = window.testEnv || 'chrome';
+      const $summary = document.getElementById('summary');
+      const $title = document.querySelector('h1');
+      $title.textContent = `Tree/Node Tests (${env})`;
+
+      if ('file:' === location.protocol) {
+        $summary.textContent = 'Run via http (example: python3 -m http.server).';
+        $summary.className = 'has-fail';
+        return;
+      }
+
+      let Tree;
+      let Node;
+      let isIllegalURL;
+      try {
+        const [treeMod, nodeMod, commonMod] = await Promise.all([
+          import('../common/tree.js'),
+          import('../common/node.js'),
+          import('../common/common.js')
+        ]);
+        Tree = treeMod.Tree;
+        Node = nodeMod.Node;
+        isIllegalURL = commonMod.isIllegalURL;
+      } catch (err) {
+        $summary.textContent = `Failed to load modules: ${err}`;
+        $summary.className = 'has-fail';
+        return;
+      }
+
+      class TestNode extends Node {
+        newNodeId () {
+          this.tree.nextId += 1;
+          return `test-${this.tree.nextId}`;
+        }
+
+        async addChild (index, details, ...extra) {
+          if (! details.id) details.id = this.newNodeId();
+          return await super.addChild(index, details, ...extra);
+        }
+      }
+
+      function createTree() {
+        const tree = new Tree(TestNode);
+        tree.nextId = 0;
+        tree.bkgd = { windowsLoading: [], nodesLoading: [] };
+        return tree;
+      }
+
+      const tests = [];
+
+      function test(name, fn) {
+        tests.push({ name, fn });
+      }
+
+      function assert(condition, message) {
+        if (!condition) {
+          throw new Error(message || 'Assertion failed');
+        }
+      }
+
+      function assertEqual(actual, expected, message) {
+        if (actual !== expected) {
+          throw new Error(message || `Expected "${expected}" but got "${actual}"`);
+        }
+      }
+
+      function getApi() {
+        return ('firefox' === env) ? window.browser : window.chrome;
+      }
+
+      async function addChild(parent, details) {
+        const index = parent.nodes.length;
+        return await parent.addChild(index, details, { reason: 'test' });
+      }
+
+      test('onTabRemoved removes boring last tab and window', async () => {
+        const tree = createTree();
+        const windowNode = await addChild(tree.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 1,
+          loaded: true
+        });
+        await addChild(windowNode, {
+          id: 't1',
+          tabId: 10,
+          windowId: 1,
+          loaded: true,
+          url: 'about:blank'
+        });
+
+        await tree.onTabRemoved(10, { windowId: 1, isWindowClosing: true });
+
+        assert(!tree.nodes.t1, 'Tab node should be deleted');
+        assert(!tree.nodes.w1, 'Window node should be deleted');
+        assertEqual(tree.root.nodes.length, 0, 'Root should be empty');
+      });
+
+      test('onTabRemoved keeps window with metadata', async () => {
+        const tree = createTree();
+        const windowNode = await addChild(tree.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 1,
+          loaded: true,
+          label: 'Saved Window'
+        });
+        await addChild(windowNode, {
+          id: 't1',
+          tabId: 10,
+          windowId: 1,
+          loaded: true,
+          url: 'about:blank'
+        });
+
+        await tree.onTabRemoved(10, { windowId: 1, isWindowClosing: true });
+
+        assert(!tree.nodes.t1, 'Tab node should be deleted');
+        assert(tree.nodes.w1, 'Window node should remain');
+        assertEqual(tree.root.nodes.length, 1, 'Root should still contain window');
+        assertEqual(tree.nodes.w1.loaded, false, 'Window should be unloaded');
+        assertEqual(tree.nodes.w1.nodes.length, 0, 'Window should have no tabs');
+      });
+
+      test('windowClosed before tabRemoved still clears boring window', async () => {
+        const tree = createTree();
+        const windowNode = await addChild(tree.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 1,
+          loaded: true
+        });
+        await addChild(windowNode, {
+          id: 't1',
+          tabId: 10,
+          windowId: 1,
+          loaded: true,
+          url: 'about:blank'
+        });
+
+        await windowNode.windowClosed({ reason: 'onWindowRemoved' });
+        assert(tree.nodes.w1, 'Window should remain until tab removal');
+
+        await tree.onTabRemoved(10, { windowId: 1, isWindowClosing: true });
+
+        assert(!tree.nodes.t1, 'Tab node should be deleted');
+        assert(!tree.nodes.w1, 'Window node should be deleted');
+      });
+
+      test('onTabAttached uses windowsLoading queue', async () => {
+        const tree = createTree();
+        const savedWindow = await addChild(tree.root, {
+          id: 'w-saved',
+          type: 'window',
+          loaded: false
+        });
+        tree.bkgd.windowsLoading.push(savedWindow);
+
+        const oldWindow = await addChild(tree.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 1,
+          loaded: true
+        });
+        const tabNode = await addChild(oldWindow, {
+          id: 't1',
+          tabId: 10,
+          windowId: 1,
+          loaded: true,
+          url: 'https://example.com'
+        });
+
+        await tree.onTabAttached(10, { newWindowId: 2, newPosition: 0 });
+
+        assertEqual(savedWindow.windowId, 2, 'Saved window should adopt new id');
+        assertEqual(tree.root.getWindowId(2), savedWindow, 'Saved window should be used');
+        assertEqual(tabNode.parent, savedWindow, 'Tab should move to saved window');
+      });
+
+      test('onTabAttached before onWindowCreated creates window', async () => {
+        const tree = createTree();
+        const oldWindow = await addChild(tree.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 1,
+          loaded: true
+        });
+        const tabNode = await addChild(oldWindow, {
+          id: 't1',
+          tabId: 10,
+          windowId: 1,
+          loaded: true,
+          url: 'https://example.com'
+        });
+
+        await tree.onTabAttached(10, { newWindowId: 2, newPosition: 0 });
+
+        const newWindow = tree.root.getWindowId(2);
+        assert(newWindow, 'New window node should exist');
+        assertEqual(newWindow.nodes[0], tabNode, 'Tab should move to new window');
+        assertEqual(oldWindow.nodes.length, 0, 'Old window should be empty');
+
+        await tree.onWindowCreated(
+          { id: 2, width: 100, height: 100, left: 0, top: 0 },
+          { reason: 'onWindowCreated' }
+        );
+        assertEqual(newWindow.loaded, true, 'Window should be marked loaded');
+      });
+
+      test('getTabPendingUrl prefers pendingUrl', () => {
+        const tree = createTree();
+        const url = tree.getTabPendingUrl({
+          pendingUrl: 'https://example.com/pending',
+          url: 'about:blank',
+          title: 'example.com/pending'
+        });
+        assertEqual(url, 'https://example.com/pending');
+      });
+
+      test('getTabPendingUrl uses title for about:blank with slash', () => {
+        const tree = createTree();
+        const url = tree.getTabPendingUrl({
+          url: 'about:blank',
+          title: 'example.com/path'
+        });
+        assertEqual(url, 'example.com/path');
+      });
+
+      test('getTabPendingUrl falls back to url', () => {
+        const tree = createTree();
+        const url = tree.getTabPendingUrl({
+          url: 'https://example.com',
+          title: 'Example'
+        });
+        assertEqual(url, 'https://example.com');
+      });
+
+      if ('firefox' === env) {
+        test('isIllegalURL uses firefox rules', () => {
+          assert(isIllegalURL('file:///tmp/file.txt'), 'file: should be blocked');
+          assert(isIllegalURL('about:config'), 'about:config should be blocked');
+          assert(!isIllegalURL('about:blank'), 'about:blank should be allowed');
+          assert(!isIllegalURL('about:home'), 'about:home should be allowed');
+          assert(!isIllegalURL('https://example.com'), 'https should be allowed');
+        });
+      }
+
+      test('shouldUnloadNotDelete detects metadata on node', async () => {
+        const tree = createTree();
+        const node = await addChild(tree.root, { id: 'n1' });
+
+        assert(!node.shouldUnloadNotDelete(), 'Empty node should be boring');
+
+        node.label = 'Label';
+        assert(node.shouldUnloadNotDelete(), 'Label should make node interesting');
+
+        node.label = undefined;
+        node.note = 'Note';
+        assert(node.shouldUnloadNotDelete(), 'Note should make node interesting');
+
+        node.note = undefined;
+        node.checkbox = 'X';
+        assert(node.shouldUnloadNotDelete(), 'Checkbox should make node interesting');
+      });
+
+      test('shouldUnloadNotDelete recurses into children', async () => {
+        const tree = createTree();
+        const parent = await addChild(tree.root, { id: 'p1' });
+        await addChild(parent, { id: 'c1', label: 'Child Label' });
+
+        assert(parent.shouldUnloadNotDelete(), 'Child metadata should make parent interesting');
+        assert(!parent.shouldUnloadNotDelete(false), 'Non-recursive check should ignore child');
+      });
+
+      test('windowClosed deletes empty boring window', async () => {
+        const tree = createTree();
+        const windowNode = await addChild(tree.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 1,
+          loaded: true
+        });
+
+        await windowNode.windowClosed({ reason: 'onWindowRemoved' });
+
+        assert(!tree.nodes.w1, 'Window node should be deleted');
+        assertEqual(tree.root.nodes.length, 0, 'Root should be empty');
+      });
+
+      test('windowClosed unloads window with metadata', async () => {
+        const tree = createTree();
+        const windowNode = await addChild(tree.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 1,
+          loaded: true,
+          label: 'Saved Window'
+        });
+
+        await windowNode.windowClosed({ reason: 'onWindowRemoved' });
+
+        assert(tree.nodes.w1, 'Window node should remain');
+        assertEqual(tree.nodes.w1.loaded, false, 'Window should be unloaded');
+      });
+
+      test('moveTo root keeps window container with metadata', async () => {
+        const tree = createTree();
+        tree.bkgd = null;
+        tree.openWindowOnRootMove = true;
+        const windowNode = await addChild(tree.root, {
+          id: 'w1',
+          type: 'window',
+          label: 'Window Label'
+        });
+        const other = await addChild(tree.root, { id: 'n1', label: 'Other' });
+        const child = await addChild(windowNode, {
+          id: 't1',
+          url: 'https://example.com'
+        });
+
+        await child.moveTo(tree.root, 1, { reason: 'userAction' });
+
+        assertEqual(child.parent, windowNode, 'Child should stay under window');
+        assertEqual(windowNode.parent, tree.root, 'Window should remain at root');
+        assertEqual(tree.root.nodes[0], windowNode, 'Window should stay at index');
+        assertEqual(tree.root.nodes[1], other, 'Sibling should stay in place');
+      });
+
+      test('moveTo root detaches child when window is boring', async () => {
+        const tree = createTree();
+        tree.bkgd = null;
+        tree.openWindowOnRootMove = true;
+        const windowNode = await addChild(tree.root, {
+          id: 'w1',
+          type: 'window'
+        });
+        const child = await addChild(windowNode, {
+          id: 't1',
+          url: 'https://example.com'
+        });
+
+        await child.moveTo(tree.root, 0, { reason: 'userAction' });
+
+        assertEqual(child.parent, tree.root, 'Child should move to root');
+        assertEqual(windowNode.nodes.length, 0, 'Window should be empty');
+      });
+
+      test('moveTo emits openWindowOnRootMove flag for root moves', async () => {
+        const tree = createTree();
+        tree.bkgd = null;
+        tree.openWindowOnRootMove = true;
+
+        const api = getApi();
+        const sent = [];
+        api.runtime.sendMessage = async (args) => {
+          sent.push(args);
+          return {};
+        };
+
+        const parent = await addChild(tree.root, { id: 'p1', label: 'Group' });
+        const child = await addChild(parent, { id: 'c1', url: 'https://example.com' });
+
+        await child.moveTo(tree.root, 0, { reason: 'userAction' });
+
+        assert(sent.length > 0, 'Should emit a move message');
+        const msg = sent.find((entry) => entry.msg === 'tree_nodeMoved');
+        assert(msg, 'Should emit tree_nodeMoved');
+        assertEqual(msg.prevParentId, 'p1', 'Should include prevParentId');
+        assertEqual(msg.openWindowOnRootMove, true, 'Should include openWindowOnRootMove');
+      });
+
+      test('moveTo omits openWindowOnRootMove when toggle is off', async () => {
+        const tree = createTree();
+        tree.bkgd = null;
+        tree.openWindowOnRootMove = false;
+
+        const api = getApi();
+        const sent = [];
+        api.runtime.sendMessage = async (args) => {
+          sent.push(args);
+          return {};
+        };
+
+        const parent = await addChild(tree.root, { id: 'p1', label: 'Group' });
+        const child = await addChild(parent, { id: 'c1', url: 'https://example.com' });
+
+        await child.moveTo(tree.root, 0, { reason: 'userAction' });
+
+        const msg = sent.find((entry) => entry.msg === 'tree_nodeMoved');
+        assert(msg, 'Should emit tree_nodeMoved');
+        assert(!('openWindowOnRootMove' in msg), 'Should not include openWindowOnRootMove');
+      });
+
+      async function runTests() {
+        const results = [];
+
+        for (const item of tests) {
+          try {
+            await item.fn();
+            results.push({ name: item.name, pass: true });
+          } catch (e) {
+            results.push({
+              name: item.name,
+              pass: false,
+              error: e && e.message ? e.message : String(e)
+            });
+          }
+        }
+
+        const $results = document.getElementById('results');
+        const $summary = document.getElementById('summary');
+
+        let passCount = 0;
+        let failCount = 0;
+
+        for (const result of results) {
+          const $div = document.createElement('div');
+          $div.className = 'test-section';
+
+          const $status = document.createElement('span');
+          const $name = document.createTextNode(' ' + result.name);
+
+          if (result.pass) {
+            passCount++;
+            $status.className = 'test-pass';
+            $status.textContent = 'PASS:';
+            $div.append($status, $name);
+          } else {
+            failCount++;
+            $status.className = 'test-fail';
+            $status.textContent = 'FAIL:';
+            const $error = document.createElement('pre');
+            $error.textContent = result.error;
+            $div.append($status, $name, $error);
+          }
+
+          $results.appendChild($div);
+        }
+
+        $summary.textContent = `${passCount} passed, ${failCount} failed out of ${results.length} tests`;
+        $summary.className = failCount === 0 ? 'all-pass' : 'has-fail';
+
+        console.log(`\nTree/Node Tests: ${passCount} passed, ${failCount} failed`);
+        if (failCount > 0) {
+          for (const result of results) {
+            if (!result.pass) {
+              console.error(`FAIL: ${result.name}\n  ${result.error}`);
+            }
+          }
+        }
+      }
+
+      runTests();
+    }
+
+    main();
+  </script>
+</body>
+</html>

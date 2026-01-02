@@ -29,9 +29,15 @@ firefox-sign:
 
 # Open unit tests in browser
 test:
-	@echo "Opening tests/dom-safety.test.html in browser..."
-	@open tests/dom-safety.test.html 2>/dev/null || xdg-open tests/dom-safety.test.html 2>/dev/null || echo "Please open tests/dom-safety.test.html manually"
+	@echo "Starting local test server at http://127.0.0.1:8765 ..."
+	@python3 -m http.server 8765 --directory . >/dev/null 2>&1 & echo $$! > /tmp/tktsto-test-server.pid
+	@sleep 0.5
+	@echo "Opening tests in browser..."
+	@open http://127.0.0.1:8765/tests/dom-safety.test.html 2>/dev/null || xdg-open http://127.0.0.1:8765/tests/dom-safety.test.html 2>/dev/null || echo "Please open http://127.0.0.1:8765/tests/dom-safety.test.html manually"
+	@open http://127.0.0.1:8765/tests/tree-node.test.html 2>/dev/null || xdg-open http://127.0.0.1:8765/tests/tree-node.test.html 2>/dev/null || echo "Please open http://127.0.0.1:8765/tests/tree-node.test.html manually"
+	@echo "Firefox-specific run: http://127.0.0.1:8765/tests/tree-node.test.html?env=firefox"
+	@echo "Chrome-specific run: http://127.0.0.1:8765/tests/tree-node.test.html?env=chrome"
+	@echo "Stop server with: kill $$(cat /tmp/tktsto-test-server.pid)"
 
 todo:
 	grep -1 -n -E 'TODO|FIXME' *.js */*.js */*.html */*.css | less -S
-

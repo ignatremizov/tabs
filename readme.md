@@ -143,7 +143,11 @@ Unit tests are located in the `tests/` directory. To run them:
 make test
 ```
 
-Or simply open `tests/dom-safety.test.html` in a browser.
+`make test` starts a local HTTP server and opens the test pages. This matters for module-based tests (like `tests/tree-node.test.html`) which won't run from `file://`.
+
+You can also open individual tests:
+- `http://127.0.0.1:8765/tests/dom-safety.test.html`
+- `http://127.0.0.1:8765/tests/tree-node.test.html` (use `?env=firefox` or `?env=chrome` to force rules)
 
 Tests use a simple browser-based framework with no external dependencies,
 following the project's vanilla JavaScript philosophy.
