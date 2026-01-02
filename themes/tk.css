@@ -709,14 +709,15 @@ foo {
 #hover-menu div {
   display: inline-block;
   cursor: pointer;
-  width: 1.4rem;   /* Fixed button width */
+  min-width: 1.4rem;   /* Minimum button width */
   height: 1.4rem;  /* Fixed button height */
   line-height: 1.4rem;  /* Center text vertically */
   font-size: 1.33rem;  /* Fixed font size */
   font-weight: bold;
   color: #abc;
   text-align: center;
-  padding: 0;
+  padding: 0 0.2rem;
+  white-space: nowrap;
   text-shadow: var(--hover-menu-button-shadow);
 }
 
@@ -747,10 +748,11 @@ foo {
   color: var(--checkbox-fg-todo);
   text-shadow: none;
   vertical-align: middle;
-  width: 1.15rem;   /* Fixed width */
-  height: 1.15rem;  /* Fixed height */
-  line-height: 1.15rem;
-  font-size: 1rem;  /* Fixed font size */
+  width: 1.4rem;  /* Square button */
+  min-width: 1.4rem;
+  height: 1.4rem;
+  line-height: 1.4rem;
+  font-size: 1.33rem;
   padding: 0;
   margin-left: 0.05rem;
   margin-right: 0.05rem;
@@ -1055,4 +1057,3 @@ foo {
   --scrollbar-thumb-bg: linear-gradient(var(--cursor-bg-top), var(--cursor-bg-bot));
   --scrollbar-thumb-bg-unfocused: var(--scrollbar-thumb-bg);
 }
-

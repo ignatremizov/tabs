@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <!-- options/options.html: options page
-  -- Copyright (C) 2025 Selene ToyKeeper
+  -- Copyright (C) 2025 Selene ToyKeeper and Ignat Remizov
   -- SPDX-License-Identifier: AGPL-3.0-or-later
   -->
 <html>
@@ -12,6 +12,15 @@
       background-color: #333;
       color: #ccc;
     }
+    h2 {
+      margin: 0.8em 0 0.35em;
+    }
+    h3 {
+      margin: 0.6em 0 0.25em;
+    }
+    p, form, ul {
+      margin: 0.4em 0;
+    }
     label, input {
       margin: 0.25em 0;
     }
@@ -22,6 +31,49 @@
     }
     .short-input {
       min-width: unset;
+    }
+    .shortcut-grid {
+      display: grid;
+      grid-template-columns: minmax(14em, 2fr) minmax(10em, 1fr) minmax(10em, 1fr);
+      gap: 0.25em 0.8em;
+      align-items: center;
+    }
+    .shortcut-grid-header {
+      color: #9a9a9a;
+      font-size: 0.8em;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      margin: 0.25em 0 0.1em;
+    }
+    .shortcut-group {
+      margin: 0.35em 0;
+      padding: 0.25em 0.5em;
+      border: 1px solid #444;
+      border-radius: 0.5em;
+      background-color: #2b2b2b;
+    }
+    .shortcut-group-title {
+      font-weight: bold;
+      color: #ddd;
+      margin-bottom: 0.25em;
+    }
+    .shortcut-label {
+      font-weight: bold;
+    }
+    .shortcut-input {
+      min-width: unset;
+      width: 12em;
+      margin: 0;
+    }
+    .shortcut-default {
+      color: #888;
+      font-size: 0.9em;
+    }
+    .shortcut-actions {
+      margin-top: 0.4em;
+    }
+    .shortcut-grid > div {
+      margin: 0;
     }
     .file-input {
       display: flex;
@@ -45,6 +97,17 @@
     pre {
       margin: 0 2em;
       border-left: 3px solid #555;
+    }
+    @media (max-width: 700px) {
+      .shortcut-grid {
+        grid-template-columns: 1fr;
+      }
+      .shortcut-grid-header {
+        display: none;
+      }
+      .shortcut-default {
+        margin-bottom: 0.5em;
+      }
     }
   </style>
 </head>
@@ -185,6 +248,30 @@
     </p>
   </div>
 
+  <h2>Keyboard Shortcuts</h2>
+
+  <p>
+  These shortcuts apply when the side panel has focus. Click a field and
+  press a key combination. Use Backspace/Delete to clear and Esc to cancel.
+  </p>
+
+  <p>
+  Some key combinations may be reserved by your browser or OS and won't work.
+  </p>
+  <p>
+  Firefox also has global extension shortcuts in “Manage Extension Shortcuts”.
+  These are separate from the in-panel shortcuts above and only include a few
+  commands like Toggle Side Panel, Unload current tab, and Add highlighted text
+  to current tab’s notes.
+  </p>
+
+  <div id="keybindings">
+    <div id="keybindings-groups"></div>
+    <div class="shortcut-actions">
+      <button type="button" id="keybindings-reset">Reset to defaults</button>
+    </div>
+  </div>
+
 
   <h2>Backups</h2>
 
@@ -275,12 +362,9 @@
       - New "C-t" tab location
       - New "link opened from this page" tab location
       - New "tab opened some other way" tab location
-    - Key bindings
     - visibility and maybe order of buttons in top/bottom bars
     - whether to grab, store, and show favicons
   -->
 
 </body>
 </html>
-
-

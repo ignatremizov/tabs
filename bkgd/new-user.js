@@ -1,5 +1,5 @@
 // bkgd/new-user.js: new user tutorial factory
-// Copyright (C) 2025 Selene ToyKeeper
+// Copyright (C) 2025 Selene ToyKeeper & Ignat Remizov
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 "use strict";
@@ -12,6 +12,7 @@ export async function createNewUserTutorialNodes (tree, parentNode) {
   const root = tree.root;
   // build a list of keyBindngs
   const tv = new TreeView();
+  await tv.updateKeyBindings();
   const keymapInfo = [
   ];
   for (const key of Object.keys(tv.keyBindngs)) {
@@ -79,7 +80,7 @@ export async function createNewUserTutorialNodes (tree, parentNode) {
     { label: "Be sure to check the",
       title: 'Options',
       url: '/options/options.html',
-      note: 'to choose a theme, set your host name, and configure everything else to your liking.' },
+      note: 'to choose a theme, set your host name, configure shortcuts, and tweak everything else to your liking.\n\nFirefox also has a separate "Manage Extension Shortcuts" page for global commands like Toggle Side Panel, Unload current tab, and Add highlighted text to current tab’s notes.' },
     { label: "You're probably ready",
       note: 'to start organizing your REAL tabs and windows now.  As a first step, try giving a name to each of your windows.  Then maybe organize related tabs together, add some category labels, etc.  Tips and tricks are in the full documentation.' },
     { label: "The rest of the documentation...",
@@ -117,4 +118,3 @@ export async function createNewUserTutorialNodes (tree, parentNode) {
   if (! destParent) destParent = tree.root;
   await addItem(destParent, 0, helpInfo);
 }
-

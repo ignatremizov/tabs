@@ -1,5 +1,5 @@
 // view/treeview.js: TreeView class
-// Copyright (C) 2025 Selene ToyKeeper
+// Copyright (C) 2025 Selene ToyKeeper & Ignat Remizov
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 "use strict";
@@ -7,6 +7,7 @@ import { api, isChrome, isFirefox } from '/api.js';
 
 import { log, debug, warn, error, emit } from '/common/common.js';
 import { buildEventName } from '/common/events.js';
+import { defaultKeyBindings, keyBindingActions } from '/common/keybindings.js';
 import { inputDialog, checkboxDialog } from '/common/dialog.js';
 import { NodeView } from './nodeview.js';
 import { Tree } from '/common/tree.js';
@@ -35,69 +36,13 @@ export class TreeView extends Tree {
     }
 
     // table mapping keys to actions
-    // TODO: let user bind keys
     this.keyEventMutex = new Mutex();
-    this.keyBindngs = {
-      // test
-      //'a': 'addNode',
-      ///// add / remove nodes
-      'Enter': 'loadOrEditNode',
-      'd': 'deleteNode',
-      'u': 'unloadNode',
-      'Shift+U': 'forceToggleLoad',
-      'o': 'addNodeAsNextVisibleRow',
-      'Shift+O': 'addNodeAsPrevVisibleRow',
-      ///// edit nodes
-      'Space': 'toggleExpanded',
-      'e': 'editNotes',
-      ///// task status
-      //'x': 'toggleTaskDone',
-      //'t': 'taskLeaderKey',
-      't': 'taskEdit',
-      ///// search
-      //'/': 'beginSearch',
-      //'Shift+*': 'searchForCurrent',  // match current label, url, or title
-      //'Ctrl+f': 'beginSearch',
-      //'Ctrl+g': 'nextSearchResult',
-      //'n': 'nextSearchResult',
-      //'Shift+N': 'prevSearchResult',
-      //'Escape': 'endSearch',
-      ///// cursor movement
-      'ArrowUp': 'cursorUp',
-      'ArrowDown': 'cursorDown',
-      'ArrowLeft': 'cursorLeft',
-      'ArrowRight': 'cursorRight',
-      'PageUp': 'cursorPgUp',
-      'PageDown': 'cursorPgDown',
-      'Home': 'cursorHome',
-      'End': 'cursorEnd',
-      ///// move current node
-      // move by one visible row, period
-      'Shift+ArrowUp': 'moveNodeUp',
-      'Shift+ArrowDown': 'moveNodeDown',
-      // move by one sibling, never going to a deeper level (but maybe higher)
-      'Shift+PageUp': 'moveNodeUpNoDescend',
-      'Shift+PageDown': 'moveNodeDownNoDescend',
-      // move shallower or deeper
-      'Shift+ArrowLeft': 'moveNodeLeft',
-      'Shift+ArrowRight': 'moveNodeRight',
-      // move to first / last position
-      'Shift+Home': 'moveNodeHome',
-      'Shift+End': 'moveNodeEnd',
-      ///// mark / paste
-      'm': 'toggleMarked',
-      'Shift+M': 'unmarkAll',
-      'p': 'pasteMarked',
-      //'Shift+P': 'pasteMarkedBefore',
-      // TODO: leader key for batch processing of other things,
-      //   like delete and maybe sort and checkbox actions and ...
-      ///// buttons
-      'b': 'backupSession',
-      ///// misc
-      'Shift+?': 'generateTutorial',
-      'Tab': 'none',  // suppress default Tab handling
-      'none': 'none'
-    };
+    this.keyBindngs = { ...defaultKeyBindings };
+    this.keyBindingsByAction = this.buildActionKeyMap(this.keyBindngs);
+    this.actionLabels = {};
+    for (const binding of keyBindingActions) {
+      this.actionLabels[binding.action] = binding.label;
+    }
     // mouse click bindings
     this.mouseBindings = {
       // mouseover should show a hover menu thingy
@@ -190,6 +135,7 @@ export class TreeView extends Tree {
     this.initMouseHandler();
     this.initButtonHandlers();
     this.initStorageObserver();
+    await this.updateKeyBindings();
     // get the window this view is attached to
     this.windowObj = await api.windows.getCurrent();
     this.windowId = this.windowObj.id;
@@ -291,6 +237,117 @@ export class TreeView extends Tree {
     if (changes.theme) {
       this.updateTheme();
     }
+    if (changes.keyBindings) {
+      this.updateKeyBindings();
+    }
+  }
+
+  buildActionKeyMap (keyBindings) {
+    const byAction = {};
+    for (const key of Object.keys(keyBindings)) {
+      const action = keyBindings[key];
+      if (! byAction[action]) byAction[action] = [];
+      byAction[action].push(key);
+    }
+    return byAction;
+  }
+
+  getKeyBindingForAction (action) {
+    const bindings = this.keyBindingsByAction[action];
+    if (bindings && bindings.length) return bindings[0];
+    return '';
+  }
+
+  formatModifierLabel (modifier) {
+    const map = {
+      'Shift': 'S',
+      'Ctrl': 'C',
+      'Alt': 'A',
+      'Meta': 'M'
+    };
+    return map[modifier] || modifier;
+  }
+
+  formatKeyLabel (key) {
+    if (! key) return '';
+    const map = {
+      'ArrowUp': 'Up',
+      'ArrowDown': 'Dn',
+      'ArrowLeft': 'Lt',
+      'ArrowRight': 'Rt',
+      'PageUp': 'PgUp',
+      'PageDown': 'PgDn',
+      'Home': 'Home',
+      'End': 'End',
+      'Enter': 'Ent',
+      'Space': 'Spc',
+      'Tab': 'Tab',
+      'Backspace': 'Bksp',
+      'Delete': 'Del',
+      'Escape': 'Esc'
+    };
+    if (key.length === 1) return key.toUpperCase();
+    return map[key] || key;
+  }
+
+  formatBindingLabel (binding, fallback) {
+    if (! binding) return fallback || '';
+    const parts = binding.split('+');
+    const key = parts.pop();
+    const keyLabel = this.formatKeyLabel(key);
+    if (! parts.length) return keyLabel;
+    const modLabels = parts.map((part) => this.formatModifierLabel(part));
+    return `${modLabels.join('+')}+${keyLabel}`;
+  }
+
+  setHoverMenuButtonLabel ($button, action, fallback) {
+    if (! $button) return;
+    const binding = this.getKeyBindingForAction(action);
+    const label = this.formatBindingLabel(binding, fallback);
+    $button.innerText = label || '';
+    const actionLabel = this.actionLabels[action] || action;
+    if (binding) $button.title = `${actionLabel} (${binding})`;
+    else $button.title = `${actionLabel} (unbound)`;
+  }
+
+  updateHoverMenuLabels () {
+    this.setHoverMenuButtonLabel(this.$hoverMenuUnload, 'unloadNode', 'U');
+    this.setHoverMenuButtonLabel(this.$hoverMenuTask, 'taskEdit', 'T');
+    this.setHoverMenuButtonLabel(this.$hoverMenuEdit, 'editNotes', 'E');
+    this.setHoverMenuButtonLabel(this.$hoverMenuMark, 'toggleMarked', 'M');
+    this.setHoverMenuButtonLabel(this.$hoverMenuDelete, 'deleteNode', 'D');
+  }
+
+  applyKeyBindings (userBindings) {
+    const keyBindings = { ...defaultKeyBindings };
+    const defaultByAction = this.buildActionKeyMap(keyBindings);
+    const allowedActions = new Set(
+      keyBindingActions.map((binding) => binding.action)
+    );
+
+    if (userBindings && ('object' === typeof userBindings)) {
+      for (const action of Object.keys(userBindings)) {
+        if (! allowedActions.has(action)) continue;
+        const existingKeys = defaultByAction[action] || [];
+        for (const existingKey of existingKeys) {
+          delete keyBindings[existingKey];
+        }
+        const rawKey = userBindings[action];
+        if ('string' === typeof rawKey) {
+          const key = rawKey.trim();
+          if (key) keyBindings[key] = action;
+        }
+      }
+    }
+
+    this.keyBindngs = keyBindings;
+    this.keyBindingsByAction = this.buildActionKeyMap(this.keyBindngs);
+  }
+
+  async updateKeyBindings () {
+    const data = await api.storage.local.get({ keyBindings: {} });
+    this.applyKeyBindings(data.keyBindings);
+    this.updateHoverMenuLabels();
   }
 
   async getWindowConfig (varName, defaultValue) {
@@ -1486,12 +1543,8 @@ export class TreeView extends Tree {
     function makeBtn (_this, className, label, funcName) {
       const $div = doc.createElement('div');
       $div.classList.add(className);
-      $div.innerText = label;
-      // add a tooltip
-      $div['title'] = funcName;
+      _this.setHoverMenuButtonLabel($div, funcName, label);
       $div['data-toggle'] = 'tooltip';
-      // TODO: get label from user's keybinding table
-      //let binding;
       // make the button do something when clicked
       const func = function (event) {
         _this[`action_${funcName}`].bind(_this)(event);
@@ -1519,6 +1572,7 @@ export class TreeView extends Tree {
     if (! this.$hoverMenuDelete) {
       this.$hoverMenuDelete = makeBtn(this, 'delete-button', 'D', 'deleteNode');
     }
+    this.updateHoverMenuLabels();
   }
 
   hideHoverMenu () {
@@ -1838,4 +1892,3 @@ export class TreeView extends Tree {
   }
 
 }
-

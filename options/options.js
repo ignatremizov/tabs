@@ -1,11 +1,13 @@
 // options/options.js: options page script
-// Copyright (C) 2025 Selene ToyKeeper
+// Copyright (C) 2025 Selene ToyKeeper & Ignat Remizov
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 "use strict";
 import { api, isChrome, isFirefox } from '/api.js';
 
 import { log, warn, debug, emit } from '/common/common.js';
+import { buildEventName } from '/common/events.js';
+import { defaultKeyBindings, keyBindingActions } from '/common/keybindings.js';
 
 log('options.js running');
 
@@ -225,6 +227,256 @@ function initAppearanceForm () {
   });
 }
 
+function buildDefaultBindingsByAction () {
+  const defaults = {};
+  for (const binding of keyBindingActions) {
+    defaults[binding.action] = '';
+  }
+  for (const key of Object.keys(defaultKeyBindings)) {
+    const action = defaultKeyBindings[key];
+    if (action === 'none') continue;
+    if (! Object.prototype.hasOwnProperty.call(defaults, action)) continue;
+    if (! defaults[action]) defaults[action] = key;
+  }
+  return defaults;
+}
+
+async function initKeyBindingsForm () {
+  const $groups = document.getElementById('keybindings-groups');
+  const $reset = document.getElementById('keybindings-reset');
+  if (! $groups || ! $reset) return;
+
+  const actionDefinitions = {};
+  for (const binding of keyBindingActions) {
+    actionDefinitions[binding.action] = binding;
+  }
+
+  const keyBindingGroups = [
+    {
+      label: 'Add / Remove',
+      actions: [
+        'loadOrEditNode',
+        'deleteNode',
+        'unloadNode',
+        'forceToggleLoad',
+        'addNodeAsNextVisibleRow',
+        'addNodeAsPrevVisibleRow'
+      ]
+    },
+    {
+      label: 'Edit',
+      actions: [
+        'toggleExpanded',
+        'editNotes'
+      ]
+    },
+    {
+      label: 'Task',
+      actions: [
+        'taskEdit'
+      ]
+    },
+    {
+      label: 'Navigation',
+      actions: [
+        'cursorUp',
+        'cursorDown',
+        'cursorLeft',
+        'cursorRight',
+        'cursorPgUp',
+        'cursorPgDown',
+        'cursorHome',
+        'cursorEnd'
+      ]
+    },
+    {
+      label: 'Move',
+      actions: [
+        'moveNodeUp',
+        'moveNodeDown',
+        'moveNodeUpNoDescend',
+        'moveNodeDownNoDescend',
+        'moveNodeLeft',
+        'moveNodeRight',
+        'moveNodeHome',
+        'moveNodeEnd'
+      ]
+    },
+    {
+      label: 'Mark / Paste',
+      actions: [
+        'toggleMarked',
+        'unmarkAll',
+        'pasteMarked',
+        'pasteMarkedBefore'
+      ]
+    },
+    {
+      label: 'Buttons / Misc',
+      actions: [
+        'backupSession',
+        'generateTutorial'
+      ]
+    }
+  ];
+
+  const groupedActions = new Set();
+  for (const group of keyBindingGroups) {
+    for (const action of group.actions) {
+      groupedActions.add(action);
+    }
+  }
+  const ungroupedActions = [];
+  for (const binding of keyBindingActions) {
+    if (! groupedActions.has(binding.action)) {
+      ungroupedActions.push(binding.action);
+    }
+  }
+  if (ungroupedActions.length) {
+    keyBindingGroups.push({
+      label: 'Other',
+      actions: ungroupedActions
+    });
+  }
+
+  const defaultBindings = buildDefaultBindingsByAction();
+  const data = await api.storage.local.get({ keyBindings: {} });
+  const storedBindings = data.keyBindings || {};
+  const effectiveBindings = {};
+  const inputs = {};
+
+  function setInputValue (action) {
+    const value = effectiveBindings[action] || '';
+    inputs[action].value = value;
+  }
+
+  function persistBindings () {
+    const overrides = {};
+    for (const binding of keyBindingActions) {
+      const action = binding.action;
+      const value = effectiveBindings[action] || '';
+      const defaultValue = defaultBindings[action] || '';
+      if (value === defaultValue) continue;
+      overrides[action] = value;
+    }
+    api.storage.local.set({ keyBindings: overrides });
+  }
+
+  function applyBinding (action, newValue) {
+    const normalized = newValue ? newValue.trim() : '';
+    if (normalized && normalized !== effectiveBindings[action]) {
+      for (const binding of keyBindingActions) {
+        const otherAction = binding.action;
+        if (otherAction === action) continue;
+        if (effectiveBindings[otherAction] === normalized) {
+          effectiveBindings[otherAction] = '';
+          setInputValue(otherAction);
+        }
+      }
+    }
+    effectiveBindings[action] = normalized;
+    setInputValue(action);
+    persistBindings();
+  }
+
+  $groups.textContent = '';
+
+  const $header = document.createElement('div');
+  $header.classList.add('shortcut-grid', 'shortcut-grid-header');
+  const $headerAction = document.createElement('div');
+  $headerAction.textContent = 'Action';
+  const $headerShortcut = document.createElement('div');
+  $headerShortcut.textContent = 'Shortcut';
+  const $headerDefault = document.createElement('div');
+  $headerDefault.textContent = 'Default';
+  $header.append($headerAction, $headerShortcut, $headerDefault);
+  $groups.append($header);
+
+  for (const group of keyBindingGroups) {
+    const $group = document.createElement('div');
+    $group.classList.add('shortcut-group');
+
+    const $title = document.createElement('div');
+    $title.classList.add('shortcut-group-title');
+    $title.textContent = group.label;
+    $group.append($title);
+
+    const $grid = document.createElement('div');
+    $grid.classList.add('shortcut-grid');
+
+    for (const action of group.actions) {
+      const binding = actionDefinitions[action];
+      const label = binding ? binding.label : action;
+
+      const $label = document.createElement('div');
+      $label.classList.add('shortcut-label');
+      $label.textContent = label;
+
+      const $input = document.createElement('input');
+      $input.type = 'text';
+      $input.readOnly = true;
+      $input.classList.add('shortcut-input');
+      $input.dataset.action = action;
+      $input.spellcheck = false;
+
+      let storedValue = defaultBindings[action] || '';
+      if (Object.prototype.hasOwnProperty.call(storedBindings, action)) {
+        storedValue = storedBindings[action];
+      }
+      effectiveBindings[action] = storedValue || '';
+      $input.value = effectiveBindings[action];
+      inputs[action] = $input;
+
+      const $default = document.createElement('div');
+      $default.classList.add('shortcut-default');
+      if (defaultBindings[action]) {
+        $default.textContent = `Default: ${defaultBindings[action]}`;
+      } else {
+        $default.textContent = 'Default: (unbound)';
+      }
+
+      $grid.append($label, $input, $default);
+
+      $input.addEventListener('keydown', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+
+        if (event.key === 'Escape') {
+          setInputValue(action);
+          $input.blur();
+          return;
+        }
+        if (event.key === 'Backspace' || event.key === 'Delete') {
+          applyBinding(action, '');
+          return;
+        }
+        if (['Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) {
+          return;
+        }
+
+        const bindingName = buildEventName(event);
+        applyBinding(action, bindingName);
+      });
+
+      $input.addEventListener('focus', () => {
+        $input.select();
+      });
+    }
+
+    $group.append($grid);
+    $groups.append($group);
+  }
+
+  $reset.addEventListener('click', () => {
+    for (const binding of keyBindingActions) {
+      const action = binding.action;
+      effectiveBindings[action] = defaultBindings[action] || '';
+      setInputValue(action);
+    }
+    api.storage.local.set({ keyBindings: {} });
+  });
+}
+
 function initSessionRestoreForm () {
   // generate an onClicked handler
   function fileUploadHandler($id, signalName, allowedExtensions = ['.json']) {
@@ -318,7 +570,7 @@ document.addEventListener('DOMContentLoaded', () => {
   initClientIdForm();
   initThemeForm();
   initAppearanceForm();
+  initKeyBindingsForm();
   initBackupsForm();
   initSessionRestoreForm();
 });
-
