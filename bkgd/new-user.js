@@ -56,6 +56,19 @@ export async function createNewUserTutorialNodes (tree, parentNode) {
       note: 'Open this tab to find out how\n\nYou remember how to open an unloaded tab, right?\n\n... right??' },
     { label: 'Moving nodes to the top level',
       note: 'If you enable the option to open a new window when moving a subtree to the top level, TKTSTO will open a new window for loaded tabs.  When you move the only child of a window, the window container moves with it instead of reopening the same window.' },
+    { label: 'Window wrapping playground', expanded: false,
+      note: 'Try the "W" hover button on the nodes below to wrap tabs into windows, convert labels into windows, and convert windows back into labels.  Then load/unload tabs and move things around to see how windows follow the tree.',
+      nodes: [
+        { label: 'Group A', nodes: [
+          { title: 'Example Domain', url: 'https://example.com/', loaded: false },
+          { title: 'Example Domain (child)', url: 'https://example.com/', loaded: false }
+        ]},
+        { label: 'Group B', nodes: [
+          { label: 'Nested Group', nodes: [
+            { title: 'Example Domain', url: 'https://example.com/', loaded: false }
+          ]}
+        ]}
+      ]},
     { label: 'Checkboxes', expanded: false,
       title: 'Double click me',
       url: '/docs/checkboxes.html',

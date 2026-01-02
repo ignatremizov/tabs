@@ -324,6 +324,7 @@ export class TreeView extends Tree {
     this.setHoverMenuButtonLabel(this.$hoverMenuTask, 'taskEdit', 'T');
     this.setHoverMenuButtonLabel(this.$hoverMenuEdit, 'editNotes', 'E');
     this.setHoverMenuButtonLabel(this.$hoverMenuMark, 'toggleMarked', 'M');
+    this.setHoverMenuButtonLabel(this.$hoverMenuWindow, 'wrapNodeInWindow', 'W');
     this.setHoverMenuButtonLabel(this.$hoverMenuDelete, 'deleteNode', 'D');
   }
 
@@ -1531,6 +1532,23 @@ export class TreeView extends Tree {
     this.action_mouseDragEnd(event);
   }
 
+  async action_wrapNodeInWindow (event) {
+    const node = this.whichCursor(event);
+    if (! node || node.isRoot()) return;
+    const result = await emit('bkgd_wrapNodeInWindow', { nodeId: node.id });
+    if (result && result.error) {
+      warn('wrapNodeInWindow error', result.error);
+      return;
+    }
+    if (result && result.result) {
+      this.setStatus(`window: ${result.result}`);
+    }
+    if (result && result.newLabelId) {
+      const labelNode = this.nodes[result.newLabelId];
+      if (labelNode) this.setCursor(labelNode);
+    }
+  }
+
   action_mouseDragEnd (event) {
     // abort on no-op
     //if (! this.mouseDragStartNode) return;
@@ -1578,6 +1596,9 @@ export class TreeView extends Tree {
     if (! this.$hoverMenuMark) {
       this.$hoverMenuMark = makeBtn(this, 'mark-button', 'M', 'toggleMarked');
     }
+    if (! this.$hoverMenuWindow) {
+      this.$hoverMenuWindow = makeBtn(this, 'window-button', 'W', 'wrapNodeInWindow');
+    }
     if (! this.$hoverMenuDelete) {
       this.$hoverMenuDelete = makeBtn(this, 'delete-button', 'D', 'deleteNode');
     }
@@ -1616,6 +1637,10 @@ export class TreeView extends Tree {
     if (this.mouseNode.isMarkable())
       this.$hoverMenuMark.style.display = 'inline-block';
     else this.$hoverMenuMark.style.display = 'none';
+    // show or hide the 'window' button
+    if (! this.mouseNode.isRoot())
+      this.$hoverMenuWindow.style.display = 'inline-block';
+    else this.$hoverMenuWindow.style.display = 'none';
     // show or hide the 'delete' button
     if (this.mouseNode.isDeletable())
       this.$hoverMenuDelete.style.display = 'inline-block';

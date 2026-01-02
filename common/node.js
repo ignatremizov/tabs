@@ -720,6 +720,7 @@ export class Node {
     this.bump('mtime', args);
     // notify others
     if ([
+      'userAction',
       'onTabCreated', 'onTabUpdated', 'onTabReplaced',
       'onWindowCreated', 'onWindowFocusChanged'
     ].includes(args.reason))

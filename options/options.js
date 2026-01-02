@@ -109,12 +109,25 @@ function initThemeForm () {
 
 function initBehaviorForm () {
   const $openWindowOnRootMove = document.getElementById('openWindowOnRootMove');
-  api.storage.local.get({ openWindowOnRootMove: false }).then((result) => {
+  const $openWindowOnRootLoadTopmost = document.getElementById(
+    'openWindowOnRootLoadTopmost'
+  );
+  api.storage.local.get({
+    openWindowOnRootMove: false,
+    openWindowOnRootLoadTopmost: false
+  }).then((result) => {
     $openWindowOnRootMove.checked = result.openWindowOnRootMove;
+    $openWindowOnRootLoadTopmost.checked =
+      result.openWindowOnRootLoadTopmost;
   });
   $openWindowOnRootMove.addEventListener('click', () => {
     api.storage.local.set({
       openWindowOnRootMove: $openWindowOnRootMove.checked
+    });
+  });
+  $openWindowOnRootLoadTopmost.addEventListener('click', () => {
+    api.storage.local.set({
+      openWindowOnRootLoadTopmost: $openWindowOnRootLoadTopmost.checked
     });
   });
 }

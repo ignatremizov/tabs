@@ -70,6 +70,7 @@ Known issues:
   - Updated manifest minimum versions and data collection permissions.
   - Fixed make-zip packaging self-reference.
   - Added root-move window behavior toggle and window-container move guard.
+  - Added window wrapping/conversion behavior and a hover-menu "W" button.
 - 2026-01-01: 
   - Added Firefox signing support and a manifest versioning script.
   - Added appearance settings (font size/family, row height, indent).

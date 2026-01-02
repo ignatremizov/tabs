@@ -72,6 +72,8 @@ It should also have lots of other features which are missing in Tabs Outliner:
   then paste the marked nodes to move them)
 - Optional behavior to open a new window when moving a subtree to the top level
   (moves the window container instead when you move the only child of a window)
+- Hover-menu "W" converts labels to windows, wraps tabs into windows, and can
+  convert windows back into labels
 - Open new blank tabs next to the current tab
 - User's choice of several themes, and ability to add more
 - Better handling of crashes and restarts... no huge trees full of old crashed
@@ -405,6 +407,21 @@ Zoom the sidebar to a comfortable size:
 When moving stuff between windows, I recommend marking the items in one window,
 then switching to a different window and pasting the items.  I find this much
 easier than trying to drag stuff around with a mouse.
+
+### Window wrapping
+
+Use the hover-menu "W" button to wrap a node in a window, convert a label into
+a window, or convert a window back into a label.  This is useful for grouping
+related tabs together without opening a new browser window until you actually
+load a tab.
+
+If a label is converted to a window and it contains open tabs, those tabs are
+moved into the new window automatically.  Converting a loaded window back into
+a label will preserve the window as a child node, so its open tabs stay open.
+
+When loading a tab from the root without any window ancestor, the behavior can
+be tuned in Options to wrap either just the selected node or the top-most
+ungrouped ancestor (including labels).
 
 ### Organization
 

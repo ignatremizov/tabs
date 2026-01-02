@@ -597,14 +597,25 @@ class Bkgd {
     let windowNode = node.getWindowNode(false);
     // - if no window node, make one
     if (! windowNode) {
+      const config = await api.storage.local.get({
+        openWindowOnRootLoadTopmost: false
+      });
+      let wrapNode = node;
+      if (config.openWindowOnRootLoadTopmost) {
+        while (wrapNode.parent
+          && (! wrapNode.parent.isRoot())
+          && (! wrapNode.parent.isWindow())) {
+          wrapNode = wrapNode.parent;
+        }
+      }
       // get parent and node index
-      const parentNode = node.parent;
+      const parentNode = wrapNode.parent;
       // insert new window node in place of current node
-      windowNode = await parentNode.addChild(node.indexOf(),
+      windowNode = await parentNode.addChild(wrapNode.indexOf(),
         { type: 'window' },
         { reason: 'bkgd_loadSavedNode:autoWindow' });
       // move current node as child of window node
-      await node.moveTo(windowNode, 0,
+      await wrapNode.moveTo(windowNode, 0,
         { reason: 'bkgd_loadSavedNode:autoWindow' });
     }
     // - if window not loaded, push window node to be loaded
@@ -688,6 +699,88 @@ class Bkgd {
     // TODO: need to modify onTabCreated and onWindowCreated
     //   to check a queue of nodes which are in the process of being loaded
     if (! response.result) response.result = 'ok';
+    return response;
+  }
+
+  async bkgd_wrapNodeInWindow (msg) {
+    await this.treeLoaded;  // ensure tree is loaded
+    const response = {};
+    const node = this.tree.nodes[msg.nodeId];
+    if (! node) {
+      const err = `bkgd_wrapNodeInWindow(): no node found: "${msg.nodeId}"`;
+      error(err);
+      return { error: err };
+    }
+    if (node.isRoot()) return { error: 'bkgd_wrapNodeInWindow(): root node' };
+
+    const isLabelNode = (! node.isWindow()) && (! node.url) && (! node.title);
+
+    if (node.isWindow()) {
+      const hasLoaded = node.isLoaded() || node.hasLoadedTabs();
+      if (hasLoaded) {
+        const parent = node.parent;
+        if (! parent) return { error: 'bkgd_wrapNodeInWindow(): no parent' };
+        const labelDetails = {
+          label: node.label,
+          note: node.note,
+          expanded: true
+        };
+        if (node.hasCheckbox()) {
+          labelDetails.checkbox = node.checkbox;
+          labelDetails.checkboxPx = node.checkboxPx;
+        }
+        const labelNode = await parent.addChild(node.indexOf(), labelDetails,
+          { reason: 'userAction' });
+        await node.moveTo(labelNode, 0, { reason: 'userAction' });
+        if (node.label || node.note) {
+          await node.setNotes('', '', { reason: 'userAction' });
+        }
+        if (node.hasCheckbox()) {
+          await node.setCheckbox(null, { reason: 'userAction' });
+        }
+        response.result = 'window-to-label';
+        response.newLabelId = labelNode.id;
+        return response;
+      }
+      await node.setTabFields({
+        type: '',
+        windowId: undefined,
+        loaded: false,
+        active: false,
+        wasLoaded: false,
+        geometry: undefined,
+        incognito: undefined,
+        windowState: undefined
+      }, { reason: 'userAction' });
+      response.result = 'window-to-label';
+      return response;
+    }
+
+    if (isLabelNode) {
+      await node.setTabFields({ type: 'window' }, { reason: 'userAction' });
+      const openTabs = (
+        node.tabId
+        || node.findNodes(
+          (n) => (n.tabId && (! n.isWindow())),
+          (n) => (! n.isWindow())
+        ).length > 0
+      );
+      if (openTabs) {
+        await this.bkgd_loadSavedWindow({
+          windowNodeId: node.id,
+          nodeId: node.id
+        });
+      }
+      response.result = 'label-to-window';
+      return response;
+    }
+
+    const parent = node.parent;
+    if (! parent) return { error: 'bkgd_wrapNodeInWindow(): no parent' };
+    const windowNode = await parent.addChild(node.indexOf(), { type: 'window' },
+      { reason: 'userAction' });
+    await node.moveTo(windowNode, 0, { reason: 'userAction' });
+    response.result = 'wrapped';
     return response;
   }
 

@@ -14,6 +14,7 @@ export const defaultKeyBindings = {
   'Shift+U': 'forceToggleLoad',
   'o': 'addNodeAsNextVisibleRow',
   'Shift+O': 'addNodeAsPrevVisibleRow',
+  'w': 'wrapNodeInWindow',
   // edit nodes
   'Space': 'toggleExpanded',
   'e': 'editNotes',
@@ -73,6 +74,7 @@ export const keyBindingActions = [
   { action: 'forceToggleLoad', label: 'Force load/unload' },
   { action: 'addNodeAsNextVisibleRow', label: 'Add node below' },
   { action: 'addNodeAsPrevVisibleRow', label: 'Add node above' },
+  { action: 'wrapNodeInWindow', label: 'Wrap in window / convert label' },
   { action: 'toggleExpanded', label: 'Expand/collapse branch' },
   { action: 'editNotes', label: 'Edit notes' },
   { action: 'taskEdit', label: 'Edit task/checkbox' },
