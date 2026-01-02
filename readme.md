@@ -308,7 +308,7 @@ Client (browser extension):
     - [x] Light theme
     - [ ] Additional themes
     - [ ] User style overrides
-    - [ ] Font style and tree spacing adjustment
+    - [x] Font style and tree spacing adjustment
 - View modes / view functions
     - [x] Sidepanel mode
     - [x] Full page mode (open tree in a regular tab)
@@ -327,7 +327,7 @@ Client (browser extension):
     - [x] Basic minimum functionality
     - [ ] Styling
     - [ ] Organize config sections into tabs
-    - [ ] User-configurable hotkeys
+    - [x] User-configurable hotkeys
     - [x] User-configurable browser command keys
     - [ ] User-configurable task types
     - [ ] Configure which buttons are shown in the tree view
