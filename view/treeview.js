@@ -65,6 +65,8 @@ export class TreeView extends Tree {
       // allow right click to open normal context menu
       'MousePressRight': 'none',
     };
+
+    this.openWindowOnRootMove = false;
   }
 
   destroy () {
@@ -136,6 +138,10 @@ export class TreeView extends Tree {
     this.initButtonHandlers();
     this.initStorageObserver();
     await this.updateKeyBindings();
+    const behaviorOptions = await api.storage.local.get({
+      openWindowOnRootMove: false
+    });
+    this.openWindowOnRootMove = behaviorOptions.openWindowOnRootMove;
     // get the window this view is attached to
     this.windowObj = await api.windows.getCurrent();
     this.windowId = this.windowObj.id;
@@ -239,6 +245,9 @@ export class TreeView extends Tree {
     }
     if (changes.keyBindings) {
       this.updateKeyBindings();
+    }
+    if (changes.openWindowOnRootMove) {
+      this.openWindowOnRootMove = changes.openWindowOnRootMove.newValue;
     }
   }
 

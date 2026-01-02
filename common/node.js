@@ -1,5 +1,5 @@
 // common/node.js: Node class (one unit of a tree)
-// Copyright (C) 2025 Selene ToyKeeper
+// Copyright (C) 2025 Selene ToyKeeper & Ignat Remizov
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 "use strict";
@@ -976,6 +976,26 @@ export class Node {
     // abort on no-op
     if ((destParent === this.parent) && (destIndex === this.indexOf()))
       return;
+    // view-only: if moving the only child of a window to root,
+    // move the window container instead (when root-move opens windows)
+    if (args.reason === 'userAction'
+      && (! this.tree.bkgd)
+      && this.tree.openWindowOnRootMove
+      && destParent.isRoot()
+      && (! this.isWindow())) {
+      const windowNode = this.getWindowNode(false);
+      if (windowNode && windowNode.nodes.length === 1
+        && windowNode.nodes[0] === this) {
+        const keepWindow = (
+          windowNode.shouldUnloadNotDelete()
+          || windowNode.isLoaded()
+          || windowNode.hasLoadedTabs()
+        );
+        if (keepWindow) {
+          return windowNode.moveTo(destParent, destIndex, args);
+        }
+      }
+    }
     // special case: moving a parent into its own child list
     // (this happens when moving a tab to the right in the tab bar,
     //  when that tab has loaded children)
@@ -1039,16 +1059,34 @@ export class Node {
     if (this.hasCheckbox()) { this.updateCheckboxes(); }
 
     // TODO: recalculate stats
+    const movedToRoot = (
+      destParent.isRoot()
+      && prevParent
+      && (! prevParent.isRoot())
+    );
     if ([
       'userAction',
       'onTabMoved', 'onTabRemoved', 'onTabAttached',
       'moveTo',
       'bkgd_loadSavedNode:autoWindow'
     ].includes(args.reason)) {
-      emit('tree_nodeMoved',
-        { nodeId: this.id,
-          destParentId: destParent.id, destIndex: destIndex,
-          when: destParent.mtime });
+      if (args.reason === 'userAction'
+        && (! this.tree.bkgd)
+        && this.tree.openWindowOnRootMove
+        && movedToRoot) {
+        args.openWindowOnRootMove = true;
+      }
+      const moveMsg = {
+        nodeId: this.id,
+        destParentId: destParent.id,
+        destIndex: destIndex,
+        when: destParent.mtime,
+        prevParentId: prevParent ? prevParent.id : null
+      };
+      if (args.openWindowOnRootMove) {
+        moveMsg.openWindowOnRootMove = true;
+      }
+      emit('tree_nodeMoved', moveMsg);
 
       // loaded tabs need extra care when they move
       if (('moveTo' !== args.reason)
@@ -1373,4 +1411,3 @@ export class Node {
   }
 
 }  // end class Node
-

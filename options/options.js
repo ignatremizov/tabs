@@ -107,6 +107,18 @@ function initThemeForm () {
   });
 }
 
+function initBehaviorForm () {
+  const $openWindowOnRootMove = document.getElementById('openWindowOnRootMove');
+  api.storage.local.get({ openWindowOnRootMove: false }).then((result) => {
+    $openWindowOnRootMove.checked = result.openWindowOnRootMove;
+  });
+  $openWindowOnRootMove.addEventListener('click', () => {
+    api.storage.local.set({
+      openWindowOnRootMove: $openWindowOnRootMove.checked
+    });
+  });
+}
+
 function initAppearanceForm () {
   // Helper to set up a dropdown + custom text input pair
   // The dropdown provides quick presets, the text input allows custom values
@@ -569,6 +581,7 @@ document.addEventListener('DOMContentLoaded', () => {
   log('options.js loaded');
   initClientIdForm();
   initThemeForm();
+  initBehaviorForm();
   initAppearanceForm();
   initKeyBindingsForm();
   initBackupsForm();

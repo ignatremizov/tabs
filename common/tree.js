@@ -528,23 +528,39 @@ export class Tree {
       }, { reason: 'onTabCreated' });
   }
 
-  onTabRemoved (tabId, removeInfo) {
+  async onTabRemoved (tabId, removeInfo) {
     // tabId: number
     // removeInfo.isWindowClosing: boolean
     // removeInfo.windowId: number
     const tabNode = this.getNodeByTabId(tabId);
     // if tab doesn't exist, do nothing
     if (! tabNode) return;
-    // TODO: if tab was last Node in the window and it's boring,
-    //   delete the tab node...
-    //   and if the window was boring too, delete it too
     // if tab unloaded manually by user, and we're just cleaning up
     if (! tabNode.isLoaded()) {
       // finalize the unload now that the browser tab is actually closed
       return tabNode.unload({ reason: 'onTabRemoved' });
     }
+    const isWindowClosing = removeInfo && removeInfo.isWindowClosing;
+    const windowNode = tabNode.getWindowNode();
+
+    // If the last tab was a boring leaf, remove it and the empty window.
+    if (isWindowClosing && windowNode) {
+      const tabIsBoringLeaf = (! tabNode.shouldUnloadNotDelete())
+        && (! tabNode.hasKids());
+      const isOnlyWindowChild = (1 === windowNode.nodes.length)
+        && (windowNode.nodes[0] === tabNode);
+      if (tabIsBoringLeaf && isOnlyWindowChild) {
+        await tabNode.deleteSelf({ reason: 'onTabRemoved' });
+        if (windowNode.shouldUnloadNotDelete()) {
+          await windowNode.unload({ reason: 'onWindowRemoved' });
+        } else {
+          await windowNode.deleteSelf({ reason: 'onTabRemoved' });
+        }
+        return;
+      }
+    }
     // if tab closed only because its window is closing
-    else if (removeInfo && removeInfo.isWindowClosing) {
+    if (isWindowClosing) {
       // keep unloaded tab as part of the user's saved window
       return tabNode.unload({ reason: 'onWindowRemoved' });
     }
@@ -1264,4 +1280,3 @@ function isNewTabPage (url) {
     if (url.startsWith(prefix)) return true;
   return false;
 }
-

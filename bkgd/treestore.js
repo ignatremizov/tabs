@@ -1,5 +1,5 @@
 // bkgd/treestore.js: TreeStore class
-// Copyright (C) 2025 Selene ToyKeeper
+// Copyright (C) 2025 Selene ToyKeeper & Ignat Remizov
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 "use strict";
@@ -121,5 +121,76 @@ export class TreeStore extends Tree {
     warn(`reattachOrphanedNodes(): attached ${numAttached} orphans under ${newParentName}`);
   }
 
-}
+  async tree_nodeMoved (msg, sender, sendResponse) {
+    await this.treeLoaded;  // wait until tree is ready
 
+    // unpack
+    const nodeId = msg.nodeId;
+    const destParentId = msg.destParentId;
+    const destIndex = msg.destIndex;
+
+    // find nodes
+    const node = this.nodes[nodeId];
+    const destParent = this.nodes[destParentId];
+    if (! node)
+      return error(`tree_nodeMoved(): couldn't find node "${nodeId}"`);
+    if (! destParent)
+      return error(`tree_nodeMoved(): couldn't find parent "${destParentId}"`);
+
+    // if moving to root, optionally wrap in a new window
+    if (destParent.isRoot() && (! node.isWindow()) && (! node.parent.isRoot())) {
+      let shouldOpenWindow = false;
+      if (msg.openWindowOnRootMove === true) {
+        shouldOpenWindow = true;
+      } else {
+        const config = await api.storage.local.get({
+          openWindowOnRootMove: false
+        });
+        shouldOpenWindow = config.openWindowOnRootMove;
+      }
+      const openTabs = (
+        node.tabId
+        || node.findNodes(
+          (n) => (n.tabId && (! n.isWindow())),
+          (n) => (! n.isWindow())
+        ).length > 0
+      );
+      let isWholeWindowContent = false;
+      const windowNode = node.getWindowNode(false);
+      if (windowNode && windowNode.nodes.length === 1
+        && windowNode.nodes[0] === node) {
+        isWholeWindowContent = true;
+      }
+      if (shouldOpenWindow && openTabs && (! isWholeWindowContent)) {
+        const windowNode = await this.root.addChild(destIndex,
+          { type: 'window' },
+          { reason: 'userAction' });
+        await node.moveTo(windowNode, 0, { reason: 'userAction' });
+        await this.bkgd.bkgd_loadSavedWindow({
+          windowNodeId: windowNode.id,
+          nodeId: node.id
+        });
+        return true;
+      }
+    }
+
+    // fall back to default behavior
+    msg.reason = 'tree_nodeMoved';
+    const moved = await node.moveTo(destParent, destIndex, msg);
+
+    // clean up empty, boring window nodes after moving their last child out
+    if (msg.prevParentId) {
+      const prevParent = this.nodes[msg.prevParentId];
+      if (prevParent && prevParent.isWindow()
+        && (prevParent.nodes.length === 0)
+        && (! prevParent.shouldUnloadNotDelete())
+        && (! prevParent.isLoaded())
+        && (! prevParent.hasLoadedTabs())) {
+        await prevParent.deleteSelf({ reason: 'userAction' });
+      }
+    }
+
+    return moved;
+  }
+
+}

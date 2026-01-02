@@ -70,6 +70,8 @@ It should also have lots of other features which are missing in Tabs Outliner:
 - Ability to easily move sets of nodes between windows without a mouse or
   opening a "full tree" view (mark nodes in one window, switch to other window,
   then paste the marked nodes to move them)
+- Optional behavior to open a new window when moving a subtree to the top level
+  (moves the window container instead when you move the only child of a window)
 - Open new blank tabs next to the current tab
 - User's choice of several themes, and ability to add more
 - Better handling of crashes and restarts... no huge trees full of old crashed
@@ -546,5 +548,3 @@ Installing the extension from source or from web extension stores:
 - Firefox (TBD): https://toykeeper.net/tktsto/firefox
 - Edge (TBD): https://toykeeper.net/tktsto/edge
 - Safari (TBD): https://toykeeper.net/tktsto/safari
-
-

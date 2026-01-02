@@ -1,5 +1,5 @@
 // bkgd/bkgd.js: main background script
-// Copyright (C) 2025 Selene ToyKeeper
+// Copyright (C) 2025 Selene ToyKeeper & Ignat Remizov
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 "use strict";
@@ -706,9 +706,16 @@ class Bkgd {
     // if already loaded, do nothing
     if (windowNode.isLoaded()) { return response; }
     // list of open tabs in the new window
-    const loadedKids = node.getLoadedTabs();
-    if (node.isLoaded()) loadedKids.unshift(node);
+    const loadedKids = node.findNodes(
+      (n) => (n.tabId && (! n.isWindow())),
+      (n) => (! n.isWindow())
+    );
+    if (node.tabId) loadedKids.unshift(node);
     const tabIds = loadedKids.map((n) => n.tabId);
+    if (tabIds.length === 0) {
+      response.result = 'no-open-tabs';
+      return response;
+    }
     // push window node to be loaded
     this.windowsLoading.push(windowNode);
     // actually open the window
@@ -1186,4 +1193,3 @@ class Bkgd {
 
 const bkgd = new Bkgd();
 bkgd.init();
-
