@@ -15,8 +15,7 @@ development yet.
 
 Supported/tested browsers include:
 
-- Firefox ESR 115
-- Firefox ESR 128
+- Firefox 142
 - Chromium 134
 - Edge 136
 - Vivaldi 7.3
@@ -56,9 +55,78 @@ Known issues:
   to make it try to load an unloaded forbidden URL, the *next* tab opened may
   take the place of the node you tried to load.
 
-- Firefox 115 generates some warnings about the manifest because the manifest
+- Firefox 115-142 generates some warnings about the manifest because the manifest
   is written for newer versions.
 
 - Edge has no way to move the sidepanel to the left side.  It did in the past,
   but Microsoft removed it.
 
+# History (by month)
+
+## 2026-01
+- 2026-01-02: 
+  - Added customizable keybind configuration in options.
+  - Replaced `innerHTML` with safe DOM methods and added DOM safety/XSS tests.
+  - Updated manifest minimum versions and data collection permissions.
+  - Fixed make-zip packaging self-reference.
+- 2026-01-01: 
+  - Added Firefox signing support and a manifest versioning script.
+  - Added appearance settings (font size/family, row height, indent).
+  - Added favicon support/backfill and batch load/unload with Shift+U.
+  - Updated extension name/ID and added AGENTS.md guidance.
+- Other (2026-01-01): Makefile help target, .gitignore expansion, theme hover color,
+  and README clarification on incognito permissions.
+
+## 2025-08
+- 2025-08-20: Fixed json2md export ordering issue.
+- 2025-08-18: Added json2md tool to convert TKTSTO exports to markdown.
+
+## 2025-07
+- 2025-07-15: 
+  - Fixed tab ordering when deleting a parent tab.
+  - Ensured active tabs remain marked as loaded after activation.
+
+## 2025-06
+- 2025-06-13: Made marked-count widget paste marked nodes.
+- 2025-06-09: Reattached orphaned nodes under lost+found during fsck.
+
+## 2025-05
+- 2025-05-25: Added mutex ordering to fix onTabUpdated/onTabReplaced warnings.
+- 2025-05-20: Added backup archive helper script.
+- 2025-05-19: Prepared 0.0.1.0 release (version bump, ChangeLog, README, manifest).
+- 2025-05-16: Added extension icon and updated Chrome hotkey (Alt+T).
+- 2025-05-15: Added automatic local backups and dialog/tutorial robustness fixes.
+- 2025-05-13: Added first-run tutorial and improved initial window merge handling.
+- 2025-05-11: Enabled session persistence across browser restarts.
+- 2025-05-09: Implemented checkbox/task support and Tabs Outliner HTML converter.
+- 2025-05-04: Added Vivaldi support and improved startup event ordering.
+- 2025-05-02: Added external drag-and-drop (text/URL) support.
+- 2025-05-01: Added drag-and-drop move and markdown export; renamed label/note fields.
+- Other (2025-05-05 to 2025-05-18): Theme polish, manifest tweaks, illegal URL
+  handling, and tab event fixes.
+
+## 2025-04
+- 2025-04-30: Added status bar summaries and backup completion messages.
+- 2025-04-26: Implemented window-only view scope and window load/unload behavior.
+- 2025-04-25: Added theme switching, theme files, and moved to AGPL-3.0-or-later.
+- 2025-04-15: Added backup export/import and downloads permission.
+- 2025-04-13: Improved tab attach/move handling and saved-tab loading workflows.
+- 2025-04-10: Added tab event listeners and load/unload actions.
+- 2025-04-09: Added Tabs Outliner session import support.
+- 2025-04-07: Added long note support with dialog UI and indicator icon.
+- 2025-04-06: Added timestamps/details box and emit() timing diagnostics.
+- 2025-04-05: 
+  - Added packaging scripts and initial Firefox support.
+  - Added window/tab integration in the background tree.
+- 2025-04-02: Added TreeStore/NodeStore serialization, sync, and mark/paste.
+- 2025-04-01: Added emit() messaging and view-to-view tree synchronization.
+- Other (2025-04-03 to 2025-04-30): UI polish, cursor fixes, hover-menu tweaks,
+  and theme refinements.
+
+## 2025-03
+- 2025-03-31: Implemented node movement actions and expand/collapse rendering.
+- 2025-03-30: Split TreeView from Node and added cursor/navigation actions.
+- 2025-03-24: Added client ID configuration and refactored tree/node structure.
+- 2025-03-20: Added background service worker, message passing, and debug logging.
+- 2025-03-13: Initial project structure and license setup.
+- Other (2025-03-19 to 2025-03-31): Early checkpoints, styling tweaks, and fixes.
