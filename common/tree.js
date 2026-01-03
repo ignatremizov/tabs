@@ -498,16 +498,35 @@ export class Tree {
     let destParent = winNode;
     let destIndex = winNode.nodes.length;
 
+    if (this.reorderTabsOnCreate === false) {
+      const tabList = winNode.getLoadedTabs();
+      if (tabList.length === 0) {
+        destParent = winNode;
+        destIndex = 0;
+      } else if ((tab.index === 0) || (! Number.isInteger(tab.index))) {
+        destParent = winNode;
+        destIndex = 0;
+      } else if (tab.index >= tabList.length) {
+        const lastNode = tabList[tabList.length - 1];
+        destParent = lastNode.parent;
+        destIndex = lastNode.indexOf() + 1;
+      } else {
+        const prevNode = tabList[tab.index - 1];
+        destParent = prevNode.parent;
+        destIndex = prevNode.indexOf() + 1;
+      }
+    }
+
     // if the tab is a blank created by the user with C-t...
     // ... make it the 1st child of the active tab
-    if (isNewTabPage(tabPendingUrl)) {
+    if ((this.reorderTabsOnCreate !== false) && isNewTabPage(tabPendingUrl)) {
       destParent = winNode.getActiveTab();
       if (! destParent) destParent = winNode;
       destIndex = 0;
       debug(`Tree.onTabCreated() moving new tab to the right of: "${destParent.toLine()}"`);
     }
     // find the right place to put this tab in the tree
-    else if (tab.openerTabId) {
+    else if ((this.reorderTabsOnCreate !== false) && tab.openerTabId) {
       const found = this.getNodeByTabId(tab.openerTabId, winNode);
       if (found) {
         destParent = found;

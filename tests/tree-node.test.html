@@ -540,6 +540,48 @@
         assert(tree.reorderCalled, 'Should reorder when toggle is on');
       });
 
+      test('onTabCreated inserts sibling when reorder is disabled', async () => {
+        const tree = createTree();
+        tree.reorderTabsOnCreate = false;
+
+        const win = await addChild(tree.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 1,
+          loaded: true
+        });
+        const t1 = await addChild(win, {
+          id: 't1',
+          tabId: 1,
+          windowId: 1,
+          loaded: true,
+          url: 'https://example.com'
+        });
+        const t2 = await addChild(win, {
+          id: 't2',
+          tabId: 2,
+          windowId: 1,
+          loaded: true,
+          url: 'https://example.com/2'
+        });
+
+        await tree.onTabCreated({
+          id: 3,
+          tabId: 3,
+          windowId: 1,
+          index: 2,
+          url: 'https://example.com/3',
+          title: 'Example 3',
+          active: false
+        });
+
+        const newNode = tree.getNodeByTabId(3);
+        assert(newNode, 'New tab node should exist');
+        assertEqual(newNode.parent, win, 'New tab should be direct child');
+        assertEqual(newNode.indexOf(), t2.indexOf() + 1, 'New tab should be sibling after previous');
+        assertEqual(t1.parent, win, 'Existing tab stays under window');
+      });
+
       test('firefox: onTabAttached creates unloaded window before onWindowCreated', async () => {
         if (skipUnlessFirefox()) return;
 
