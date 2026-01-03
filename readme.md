@@ -1,5 +1,7 @@
 # Ignat's copy of TK's Tree Style Tab Outliner
 
+![Coverage](https://img.shields.io/badge/coverage-17%25-yellow.svg)
+
 Windows, tabs, bookmarks, notes, and more... all mixed together in one place,
 a highly structured living document that you and your browsers build together
 to organize your online life.
@@ -15,6 +17,17 @@ This extension makes many of the browser's built-in functions wholly or at
 least partially obsolete -- bookmarks, session management, vertical tabs,
 read-later, notes, pinned tabs, stacked tabs, AI tab organizers, etc.  You
 could still use those things, but why bother when you have something better?
+
+
+## Tests & Coverage
+
+Browser tests live in `tests/*.test.html` and can be opened via `make test`.
+Coverage is collected via `make coverage`, which runs:
+- Node-based unit tests
+- Headless Chrome tests for the browser pages (both `?env=chrome` and `?env=firefox`)
+
+The coverage % is line-based and updates the README badge automatically after
+`make coverage`. If Chrome isn’t on PATH, set `CHROME_BIN=/path/to/chrome`.
 
 
 ## Background / Inspiration

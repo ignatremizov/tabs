@@ -38,6 +38,7 @@ build/
 dist/
 active/
 ignore/
+coverage/
 
 # Project-specific
 todo.otl

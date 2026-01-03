@@ -239,6 +239,9 @@
         $summary.textContent = `${passCount} passed, ${failCount} failed out of ${results.length} tests`;
         $summary.className = failCount === 0 ? 'all-pass' : 'has-fail';
 
+        window.__TEST_RESULTS__ = { passCount, failCount, total: results.length };
+        window.__TEST_DONE__ = true;
+
         console.log(`\nMerge Open Windows Tests: ${passCount} passed, ${failCount} failed`);
       }
 
