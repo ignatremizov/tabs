@@ -730,6 +730,32 @@
         assert(autoLoad, 'Should open saved window when moving loaded tab');
       });
 
+      test('findMatchingWindow honors exclude list', async () => {
+        const tree = createTree();
+        const win1 = await addChild(tree.root, { id: 'w1', type: 'window' });
+        const win2 = await addChild(tree.root, { id: 'w2', type: 'window' });
+        await addChild(win1, { id: 't1', url: 'https://example.com/a', loaded: true });
+        await addChild(win1, { id: 't2', url: 'https://example.com/b', loaded: true });
+        await addChild(win2, { id: 't3', url: 'https://example.com/a', loaded: true });
+        await addChild(win2, { id: 't4', url: 'https://example.com/b', loaded: true });
+
+        const realWindow = {
+          id: 101,
+          tabs: [
+            { id: 1, url: 'https://example.com/a' },
+            { id: 2, url: 'https://example.com/b' }
+          ]
+        };
+
+        const match1 = tree.findMatchingWindow(realWindow);
+        assert(match1, 'Should match a window node');
+
+        const exclude = new Set([match1.id]);
+        const match2 = tree.findMatchingWindow(realWindow, exclude);
+        assert(match2, 'Should match a second window node');
+        assert(match2.id !== match1.id, 'Exclude list should prevent reuse');
+      });
+
       async function runTests() {
         const results = [];
 

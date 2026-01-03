@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<!-- merge-open-windows.test.html: Unit tests for mergeOpenWindowsIntoTree -->
+<!-- Copyright (C) 2025 Ignat Remizov -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Merge Open Windows Tests</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 20px; }
+    .test-pass { color: green; }
+    .test-fail { color: red; font-weight: bold; }
+    .test-section { margin: 20px 0; padding: 10px; border: 1px solid #ccc; }
+    .test-section h2 { margin-top: 0; }
+    pre { background: #f5f5f5; padding: 10px; overflow-x: auto; }
+    #summary { font-size: 1.2em; padding: 10px; margin-bottom: 20px; }
+    #summary.all-pass { background: #dfd; }
+    #summary.has-fail { background: #fdd; }
+  </style>
+</head>
+<body>
+  <h1>Merge Open Windows Tests</h1>
+  <div id="summary"></div>
+  <div id="results"></div>
+
+  <script>
+    window.__TKTSTO_TEST__ = true;
+
+    const params = new URLSearchParams(location.search);
+    let env = params.get('env');
+    if (! env) {
+      const ua = navigator.userAgent || '';
+      env = ua.includes('Firefox') ? 'firefox' : 'chrome';
+    }
+    window.testEnv = env;
+
+    function ensureApi(api) {
+      if (!api.runtime) api.runtime = {};
+      if (!api.runtime.sendMessage) api.runtime.sendMessage = async () => ({});
+      if (!api.runtime.onMessage) api.runtime.onMessage = {};
+      if (!api.runtime.onMessage.addListener) {
+        api.runtime.onMessage.addListener = () => {};
+      }
+
+      if (!api.tabs) api.tabs = {};
+      if (!api.tabs.get) api.tabs.get = async () => ({});
+      if (!api.tabs.move) api.tabs.move = async () => {};
+
+      if (!api.windows) api.windows = {};
+      if (!api.windows.getAll) api.windows.getAll = async () => ([]);
+    }
+
+    if ('firefox' === env) {
+      if (!window.browser) window.browser = {};
+      ensureApi(window.browser);
+    } else {
+      if (!window.chrome) window.chrome = {};
+      ensureApi(window.chrome);
+    }
+
+    if (!window.chrome) window.chrome = {};
+    ensureApi(window.chrome);
+  </script>
+  <script type="module">
+    "use strict";
+
+    async function main() {
+      const env = window.testEnv || 'chrome';
+      const $summary = document.getElementById('summary');
+      const $title = document.querySelector('h1');
+      $title.textContent = `Merge Open Windows Tests (${env})`;
+
+      if ('file:' === location.protocol) {
+        $summary.textContent = 'Run via http (example: python3 -m http.server).';
+        $summary.className = 'has-fail';
+        return;
+      }
+
+      let Bkgd;
+      let Tree;
+      let Node;
+      let api;
+      try {
+        const [bkgdMod, treeMod, nodeMod, apiMod] = await Promise.all([
+          import('../bkgd/bkgd.js'),
+          import('../common/tree.js'),
+          import('../common/node.js'),
+          import('../api.js')
+        ]);
+        Bkgd = bkgdMod.Bkgd;
+        Tree = treeMod.Tree;
+        Node = nodeMod.Node;
+        api = apiMod.api;
+      } catch (err) {
+        $summary.textContent = `Failed to load modules: ${err}`;
+        $summary.className = 'has-fail';
+        return;
+      }
+
+      class TestNode extends Node {
+        newNodeId () {
+          this.tree.nextId += 1;
+          return `test-${this.tree.nextId}`;
+        }
+
+        async addChild (index, details, ...extra) {
+          if (! details.id) details.id = this.newNodeId();
+          return await super.addChild(index, details, ...extra);
+        }
+
+        async load () {
+          this.loaded = true;
+          return true;
+        }
+
+        async unload () {
+          this.loaded = false;
+          this.tabId = undefined;
+          return true;
+        }
+      }
+
+      function createTree(bkgd) {
+        const tree = new Tree(TestNode);
+        tree.nextId = 0;
+        tree.bkgd = bkgd;
+        return tree;
+      }
+
+      const tests = [];
+
+      function test(name, fn) {
+        tests.push({ name, fn });
+      }
+
+      function assert(condition, message) {
+        if (!condition) {
+          throw new Error(message || 'Assertion failed');
+        }
+      }
+
+      function assertEqual(actual, expected, message) {
+        if (actual !== expected) {
+          throw new Error(message || `Expected "${expected}" but got "${actual}"`);
+        }
+      }
+
+      async function addChild(parent, details) {
+        const index = parent.nodes.length;
+        return await parent.addChild(index, details, { reason: 'test' });
+      }
+
+      test('mergeOpenWindowsIntoTree assigns unique window nodes', async () => {
+        const bkgd = new Bkgd();
+        const tree = createTree(bkgd);
+        bkgd.tree = tree;
+
+        const win1 = await addChild(tree.root, { id: 'w1', type: 'window' });
+        const win2 = await addChild(tree.root, { id: 'w2', type: 'window' });
+        await addChild(win1, { id: 't1', url: 'https://example.com/a' });
+        await addChild(win1, { id: 't2', url: 'https://example.com/b' });
+        await addChild(win2, { id: 't3', url: 'https://example.com/a' });
+        await addChild(win2, { id: 't4', url: 'https://example.com/b' });
+
+        api.windows.getAll = async () => ([
+          {
+            id: 60,
+            tabs: [
+              { id: 1, url: 'https://example.com/a' },
+              { id: 2, url: 'https://example.com/b' }
+            ]
+          },
+          {
+            id: 1098,
+            tabs: [
+              { id: 3, url: 'https://example.com/a' },
+              { id: 4, url: 'https://example.com/b' }
+            ]
+          }
+        ]);
+
+        await bkgd.mergeOpenWindowsIntoTree();
+
+        const windowNodes = tree.root.findNodes((n) => n.isWindow());
+        const windowIds = windowNodes.map((n) => n.windowId).filter(Boolean);
+        assertEqual(windowIds.length, 2, 'Both window nodes should attach');
+        const uniqueIds = new Set(windowIds);
+        assertEqual(uniqueIds.size, 2, 'Window nodes should be unique');
+        assert(uniqueIds.has(60), 'Should attach window 60');
+        assert(uniqueIds.has(1098), 'Should attach window 1098');
+      });
+
+      async function runTests() {
+        const results = [];
+
+        for (const item of tests) {
+          try {
+            await item.fn();
+            results.push({ name: item.name, pass: true });
+          } catch (e) {
+            results.push({
+              name: item.name,
+              pass: false,
+              error: e && e.message ? e.message : String(e)
+            });
+          }
+        }
+
+        const $results = document.getElementById('results');
+        const $summary = document.getElementById('summary');
+
+        let passCount = 0;
+        let failCount = 0;
+
+        for (const result of results) {
+          const $div = document.createElement('div');
+          $div.className = 'test-section';
+
+          const $status = document.createElement('span');
+          const $name = document.createTextNode(' ' + result.name);
+
+          if (result.pass) {
+            passCount++;
+            $status.className = 'test-pass';
+            $status.textContent = 'PASS:';
+            $div.append($status, $name);
+          } else {
+            failCount++;
+            $status.className = 'test-fail';
+            $status.textContent = 'FAIL:';
+            const $error = document.createElement('pre');
+            $error.textContent = result.error;
+            $div.append($status, $name, $error);
+          }
+
+          $results.appendChild($div);
+        }
+
+        $summary.textContent = `${passCount} passed, ${failCount} failed out of ${results.length} tests`;
+        $summary.className = failCount === 0 ? 'all-pass' : 'has-fail';
+
+        console.log(`\nMerge Open Windows Tests: ${passCount} passed, ${failCount} failed`);
+      }
+
+      runTests();
+    }
+
+    main();
+  </script>
+</body>
+</html>

@@ -1092,7 +1092,7 @@ export class Tree {
   // Further tie-breaking prefers the window with the most metadata,
   // so a window with a label beats one without... and further ties are
   // broken by which window occurs first in the session tree.
-  findMatchingWindow (window) {
+  findMatchingWindow (window, excludeNodeIds) {
     // find the "needle" (realTabList) in the "haystack"
     //const realTabList = [...window.tabs];
     const realTabList = [];
@@ -1106,6 +1106,7 @@ export class Tree {
       (node) => { return node.isWindow(); }
     );
     for (const winNode of winNodeList) {
+      if (excludeNodeIds && excludeNodeIds.has(winNode.id)) continue;
       const tabList = winNode.getLoadedAndUnloadedTabs();
       haystack.push({ winNode, tabList });
     }

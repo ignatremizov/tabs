@@ -16,7 +16,7 @@ import { createNewUserTutorialNodes } from '/bkgd/new-user.js';
 
 log('/bkgd/bkgd.js running');
 
-class Bkgd {
+export class Bkgd {
 
   constructor () {
     // help event handlers wait until init is finished
@@ -229,13 +229,14 @@ class Bkgd {
     console.time('mergeOpenWindowsIntoTree');
     // attach browser windows to window nodes
     let attached = [];
+    const attachedNodeIds = new Set();
     for (const window of windows) {
       debug(`Window ID: ${window.id}`);
       // detect whether window is already in tree
       // match by windowId (old, unreliable, windowId changes or goes stale)
       //let winNode = this.tree.root.getWindowId(window.id);
       // search for a Window in the tree with matching tabs
-      let winNode = this.tree.findMatchingWindow(window);
+      let winNode = this.tree.findMatchingWindow(window, attachedNodeIds);
       if (winNode) {
         winNode.load({ reason: 'mergeOpenWindowsIntoTree' });
       }
@@ -247,6 +248,7 @@ class Bkgd {
       }
       // mark this winNode as actually attached to a real window
       attached.push({ winNode, window });
+      attachedNodeIds.add(winNode.id);
     }
 
     // remove "loaded" status from window nodes which didn't get attached
@@ -781,11 +783,26 @@ class Bkgd {
       return response;
     }
 
+    const prevWindowNode = node.getWindowNode(false);
+    const prevWindowLoaded = prevWindowNode && prevWindowNode.isLoaded();
     const parent = node.parent;
     if (! parent) return { error: 'bkgd_wrapNodeInWindow(): no parent' };
     const windowNode = await parent.addChild(node.indexOf(), { type: 'window' },
       { reason: 'userAction' });
     await node.moveTo(windowNode, 0, { reason: 'userAction' });
+    const openTabs = (
+      node.tabId
+      || node.findNodes(
+        (n) => (n.tabId && (! n.isWindow())),
+        (n) => (! n.isWindow())
+      ).length > 0
+    );
+    if (prevWindowLoaded && openTabs) {
+      await this.bkgd_loadSavedWindow({
+        windowNodeId: windowNode.id,
+        nodeId: node.id
+      });
+    }
     response.result = 'wrapped';
     return response;
   }
@@ -836,6 +853,45 @@ class Bkgd {
     try {
       const winObj = await api.windows.create(createProperties);
       debug('bkgd_loadSavedWindow() created window', winObj);
+      const extraTabIds = tabIds.slice(1);
+      if (extraTabIds.length > 0) {
+        try {
+          const movableTabIds = [];
+          const throttleMinTabs = 40;
+          const throttleBatchSize = 20;
+          const throttleDelayMs = 100;
+          const throttled = (extraTabIds.length >= throttleMinTabs);
+          if (throttled) {
+            debug('bkgd_loadSavedWindow() throttling tab moves', {
+              count: extraTabIds.length,
+              batchSize: throttleBatchSize,
+              delayMs: throttleDelayMs
+            });
+          }
+          let checked = 0;
+          for (const tabId of extraTabIds) {
+            try {
+              const tab = await api.tabs.get(tabId);
+              if (tab.windowId !== winObj.id) movableTabIds.push(tabId);
+            } catch (err) {
+              warn(`bkgd_loadSavedWindow() tab missing: ${tabId}`);
+            }
+            checked += 1;
+            if (throttled && (checked % throttleBatchSize === 0)) {
+              await new Promise(resolve => setTimeout(resolve, throttleDelayMs));
+            }
+          }
+          debug('bkgd_loadSavedWindow() moving tabs', {
+            windowId: winObj.id,
+            tabIds: movableTabIds
+          });
+          if (movableTabIds.length > 0) {
+            await api.tabs.move(movableTabIds, { windowId: winObj.id, index: 1 });
+          }
+        } catch (err) {
+          warn(`bkgd_loadSavedWindow() move tabs failed: ${err}`);
+        }
+      }
     } catch (err) {
       this.windowsLoading.pop(windowNode);
       warn(`loadSavedWindow failed: ${err}`);
@@ -1290,5 +1346,7 @@ class Bkgd {
 
 }
 
-const bkgd = new Bkgd();
-bkgd.init();
+if (! globalThis.__TKTSTO_TEST__) {
+  const bkgd = new Bkgd();
+  bkgd.init();
+}
