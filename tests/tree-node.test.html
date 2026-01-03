@@ -106,6 +106,10 @@
           if (! details.id) details.id = this.newNodeId();
           return await super.addChild(index, details, ...extra);
         }
+
+        async reorderAllTabsInThisWindow () {
+          this.tree.reorderCalled = true;
+        }
       }
 
       function createTree() {
@@ -135,6 +139,41 @@
 
       function getApi() {
         return ('firefox' === env) ? window.browser : window.chrome;
+      }
+
+      function skipUnlessFirefox() {
+        if ('firefox' !== env) return true;
+        return false;
+      }
+
+      function treeSnapshot(root) {
+        const lines = [];
+        function walk(node, depth) {
+          const indent = '  '.repeat(depth);
+          const type = node.type ? node.type : 'node';
+          const parts = [
+            `${indent}- ${type}:${node.id}`,
+            node.windowId ? `win=${node.windowId}` : null,
+            node.tabId ? `tab=${node.tabId}` : null,
+            (node.loaded === true) ? 'loaded' : null,
+            (node.loaded === false) ? 'unloaded' : null,
+            node.label ? `label="${node.label}"` : null,
+            node.title ? `title="${node.title}"` : null
+          ].filter(Boolean);
+          lines.push(parts.join(' '));
+          for (const kid of node.nodes) walk(kid, depth + 1);
+        }
+        walk(root, 0);
+        return lines.join('\n');
+      }
+
+      function formatLog(log) {
+        if (!log || log.length === 0) return '';
+        return `\nEvents:\n${log.map((line) => `- ${line}`).join('\n')}`;
+      }
+
+      function formatSnapshotPair(before, after) {
+        return `\nBefore:\n${before}\nAfter:\n${after}`;
       }
 
       async function addChild(parent, details) {
@@ -214,6 +253,30 @@
 
         assert(!tree.nodes.t1, 'Tab node should be deleted');
         assert(!tree.nodes.w1, 'Window node should be deleted');
+      });
+
+      test('windowClosed flag cleans up when tabRemoved arrives later', async () => {
+        const tree = createTree();
+        tree.windowsClosing = new Set([1]);
+        const windowNode = await addChild(tree.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 1,
+          loaded: true
+        });
+        await addChild(windowNode, {
+          id: 't1',
+          tabId: 10,
+          windowId: 1,
+          loaded: true,
+          url: 'about:blank'
+        });
+
+        await tree.onTabRemoved(10, { windowId: 1, isWindowClosing: false });
+
+        assert(!tree.nodes.t1, 'Tab node should be deleted');
+        assert(!tree.nodes.w1, 'Window node should be deleted');
+        assert(!tree.windowsClosing.has(1), 'windowClosed flag should clear');
       });
 
       test('onTabAttached uses windowsLoading queue', async () => {
@@ -458,6 +521,171 @@
         const msg = sent.find((entry) => entry.msg === 'tree_nodeMoved');
         assert(msg, 'Should emit tree_nodeMoved');
         assert(!('openWindowOnRootMove' in msg), 'Should not include openWindowOnRootMove');
+      });
+
+      test('addChild respects reorderTabsOnCreate toggle', async () => {
+        const tree = createTree();
+        tree.reorderCalled = false;
+        tree.reorderTabsOnCreate = false;
+
+        await tree.root.addChild(0, { id: 'n1' }, { reason: 'onTabCreated' });
+
+        assert(!tree.reorderCalled, 'Should skip reorder when toggle is off');
+
+        tree.reorderCalled = false;
+        tree.reorderTabsOnCreate = true;
+
+        await tree.root.addChild(1, { id: 'n2' }, { reason: 'onTabCreated' });
+
+        assert(tree.reorderCalled, 'Should reorder when toggle is on');
+      });
+
+      test('firefox: onTabAttached creates unloaded window before onWindowCreated', async () => {
+        if (skipUnlessFirefox()) return;
+
+        const tree = createTree();
+        const api = getApi();
+        const sent = [];
+        const log = [];
+        api.runtime.sendMessage = async (args) => {
+          sent.push(args);
+          log.push(`emit(${args.msg})`);
+          return {};
+        };
+
+        const win1 = await addChild(tree.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 1,
+          loaded: true
+        });
+        await addChild(win1, {
+          id: 't1',
+          tabId: 10,
+          windowId: 1,
+          loaded: true,
+          url: 'https://example.com'
+        });
+        const before = treeSnapshot(tree.root);
+
+        await tree.onTabAttached(10, { newPosition: 0, newWindowId: 2 });
+
+        const after = treeSnapshot(tree.root);
+        const newWin = tree.root.getWindowId(2);
+        assert(newWin,
+          `New window node should exist after onTabAttached.${formatSnapshotPair(before, after)}${formatLog(log)}`);
+        assertEqual(newWin.loaded, false,
+          `New window should start unloaded before onWindowCreated.${formatSnapshotPair(before, after)}${formatLog(log)}`);
+      });
+
+      test('firefox: onWindowCreated marks new window as loaded', async () => {
+        if (skipUnlessFirefox()) return;
+
+        const tree = createTree();
+        const win1 = await addChild(tree.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 1,
+          loaded: true
+        });
+        await addChild(win1, {
+          id: 't1',
+          tabId: 10,
+          windowId: 1,
+          loaded: true,
+          url: 'https://example.com'
+        });
+        const before = treeSnapshot(tree.root);
+
+        await tree.onTabAttached(10, { newPosition: 0, newWindowId: 2 });
+        await tree.onWindowCreated(
+          { id: 2, width: 100, height: 100, left: 0, top: 0 },
+          { reason: 'onWindowCreated' }
+        );
+
+        const newWin = tree.root.getWindowId(2);
+        const after = treeSnapshot(tree.root);
+        assert(newWin, `New window node should exist.${formatSnapshotPair(before, after)}`);
+        assertEqual(newWin.loaded, true,
+          `New window should be marked loaded.${formatSnapshotPair(before, after)}`);
+      });
+
+      test('firefox: onTabAttached does not reopen already-loaded window', async () => {
+        if (skipUnlessFirefox()) return;
+
+        const tree = createTree();
+        const api = getApi();
+        const sent = [];
+        const log = [];
+        api.runtime.sendMessage = async (args) => {
+          sent.push(args);
+          log.push(`emit(${args.msg})`);
+          return {};
+        };
+
+        const win1 = await addChild(tree.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 1,
+          loaded: true
+        });
+        await addChild(win1, {
+          id: 't1',
+          tabId: 10,
+          windowId: 1,
+          loaded: true,
+          url: 'https://example.com'
+        });
+        await addChild(tree.root, {
+          id: 'w2',
+          type: 'window',
+          windowId: 2,
+          loaded: true
+        });
+
+        const before = treeSnapshot(tree.root);
+
+        await tree.onTabAttached(10, { newPosition: 0, newWindowId: 2 });
+
+        const autoLoad = sent.find((msg) => msg.msg === 'bkgd_loadSavedWindow');
+        const after = treeSnapshot(tree.root);
+        assert(!autoLoad,
+          `Should not call bkgd_loadSavedWindow when target window is already loaded.${formatSnapshotPair(before, after)}${formatLog(log)}`);
+      });
+
+      test('moveTo loaded tab into unloaded window triggers saved-window load', async () => {
+        const tree = createTree();
+        tree.bkgd = null;
+        const api = getApi();
+        const sent = [];
+        api.runtime.sendMessage = async (args) => {
+          sent.push(args);
+          return {};
+        };
+
+        const loadedWin = await addChild(tree.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 1,
+          loaded: true
+        });
+        const unloadedWin = await addChild(tree.root, {
+          id: 'w2',
+          type: 'window',
+          loaded: false
+        });
+        const tab = await addChild(loadedWin, {
+          id: 't1',
+          tabId: 10,
+          windowId: 1,
+          loaded: true,
+          url: 'https://example.com'
+        });
+
+        await tab.moveTo(unloadedWin, 0, { reason: 'userAction' });
+
+        const autoLoad = sent.find((msg) => msg.msg === 'bkgd_loadSavedWindow');
+        assert(autoLoad, 'Should open saved window when moving loaded tab');
       });
 
       async function runTests() {
