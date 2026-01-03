@@ -112,13 +112,16 @@ function initBehaviorForm () {
   const $openWindowOnRootLoadTopmost = document.getElementById(
     'openWindowOnRootLoadTopmost'
   );
+  const $reorderTabsOnCreate = document.getElementById('reorderTabsOnCreate');
   api.storage.local.get({
     openWindowOnRootMove: false,
-    openWindowOnRootLoadTopmost: false
+    openWindowOnRootLoadTopmost: false,
+    reorderTabsOnCreate: true
   }).then((result) => {
     $openWindowOnRootMove.checked = result.openWindowOnRootMove;
     $openWindowOnRootLoadTopmost.checked =
       result.openWindowOnRootLoadTopmost;
+    $reorderTabsOnCreate.checked = result.reorderTabsOnCreate;
   });
   $openWindowOnRootMove.addEventListener('click', () => {
     api.storage.local.set({
@@ -128,6 +131,11 @@ function initBehaviorForm () {
   $openWindowOnRootLoadTopmost.addEventListener('click', () => {
     api.storage.local.set({
       openWindowOnRootLoadTopmost: $openWindowOnRootLoadTopmost.checked
+    });
+  });
+  $reorderTabsOnCreate.addEventListener('click', () => {
+    api.storage.local.set({
+      reorderTabsOnCreate: $reorderTabsOnCreate.checked
     });
   });
 }

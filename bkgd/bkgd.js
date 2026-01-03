@@ -331,6 +331,12 @@ class Bkgd {
     log(`bkgd.onWindowRemoved: ID ${windowId}`);
     // TODO: detect whether window was closed by user or by us
     await this.treeLoaded;
+    if (this.tree && this.tree.windowsClosing) {
+      this.tree.windowsClosing.add(windowId);
+      setTimeout(() => {
+        this.tree.windowsClosing.delete(windowId);
+      }, 2000);
+    }
     // TODO
     const node = this.tree.root.getWindowId(windowId);
     if (node) {

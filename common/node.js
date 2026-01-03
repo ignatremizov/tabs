@@ -569,9 +569,11 @@ export class Node {
       'userAction',
       'onTabCreated', 'onTabAttached', 'onWindowCreated'
     ].includes(args.reason)) {
-      // make sure the tab bar matches the tree
-      await this.reorderAllTabsInThisWindow();
-      this.updateOpenerTabId();
+      if (this.tree.reorderTabsOnCreate !== false) {
+        // make sure the tab bar matches the tree
+        await this.reorderAllTabsInThisWindow();
+        this.updateOpenerTabId();
+      }
     }
     debug(`Node.addChild() => "${newNode.id}"`);
     return newNode;

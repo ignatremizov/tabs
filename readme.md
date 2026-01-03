@@ -75,6 +75,8 @@ It should also have lots of other features which are missing in Tabs Outliner:
 - Hover-menu "W" converts labels to windows, wraps tabs into windows, and can
   convert windows back into labels
 - Open new blank tabs next to the current tab
+- Option to disable automatic tab reordering if the browser already places new
+  tabs next to the current tab
 - User's choice of several themes, and ability to add more
 - Better handling of crashes and restarts... no huge trees full of old crashed
   windows to manually recover and de-dupe
@@ -168,6 +170,8 @@ Basic setup:
 - Set a client name.
 - Configure automatic backups.
 - Choose a theme, and any other options you'd like.
+- If your browser already opens new tabs next to the current tab, you can turn
+  off automatic tab reordering in Options.
 - Go through the tutorial.  It should have been generated as a set of nodes in
   the tree when you installed the extension.
 
@@ -383,6 +387,14 @@ General project stuff:
 - [ ] Contributor agreement (like, verify you actually wrote the code you're
   contributing, and agree to the code of conduct)
 - [ ] Upload official builds to extension stores for each browser
+
+
+## Known issues / TODOs
+
+- [ ] Batch browser events to handle Firefox's out-of-order tab/window events.
+- [ ] Detect per-browser defaults for new-tab placement (avoid double-reorder).
+- [ ] Investigate downloads in Chromium forks where backups lose `.json`
+  filenames/extensions.
 
 
 ## Tips / Best practices

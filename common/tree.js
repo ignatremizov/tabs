@@ -30,6 +30,9 @@ export class Tree {
     // like Vivaldi panels
     this.tabBlacklist = {};
 
+    this.reorderTabsOnCreate = true;
+    this.windowsClosing = new Set();
+
     this.createRootNode();
 
     // fields to copy when serializing Nodes to/from dict
@@ -102,6 +105,19 @@ export class Tree {
     if (this.bkgd) this.tabReorderMutex = new Mutex();
 
     this.initListeners();
+
+    if (this.bkgd) {
+      // TODO: consider per-browser defaults for tab placement behavior.
+      api.storage.local.get({ reorderTabsOnCreate: true }).then((result) => {
+        this.reorderTabsOnCreate = result.reorderTabsOnCreate;
+      });
+      api.storage.onChanged.addListener((changes, area) => {
+        if (area !== 'local') return;
+        if (changes.reorderTabsOnCreate) {
+          this.reorderTabsOnCreate = changes.reorderTabsOnCreate.newValue;
+        }
+      });
+    }
   }
 
   initListeners () {
@@ -275,6 +291,7 @@ export class Tree {
     const clientId = backup.metadata.clientId;
     const date = dateTupleStrings(when);
     const filename = `tktsto.${date[0]}-${date[1]}-${date[2]}_${date[3]}-${date[4]}-${date[5]}.${clientId}.json`;
+    // TODO: Some browsers ignore extensions or replace names; capture details in logs.
 
     // save the file
     log(`Tree.downloadBackupNow(): saving to "${filename}"`);
@@ -540,8 +557,14 @@ export class Tree {
       // finalize the unload now that the browser tab is actually closed
       return tabNode.unload({ reason: 'onTabRemoved' });
     }
-    const isWindowClosing = removeInfo && removeInfo.isWindowClosing;
+    let isWindowClosing = removeInfo && removeInfo.isWindowClosing;
     const windowNode = tabNode.getWindowNode();
+    if (! isWindowClosing && windowNode && this.windowsClosing) {
+      if (this.windowsClosing.has(windowNode.windowId)) {
+        isWindowClosing = true;
+        this.windowsClosing.delete(windowNode.windowId);
+      }
+    }
 
     // If the last tab was a boring leaf, remove it and the empty window.
     if (isWindowClosing && windowNode) {
