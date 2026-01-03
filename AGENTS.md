@@ -294,6 +294,9 @@ Stored in `chrome.storage.local`:
 | `localBackupInterval` | number | Auto-backup interval in minutes |
 | `humanFriendlyBackups` | boolean | Pretty-print backup JSON |
 | `expandedRowPrefix` | boolean | Show expand/collapse indicators |
+| `openWindowOnRootMove` | boolean | Open new window when moving subtree to root |
+| `openWindowOnRootLoadTopmost` | boolean | Wrap top-most ungrouped parent when loading from root |
+| `reorderTabsOnCreate` | boolean | Reorder new tabs to match tree layout |
 
 ---
 

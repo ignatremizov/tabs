@@ -171,7 +171,8 @@ Basic setup:
 - Configure automatic backups.
 - Choose a theme, and any other options you'd like.
 - If your browser already opens new tabs next to the current tab, you can turn
-  off automatic tab reordering in Options.
+  off automatic tab reordering in Options so the tree mirrors the browser’s tab
+  order.
 - Go through the tutorial.  It should have been generated as a set of nodes in
   the tree when you installed the extension.
 

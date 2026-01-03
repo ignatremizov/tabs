@@ -64,8 +64,14 @@ Known issues:
 # History (by month)
 
 ## 2026-01
+- 2026-01-03:
+  - Added tab-reorder toggle and ensured tab creation follows browser order when disabled.
+  - Added Tree/Node tests for window lifecycle, Firefox event ordering, and tab reorder toggle behavior.
 - 2026-01-02: 
   - Added customizable keybind configuration in options.
+  - Added UTF-8 charset meta tag to the Options page.
+  - Updated README status for font/spacing and configurable hotkeys.
+  - Refreshed ChangeLog entries and supported Firefox version notes.
   - Replaced `innerHTML` with safe DOM methods and added DOM safety/XSS tests.
   - Updated manifest minimum versions and data collection permissions.
   - Fixed make-zip packaging self-reference.
