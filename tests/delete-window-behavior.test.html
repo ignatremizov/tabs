@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<!-- delete-window-behavior.test.html: tests for window delete/unwrap behavior -->
+<!-- Copyright (C) 2025 Ignat Remizov -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Delete Window Behavior Tests</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 20px; }
+    .test-pass { color: green; }
+    .test-fail { color: red; font-weight: bold; }
+    .test-section { margin: 20px 0; padding: 10px; border: 1px solid #ccc; }
+    .test-section h2 { margin-top: 0; }
+    pre { background: #f5f5f5; padding: 10px; overflow-x: auto; }
+    #summary { font-size: 1.2em; padding: 10px; margin-bottom: 20px; }
+    #summary.all-pass { background: #dfd; }
+    #summary.has-fail { background: #fdd; }
+    .snapshot { line-height: 1.4; }
+    .snap-line { display: block; white-space: pre; }
+    .snap-dot { display: inline-block; width: 0.9em; text-align: center; }
+    .snap-loaded { color: #1a7f37; }
+    .snap-unloaded { color: #b36b00; }
+    .snap-window { color: #0b5cad; }
+    .snap-label { color: #6f42c1; }
+    .snap-node { color: #444; }
+    .snap-root { color: #222; font-weight: 600; }
+    .legend { margin-top: 6px; font-size: 0.9em; color: #555; }
+    .legend span { margin-right: 12px; }
+    .hidden-test-ui { display: none; }
+  </style>
+</head>
+<body>
+  <h1>Delete Window Behavior Tests</h1>
+  <div id="summary"></div>
+  <div id="results"></div>
+  <div class="hidden-test-ui">
+    <div id="status-text"></div>
+    <div id="marked-count"></div>
+  </div>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    let env = params.get('env');
+    if (! env) {
+      const ua = navigator.userAgent || '';
+      env = ua.includes('Firefox') ? 'firefox' : 'chrome';
+    }
+    window.testEnv = env;
+
+    function ensureApi(api) {
+      if (!api.runtime) api.runtime = {};
+      if (!api.runtime.sendMessage) api.runtime.sendMessage = async () => ({});
+      if (!api.runtime.onMessage) api.runtime.onMessage = {};
+      if (!api.runtime.onMessage.addListener) {
+        api.runtime.onMessage.addListener = () => {};
+      }
+
+      if (!api.tabs) api.tabs = {};
+      if (!api.tabs.remove) api.tabs.remove = async () => {};
+      if (!api.tabs.get) api.tabs.get = async () => ({});
+      if (!api.tabs.move) api.tabs.move = async () => {};
+      if (!api.tabs.update) api.tabs.update = async () => ({});
+      if (!api.tabs.query) api.tabs.query = async () => ([]);
+
+      if (!api.windows) api.windows = {};
+      if (!api.windows.remove) api.windows.remove = async () => {};
+      if (!api.windows.get) api.windows.get = async () => ({});
+    }
+
+    if ('firefox' === env) {
+      if (!window.browser) window.browser = {};
+      ensureApi(window.browser);
+    } else {
+      if (!window.chrome) window.chrome = {};
+      ensureApi(window.chrome);
+    }
+
+    if (!window.chrome) window.chrome = {};
+    ensureApi(window.chrome);
+  </script>
+  <script type="module">
+    "use strict";
+
+    async function main() {
+      const env = window.testEnv || 'chrome';
+      const $summary = document.getElementById('summary');
+      const $title = document.querySelector('h1');
+      $title.textContent = `Delete Window Behavior Tests (${env})`;
+
+      if ('file:' === location.protocol) {
+        $summary.textContent = 'Run via http (example: python3 -m http.server).';
+        $summary.className = 'has-fail';
+        return;
+      }
+
+      let TreeView;
+      try {
+        const [viewMod] = await Promise.all([
+          import('../view/treeview.js')
+        ]);
+        TreeView = viewMod.TreeView;
+      } catch (err) {
+        $summary.textContent = `Failed to load modules: ${err}`;
+        $summary.className = 'has-fail';
+        return;
+      }
+
+      function makeElement(id, tag = 'div') {
+        const el = document.createElement(tag);
+        el.id = id;
+        document.body.appendChild(el);
+        return el;
+      }
+
+      function buildViewScaffold() {
+        const ids = [
+          'body', 'tree-view', 'tree-root',
+          'theme-base', 'theme-variant', 'style-options', 'user-styles',
+          'view-scope-btn', 'status-text', 'details-box', 'details-btn',
+          'tree-view-in-tab-btn', 'backup-btn', 'options-btn', 'donate-btn',
+          'help-btn', 'marked-count', 'hover-menu'
+        ];
+        for (const id of ids) {
+          if (!document.getElementById(id)) {
+            const tag = (id === 'tree-root') ? 'ul' : 'div';
+            makeElement(id, tag);
+          }
+        }
+      }
+
+      function createView() {
+        buildViewScaffold();
+        const view = new TreeView();
+        view.viewRoot = view.root;
+        view.root.window = view.window;
+        view.openWindowOnRootLoadTopmost = true;
+        let nextId = 1;
+        const api = (env === 'firefox') ? window.browser : window.chrome;
+        api.runtime.sendMessage = async (args) => {
+          if (args && args.msg === 'bkgd_newNodeId') {
+            const id = `test-${nextId}`;
+            nextId += 1;
+            return id;
+          }
+          return {};
+        };
+        view.inputDialog = async () => ({ button: 'OK' });
+        view.lastConfirm = null;
+        view.confirmDialog = async (title, description) => {
+          view.lastConfirm = { title, description };
+          return true;
+        };
+        return view;
+      }
+
+      async function addChild(parent, details) {
+        const index = parent.nodes.length;
+        return await parent.addChild(index, details, { reason: 'test' });
+      }
+
+      function treeSnapshot(root) {
+        const lines = [];
+        function walk(node, depth) {
+          const indent = '  '.repeat(depth);
+          const type = node.type ? node.type : 'node';
+          const name = node.isRoot() ? 'root' : `${type}:${node.id}`;
+          const parts = [
+            `${indent}- ${name}`,
+            node.windowId ? `win=${node.windowId}` : null,
+            node.tabId ? `tab=${node.tabId}` : null,
+            (! node.isRoot() && (node.loaded === true)) ? 'loaded' : null,
+            (! node.isRoot() && (node.loaded === false)) ? 'unloaded' : null,
+            (! node.isRoot() && node.hasKids && node.hasKids())
+              ? (node.isExpanded && node.isExpanded() ? 'expanded' : 'collapsed')
+              : null,
+            node.label ? `label="${node.label}"` : null
+          ].filter(Boolean);
+          lines.push(parts.join(' '));
+          for (const kid of node.nodes) walk(kid, depth + 1);
+        }
+        walk(root, 0);
+        return lines.join('\n');
+      }
+
+      function renderSnapshot(pre, snapshot) {
+        pre.classList.add('snapshot');
+        const lines = snapshot.split('\n');
+        for (const line of lines) {
+          const $line = document.createElement('span');
+          $line.className = 'snap-line';
+          const parts = line.split('- ');
+          const indent = (parts.length > 1) ? parts[0] : '';
+          const content = (parts.length > 1) ? parts.slice(1).join('- ') : line;
+          const isRoot = content.startsWith('root');
+          const isWindow = content.startsWith('window:');
+          const isLabel = content.startsWith('node:') && content.includes('label=');
+          const isLoaded = content.includes(' loaded');
+          const isUnloaded = content.includes(' unloaded');
+          const isCollapsed = content.includes(' collapsed');
+
+          const $indent = document.createTextNode(indent + (isCollapsed ? '+ ' : '- '));
+          const $dot = document.createElement('span');
+          $dot.className = 'snap-dot';
+          $dot.textContent = isLoaded ? '●' : (isUnloaded ? '○' : '•');
+          if (isLoaded) $dot.classList.add('snap-loaded');
+          if (isUnloaded) $dot.classList.add('snap-unloaded');
+          if (isRoot) $dot.classList.add('snap-root');
+
+          const $text = document.createElement('span');
+          if (isRoot) $text.classList.add('snap-root');
+          else if (isWindow) $text.classList.add('snap-window');
+          else if (isLabel) $text.classList.add('snap-label');
+          else $text.classList.add('snap-node');
+          const statusMatch = content.match(/\s(loaded|unloaded)(?=\s|$)/);
+          if (statusMatch) {
+            const status = statusMatch[1];
+            const index = statusMatch.index;
+            const beforeText = content.slice(0, index);
+            const afterText = content.slice(index + status.length + 1);
+            $text.appendChild(document.createTextNode(beforeText + ' '));
+            const $status = document.createElement('span');
+            $status.className = (status === 'loaded') ? 'snap-loaded' : 'snap-unloaded';
+            $status.textContent = status;
+            $text.appendChild($status);
+            $text.appendChild(document.createTextNode(afterText));
+          } else {
+            $text.textContent = content;
+          }
+
+          $line.append($indent, $dot, document.createTextNode(' '), $text);
+          pre.appendChild($line);
+        }
+
+      }
+
+      function renderLegend(container) {
+        const $legend = document.createElement('div');
+        $legend.className = 'legend';
+        const legendItems = [
+          { text: '● loaded', className: 'snap-loaded' },
+          { text: '○ unloaded', className: 'snap-unloaded' },
+          { text: 'window', className: 'snap-window' },
+          { text: 'label', className: 'snap-label' },
+          { text: 'node', className: 'snap-node' }
+        ];
+        for (const item of legendItems) {
+          const $span = document.createElement('span');
+          $span.className = item.className;
+          $span.textContent = item.text;
+          $legend.appendChild($span);
+        }
+        container.appendChild($legend);
+      }
+
+      const tests = [];
+      function testGroup(title) { tests.push({ type: 'group', title }); }
+      function test(name, fn) { tests.push({ type: 'test', name, fn }); }
+      function makeAssertionError(message, snapshot) {
+        const err = new Error(message || 'Assertion failed');
+        if (snapshot) err.snapshot = snapshot;
+        return err;
+      }
+
+      function assert(condition, message, snapshot) {
+        if (!condition) throw makeAssertionError(message, snapshot);
+      }
+
+      function assertEqual(actual, expected, message, snapshot) {
+        if (actual !== expected) {
+          throw makeAssertionError(
+            message || `Expected "${expected}" but got "${actual}"`,
+            snapshot
+          );
+        }
+      }
+
+      testGroup('Basic Deletes');
+      test('delete leaf node removes it', async () => {
+        const view = createView();
+        const node = await addChild(view.root, { id: 'n1', label: 'Leaf' });
+        view.cursor = node;
+        const before = treeSnapshot(view.root);
+        await view.action_deleteNode({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+        assertEqual(view.root.nodes.length, 0, 'Leaf should be removed', snap);
+        return { before, after };
+      });
+
+      test('delete unloaded window leaf removes node', async () => {
+        const view = createView();
+        const win = await addChild(view.root, {
+          id: 'w1', type: 'window', loaded: false, expanded: true
+        });
+        view.cursor = win;
+        const before = treeSnapshot(view.root);
+        await view.action_deleteNode({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+        assertEqual(view.root.nodes.length, 0, 'Unloaded empty window removed', snap);
+        return { before, after };
+      });
+
+      test('delete expanded label promotes children', async () => {
+        const view = createView();
+        const label = await addChild(view.root, { id: 'l1', label: 'Group', expanded: true });
+        await addChild(label, { id: 'c1', label: 'Child 1' });
+        await addChild(label, { id: 'c2', label: 'Child 2' });
+        view.cursor = label;
+        const before = treeSnapshot(view.root);
+        await view.action_deleteNode({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+        assertEqual(view.root.nodes[0].id, 'c1', 'First child promoted', snap);
+        assertEqual(view.root.nodes[1].id, 'c2', 'Second child promoted', snap);
+        return { before, after };
+      });
+
+      test('delete collapsed label removes subtree', async () => {
+        const view = createView();
+        const label = await addChild(view.root, { id: 'l1', label: 'Group', expanded: false });
+        await addChild(label, { id: 'c1', label: 'Child 1' });
+        view.cursor = label;
+        const before = treeSnapshot(view.root);
+        await view.action_deleteNode({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+        assertEqual(view.root.nodes.length, 0, 'Collapsed label subtree removed', snap);
+        return { before, after };
+      });
+
+      testGroup('Root Window Deletes');
+      test('root delete unloaded expanded window promotes children', async () => {
+        const view = createView();
+        const win = await addChild(view.root, {
+          id: 'w1', type: 'window', loaded: false, expanded: true
+        });
+        await addChild(win, { id: 't1', tabId: 1, loaded: false, url: 'about:blank' });
+        await addChild(win, { id: 't2', tabId: 2, loaded: false, url: 'about:blank' });
+        view.cursor = win;
+        const before = treeSnapshot(view.root);
+        await view.action_deleteNode({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+        assertEqual(view.root.nodes.length, 2, 'Children should be promoted', snap);
+        assertEqual(view.root.nodes[0].id, 't1', 'First child promoted', snap);
+        assertEqual(view.root.nodes[1].id, 't2', 'Second child promoted', snap);
+        return { before, after };
+      });
+
+      test('root delete unloaded window with metadata promotes children', async () => {
+        const view = createView();
+        const win = await addChild(view.root, {
+          id: 'w1', type: 'window', loaded: false, expanded: true
+        });
+        win.label = 'Meta';
+        await addChild(win, { id: 't1', url: 'https://a' });
+        await addChild(win, { id: 't2', url: 'https://b' });
+        view.cursor = win;
+        const before = treeSnapshot(view.root);
+        await view.action_deleteNode({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+        assertEqual(view.root.nodes[0].id, 't1', 'First child should be promoted', snap);
+        assertEqual(view.root.nodes[1].id, 't2', 'Second child should be promoted', snap);
+        return { before, after };
+      });
+
+      test('root loaded expanded delete unloads only', async () => {
+        const view = createView();
+        const win = await addChild(view.root, {
+          id: 'w1', type: 'window', windowId: 10, loaded: true, expanded: true
+        });
+        const tab = await addChild(win, {
+          id: 't1', tabId: 1, windowId: 10, loaded: true, url: 'https://a'
+        });
+        view.cursor = win;
+        const before = treeSnapshot(view.root);
+        await view.action_deleteNode({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+        assertEqual(win.loaded, false, 'Window should be unloaded', snap);
+        assertEqual(tab.loaded, false, 'Tab should be unloaded', snap);
+        assertEqual(tab.wasLoaded, true, 'Tab should be marked wasLoaded', snap);
+        assert(view.root.nodes.includes(win), 'Window should remain at root', snap);
+        return { before, after };
+      });
+
+      test('root loaded collapsed delete removes branch', async () => {
+        const view = createView();
+        const win = await addChild(view.root, {
+          id: 'w1', type: 'window', windowId: 10, loaded: true, expanded: false
+        });
+        await addChild(win, { id: 't1', tabId: 1, windowId: 10, loaded: true, url: 'https://a' });
+        view.cursor = win;
+        const before = treeSnapshot(view.root);
+        await view.action_deleteNode({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+        assert(!view.root.nodes.includes(win), 'Window should be deleted', snap);
+        return { before, after };
+      });
+
+      testGroup('Ancestor Window Deletes');
+      test('loaded metadata window merges into loaded ancestor and keeps label', async () => {
+        const view = createView();
+        const ancestor = await addChild(view.root, {
+          id: 'wa', type: 'window', windowId: 1, loaded: true, expanded: true
+        });
+        const group = await addChild(ancestor, { id: 'g1', label: 'Group' });
+        const win = await addChild(group, {
+          id: 'w1', type: 'window', windowId: 10, loaded: true, expanded: true, label: 'Keep'
+        });
+        win.note = 'Note';
+        win.checkbox = 'X';
+        win.checkboxPx = 0.5;
+        await addChild(win, { id: 't1', tabId: 1, windowId: 10, loaded: true, url: 'https://a' });
+        await addChild(win, { id: 't2', tabId: 2, windowId: 10, loaded: true, url: 'https://b' });
+        view.cursor = win;
+        const before = treeSnapshot(view.root);
+        await view.action_deleteNode({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+        const labelNode = group.nodes.find(n => n.label === 'Keep' && n.type === '');
+        assert(labelNode, 'Label node should remain', snap);
+        assertEqual(labelNode.note, 'Note', 'Label should keep note', snap);
+        assertEqual(labelNode.checkbox, 'X', 'Label should keep checkbox', snap);
+        assertEqual(labelNode.checkboxPx, 0.5, 'Label should keep checkbox percent', snap);
+        assertEqual(labelNode.nodes.length, 2, 'Label should receive tabs', snap);
+        assert(!group.nodes.includes(win), 'Window node should be removed', snap);
+        return { before, after };
+      });
+
+      test('loaded metadata window merges into unloaded ancestor and keeps label', async () => {
+        const view = createView();
+        const ancestor = await addChild(view.root, {
+          id: 'wa', type: 'window', loaded: false, expanded: true
+        });
+        const group = await addChild(ancestor, { id: 'g1', label: 'Group' });
+        const win = await addChild(group, {
+          id: 'w1', type: 'window', windowId: 10, loaded: true, expanded: true, label: 'Keep'
+        });
+        win.note = 'Note';
+        await addChild(win, { id: 't1', tabId: 1, windowId: 10, loaded: true, url: 'https://a' });
+        view.cursor = win;
+        const before = treeSnapshot(view.root);
+        await view.action_deleteNode({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+        assertEqual(ancestor.loaded, true, 'Ancestor window should become loaded', snap);
+        assertEqual(ancestor.windowId, 10, 'Ancestor should adopt windowId', snap);
+        const labelNode = group.nodes.find(n => n.label === 'Keep' && n.type === '');
+        assert(labelNode, 'Label node should remain', snap);
+        assertEqual(labelNode.note, 'Note', 'Label should keep note', snap);
+        assertEqual(labelNode.nodes.length, 1, 'Label should receive tabs', snap);
+        return { before, after };
+      });
+
+      test('metadata window with no ancestor window leaves label, wraps branch', async () => {
+        const view = createView();
+        const group = await addChild(view.root, { id: 'g1', label: 'Group' });
+        const win = await addChild(group, {
+          id: 'w1', type: 'window', windowId: 10, loaded: true, expanded: true, label: 'Keep'
+        });
+        win.checkbox = '!';
+        await addChild(win, { id: 't1', tabId: 1, windowId: 10, loaded: true, url: 'https://a' });
+        view.cursor = win;
+        const before = treeSnapshot(view.root);
+        await view.action_deleteNode({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+        assertEqual(view.root.nodes[0].id, 'w1', 'Window should move to root', snap);
+        assertEqual(view.root.nodes[0].nodes[0].id, 'g1', 'Group should move under window', snap);
+        const labelNode = group.nodes.find(n => n.label === 'Keep' && n.type === '');
+        assert(labelNode, 'Label node should remain at original location', snap);
+        assertEqual(labelNode.checkbox, '!', 'Label should keep checkbox', snap);
+        assertEqual(labelNode.nodes.length, 1, 'Label should receive tabs', snap);
+        assertEqual(win.nodes.length, 1, 'Window should only wrap the group', snap);
+        return { before, after };
+      });
+
+      test('boring window with loaded ancestor unwraps into parent', async () => {
+        const view = createView();
+        const ancestor = await addChild(view.root, {
+          id: 'wa', type: 'window', windowId: 1, loaded: true, expanded: true
+        });
+        const group = await addChild(ancestor, { id: 'g1', label: 'Group' });
+        const win = await addChild(group, {
+          id: 'w1', type: 'window', windowId: 10, loaded: true, expanded: true
+        });
+        await addChild(win, { id: 't1', tabId: 1, windowId: 10, loaded: true, url: 'https://a' });
+        view.cursor = win;
+        const before = treeSnapshot(view.root);
+        await view.action_deleteNode({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+        assert(!group.nodes.includes(win), 'Window node should be removed', snap);
+        assertEqual(group.nodes[0].id, 't1', 'Tab should be promoted into group', snap);
+        return { before, after };
+      });
+
+      test('boring window with unloaded ancestor unwraps and loads ancestor', async () => {
+        const view = createView();
+        const ancestor = await addChild(view.root, {
+          id: 'wa', type: 'window', loaded: false, expanded: true
+        });
+        const group = await addChild(ancestor, { id: 'g1', label: 'Group' });
+        const win = await addChild(group, {
+          id: 'w1', type: 'window', windowId: 10, loaded: true, expanded: true
+        });
+        await addChild(win, { id: 't1', tabId: 1, windowId: 10, loaded: true, url: 'https://a' });
+        view.cursor = win;
+        const before = treeSnapshot(view.root);
+        await view.action_deleteNode({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+        assertEqual(ancestor.loaded, true, 'Ancestor should become loaded', snap);
+        assertEqual(group.nodes[0].id, 't1', 'Tab should be promoted into group', snap);
+        return { before, after };
+      });
+
+      testGroup('Confirmations');
+      test('collapsed loaded window warns about metadata', async () => {
+        const view = createView();
+        const win = await addChild(view.root, {
+          id: 'w1', type: 'window', windowId: 10, loaded: true, expanded: false
+        });
+        win.label = 'Meta';
+        await addChild(win, { id: 't1', tabId: 1, windowId: 10, loaded: true, url: 'https://a' });
+        view.cursor = win;
+        const before = treeSnapshot(view.root);
+        await view.action_deleteNode({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+        assert(view.lastConfirm, 'Should show confirmation dialog', snap);
+        assert(
+          view.lastConfirm.description.includes('notes/labels/checkboxes'),
+          'Warning should mention metadata',
+          snap
+        );
+        assert(!view.root.nodes.includes(win), 'Window should be deleted', snap);
+        return { before, after };
+      });
+
+      async function runTests() {
+        const results = [];
+
+        for (const item of tests) {
+          if (item.type === 'group') {
+            results.push({ type: 'group', title: item.title });
+            continue;
+          }
+          try {
+            const snap = await item.fn();
+            results.push({ type: 'test', name: item.name, pass: true, snap });
+          } catch (e) {
+            const snap = e && e.snapshot ? e.snapshot : null;
+            results.push({
+              type: 'test',
+              name: item.name,
+              pass: false,
+              error: e && e.message ? e.message : String(e),
+              snap
+            });
+          }
+        }
+
+        const $results = document.getElementById('results');
+        const $summary = document.getElementById('summary');
+
+        let passCount = 0;
+        let failCount = 0;
+
+        for (const result of results) {
+          if (result.type === 'group') {
+            const $group = document.createElement('h2');
+            $group.textContent = result.title;
+            $results.appendChild($group);
+            continue;
+          }
+          const $div = document.createElement('div');
+          $div.className = 'test-section';
+
+          const $status = document.createElement('span');
+          const $name = document.createTextNode(' ' + result.name);
+
+          if (result.pass) {
+            passCount++;
+            $status.className = 'test-pass';
+            $status.textContent = 'PASS:';
+            $div.append($status, $name);
+            if (result.snap) {
+              const $snap = document.createElement('pre');
+              const $before = document.createElement('div');
+              $before.textContent = 'Before:';
+              const $beforeSnap = document.createElement('pre');
+              renderSnapshot($beforeSnap, result.snap.before);
+              const $after = document.createElement('div');
+              $after.textContent = 'After:';
+              const $afterSnap = document.createElement('pre');
+              renderSnapshot($afterSnap, result.snap.after);
+              $snap.append($before, $beforeSnap, $after, $afterSnap);
+              $div.appendChild($snap);
+            }
+          } else {
+            failCount++;
+            $status.className = 'test-fail';
+            $status.textContent = 'FAIL:';
+            const $error = document.createElement('pre');
+            $error.textContent = result.error;
+            $div.append($status, $name, $error);
+            if (result.snap) {
+              const $snap = document.createElement('pre');
+              const $before = document.createElement('div');
+              $before.textContent = 'Before:';
+              const $beforeSnap = document.createElement('pre');
+              renderSnapshot($beforeSnap, result.snap.before);
+              const $after = document.createElement('div');
+              $after.textContent = 'After:';
+              const $afterSnap = document.createElement('pre');
+              renderSnapshot($afterSnap, result.snap.after);
+              $snap.append($before, $beforeSnap, $after, $afterSnap);
+              $div.appendChild($snap);
+            }
+          }
+
+          $results.appendChild($div);
+        }
+
+        const totalTests = results.filter(r => r.type === 'test').length;
+        $summary.textContent = `${passCount} passed, ${failCount} failed out of ${totalTests} tests`;
+        $summary.className = failCount === 0 ? 'all-pass' : 'has-fail';
+
+        renderLegend($results);
+      }
+
+      runTests();
+    }
+
+    main();
+  </script>
+</body>
+</html>

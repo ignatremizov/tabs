@@ -523,6 +523,13 @@ export class Node {
     // windows require special care
     // this shouldn't happen, but just in case, ignore non-windows
     if (! this.isWindow()) return;
+    if (this.keepTabsOnClose) {
+      this.keepTabsOnClose = false;
+      if (! this.hasLoadedTabs()) {
+        await this.unload(args);
+      }
+      return;
+    }
     // if window is boring and has no kids, just delete it
     if ((! this.hasKids()) && (! this.shouldUnloadNotDelete())) {
       debug('Node.windowClosed(): emptyWindowClosed');
@@ -846,6 +853,12 @@ export class Node {
           wasLoaded: this.wasLoaded,
           when: this.mtime });
 
+    if (this.isWindow() && args.keepTabsOnClose) {
+      const tabList = this.getLoadedTabs();
+      for (const kid of tabList) {
+        await kid.unload({ reason: 'onWindowRemoved' });
+      }
+    }
     // if this was a window merge operation, ensure kids are unloaded
     if ('mergeOpenWindowsIntoTree' === args.reason) {
       const tabList = this.getLoadedTabs();

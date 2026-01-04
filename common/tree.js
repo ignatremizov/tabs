@@ -584,6 +584,10 @@ export class Tree {
         this.windowsClosing.delete(windowNode.windowId);
       }
     }
+    if (isWindowClosing && windowNode && windowNode.keepTabsOnClose) {
+      // Preserve tabs even if the window is boring.
+      return tabNode.unload({ reason: 'onWindowRemoved' });
+    }
 
     // If the last tab was a boring leaf, remove it and the empty window.
     if (isWindowClosing && windowNode) {

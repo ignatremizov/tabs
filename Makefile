@@ -39,10 +39,13 @@ test:
 	@open http://127.0.0.1:8765/tests/dom-safety.test.html 2>/dev/null || xdg-open http://127.0.0.1:8765/tests/dom-safety.test.html 2>/dev/null || echo "Please open http://127.0.0.1:8765/tests/dom-safety.test.html manually"
 	@open http://127.0.0.1:8765/tests/tree-node.test.html 2>/dev/null || xdg-open http://127.0.0.1:8765/tests/tree-node.test.html 2>/dev/null || echo "Please open http://127.0.0.1:8765/tests/tree-node.test.html manually"
 	@open http://127.0.0.1:8765/tests/merge-open-windows.test.html 2>/dev/null || xdg-open http://127.0.0.1:8765/tests/merge-open-windows.test.html 2>/dev/null || echo "Please open http://127.0.0.1:8765/tests/merge-open-windows.test.html manually"
+	@open http://127.0.0.1:8765/tests/delete-window-behavior.test.html 2>/dev/null || xdg-open http://127.0.0.1:8765/tests/delete-window-behavior.test.html 2>/dev/null || echo "Please open http://127.0.0.1:8765/tests/delete-window-behavior.test.html manually"
 	@echo "Firefox-specific run: http://127.0.0.1:8765/tests/tree-node.test.html?env=firefox"
 	@echo "Chrome-specific run: http://127.0.0.1:8765/tests/tree-node.test.html?env=chrome"
 	@echo "Merge test (firefox): http://127.0.0.1:8765/tests/merge-open-windows.test.html?env=firefox"
 	@echo "Merge test (chrome): http://127.0.0.1:8765/tests/merge-open-windows.test.html?env=chrome"
+	@echo "Delete window tests (firefox): http://127.0.0.1:8765/tests/delete-window-behavior.test.html?env=firefox"
+	@echo "Delete window tests (chrome): http://127.0.0.1:8765/tests/delete-window-behavior.test.html?env=chrome"
 
 coverage:
 	@COVERAGE_BADGE_PATH=readme.md node tests/node/coverage.mjs

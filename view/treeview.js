@@ -976,18 +976,106 @@ export class TreeView extends Tree {
     // delete depending on the node type and state
     const toDelete = cursor;
     const line = cursor.toLine();
+    if (toDelete.isWindow()
+      && toDelete.isLoaded()
+      && (! toDelete.isCollapsed())
+      && (! toDelete.parent.isRoot())
+      && toDelete.shouldUnloadNotDelete(false)) {
+      const parent = toDelete.parent;
+      const index = toDelete.indexOf();
+      const labelDetails = {
+        label: toDelete.label,
+        note: toDelete.note,
+        expanded: true,
+        render: true
+      };
+      if (toDelete.hasCheckbox()) {
+        labelDetails.checkbox = toDelete.checkbox;
+        labelDetails.checkboxPx = toDelete.checkboxPx;
+      }
+      const labelNode = await parent.addChild(index, labelDetails,
+        { reason: 'userAction' });
+
+      const parentWindow = parent.getWindowNode(true);
+      const unloadedAncestor = toDelete.findParent(
+        (n) => (n.isWindow() && (! n.isLoaded()))
+      );
+      const wrapNode = this.getWrapNodeForWindowDelete(toDelete);
+      const canWrap = wrapNode && (! wrapNode.isRoot());
+      if (parentWindow || unloadedAncestor || canWrap) {
+        await toDelete.promoteKidsToParentAtIndex(
+          labelNode,
+          0,
+          { reason: 'userAction' }
+        );
+      }
+
+      if (parentWindow) {
+        await toDelete.deleteSelf({ reason: 'userAction' });
+        this.setStatus(`unwrapped ${line}`);
+        this.setCursor(labelNode);
+        return;
+      }
+
+      if (unloadedAncestor) {
+        await unloadedAncestor.setTabFields({
+          type: 'window',
+          windowId: toDelete.windowId,
+          loaded: true,
+          active: toDelete.active,
+          geometry: toDelete.geometry,
+          incognito: toDelete.incognito,
+          windowState: toDelete.windowState
+        }, { reason: 'userAction' });
+        await toDelete.deleteSelf({ reason: 'userAction' });
+        this.setStatus(`unwrapped ${line}`);
+        this.setCursor(labelNode);
+        return;
+      }
+
+      if (canWrap) {
+        const wrapParent = wrapNode.parent;
+        const wrapIndex = wrapNode.indexOf();
+        await toDelete.moveTo(wrapParent, wrapIndex, { reason: 'userAction' });
+        await wrapNode.moveTo(toDelete, 0, { reason: 'userAction' });
+        if (toDelete.label || toDelete.note) {
+          await toDelete.setNotes('', '', { reason: 'userAction' });
+        }
+        if (toDelete.hasCheckbox()) {
+          await toDelete.setCheckbox(null, { reason: 'userAction' });
+        }
+        this.setStatus(`unwrapped ${line}`);
+        this.setCursor(labelNode);
+        return;
+      }
+    }
     if (toDelete.isWindow() && toDelete.isLoaded()) {
       if (toDelete.isCollapsed()) {
         const tabCount = toDelete.getLoadedAndUnloadedTabs().length;
         const tabLabel = (tabCount === 1) ? 'tab' : 'tabs';
+        const warning = toDelete.shouldUnloadNotDelete(true)
+          ? ' This will also delete notes/labels/checkboxes in this branch.'
+          : '';
         const confirmed = await this.confirmDialog(
           'Delete Window',
-          `This will close the window and delete ${tabCount} ${tabLabel}. Continue?`
+          `This will close the window and delete ${tabCount} ${tabLabel}.${warning} Continue?`
         );
         if (! confirmed) return;
         await toDelete.unload({ reason: 'userAction' });
         await toDelete.deleteSelf({ reason: 'userAction' });
         this.setStatus(`deleted ${line}`);
+        this.setCursor(newCursor);
+        return;
+      }
+
+      if (toDelete.parent.isRoot()) {
+        toDelete.keepTabsOnClose = true;
+        await toDelete.unload({
+          reason: 'userAction',
+          wasLoaded: true,
+          keepTabsOnClose: true
+        });
+        this.setStatus(`unloaded ${line}`);
         this.setCursor(newCursor);
         return;
       }
@@ -1075,7 +1163,7 @@ export class TreeView extends Tree {
     // if leaf, just delete it... simple
     if (cursor.isLeaf()) {
       //debug('delete leaf node');
-      toDelete.deleteSelf({ reason: 'userAction' });
+      await toDelete.deleteSelf({ reason: 'userAction' });
       this.setStatus(`deleted ${line}`);
     }
     // TODO: if window and has open tabs, things get complicated
@@ -1084,7 +1172,7 @@ export class TreeView extends Tree {
       //debug('promote kids and delete parent');
       // TODO: let user configure "promote all kids" or "promote 1st child"
       const numKids = toDelete.nodes.length;
-      toDelete.deleteSelfAndPromoteKids({ reason: 'userAction' });
+      await toDelete.deleteSelfAndPromoteKids({ reason: 'userAction' });
       //toDelete.deleteSelfAndPromote1stKid({ reason: 'userAction' });
       //this.setStatus(`deleted 1 node and promoted ${numKids} sub-nodes`);
       this.setStatus(`deleted ${line}`);
@@ -1104,7 +1192,7 @@ export class TreeView extends Tree {
       // abort if user cancelled
       if ((!result) || ('OK' !== result.button)) return;
       // otherwise, actually delete it
-      toDelete.deleteSelf({ reason: 'userAction' });
+      await toDelete.deleteSelf({ reason: 'userAction' });
       this.setStatus(`deleted ${numToDelete} nodes`);
     }
 
@@ -1238,7 +1326,12 @@ export class TreeView extends Tree {
       const loadedTabs = cursor.getLoadedTabs();
       const count = loadedTabs.length + (cursor.isLoaded() ? 1 : 0);
       if (count === 0) {
-        cursor.unload({ reason: 'userAction' });
+        if (cursor.isWindow()) cursor.keepTabsOnClose = true;
+        cursor.unload({
+          reason: 'userAction',
+          wasLoaded: cursor.isWindow() ? true : undefined,
+          keepTabsOnClose: cursor.isWindow()
+        });
         this.setStatus(`unloaded ${cursor.toLine()}`);
         return;
       }
@@ -1246,13 +1339,24 @@ export class TreeView extends Tree {
         const confirmed = await this.confirmDialog('Unload Tabs', `Unload ${count} tabs?`);
         if (! confirmed) return;
       }
+      const unloadReason = cursor.isWindow() ? 'onWindowRemoved' : 'userAction';
       for (const tab of loadedTabs) {
-        tab.unload({ reason: 'userAction' });
+        tab.unload({ reason: unloadReason });
       }
-      cursor.unload({ reason: 'userAction' });
+      if (cursor.isWindow()) cursor.keepTabsOnClose = true;
+      cursor.unload({
+        reason: 'userAction',
+        wasLoaded: cursor.isWindow() ? true : undefined,
+        keepTabsOnClose: cursor.isWindow()
+      });
       this.setStatus(`unloaded ${count} tabs`);
     } else {
-      cursor.unload({ reason: 'userAction' });
+      if (cursor.isWindow()) cursor.keepTabsOnClose = true;
+      cursor.unload({
+        reason: 'userAction',
+        wasLoaded: cursor.isWindow() ? true : undefined,
+        keepTabsOnClose: cursor.isWindow()
+      });
       this.setStatus(`unloaded ${cursor.toLine()}`);
     }
   }
