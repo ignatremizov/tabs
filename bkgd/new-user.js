@@ -70,7 +70,7 @@ export async function createNewUserTutorialNodes (tree, parentNode) {
         ]}
       ]},
     { label: 'Window delete + unwrap tips', expanded: false,
-      note: 'Press "D" on a window node.  If it is expanded and loaded, it unwraps the children (keeps tabs, removes the window node).  If it is collapsed and loaded, you will be asked to confirm closing the window and deleting its tabs.  Deleting an unloaded window simply unwraps it.\n\nIf the window has ancestor windows, delete will keep loaded tabs by merging into the nearest ancestor window, creating one if not found.',
+      note: 'Press "D" on a window node.  If it is expanded and loaded, it unloads (closes the window) but keeps tabs in the tree as wasLoaded.  If it is collapsed and loaded, you will be asked to confirm closing the window and deleting its tabs.  Deleting an unloaded window simply unwraps it.\n\nIf the window has ancestor windows, delete will keep loaded tabs by merging into the nearest ancestor window, creating one if not found.',
       nodes: [
         { label: 'Loaded Window (expanded)', type: 'window', loaded: false, expanded: true,
           note: 'Open this window, then press "D" to unwrap its children without closing tabs.',

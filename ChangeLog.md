@@ -65,8 +65,8 @@ Known issues:
 
 ## 2026-01
 - 2026-01-04:
-  - Added window-aware delete behavior (unwrap vs close) and merge-open-windows tests.
-  - Added mergeOpenWindowsIntoTree de-dup guard and wrap/unwrap tutorial updates.
+  - Refined window delete behavior to unload root windows while preserving tabs as wasLoaded.
+  - Added mergeOpenWindowsIntoTree de-dup guard, tests, and window delete tutorial updates.
   - Added make coverage target to run node-based tests with V8 coverage output.
 - 2026-01-03:
   - Added tab-reorder toggle and ensured tab creation follows browser order when disabled.

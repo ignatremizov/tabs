@@ -444,11 +444,11 @@ Use the hover-menu "W" button to wrap a node in a window, convert a label into
 a window, or convert a window back into a label.  This is useful for grouping
 related tabs together without opening a new browser window until you actually
 load a tab.  The "D" delete action has extra window-aware behavior:
-expanded loaded windows will unwrap their children instead of closing tabs,
-while collapsed loaded windows prompt before closing and deleting tabs.  If the
-window has ancestor windows, delete will keep loaded tabs by merging into the
-nearest ancestor window, creating one if not found.
-Deleting an unloaded window simply unwraps it.
+expanded loaded windows unload (close the window) but keep tabs in the tree as
+wasLoaded.  Collapsed loaded windows prompt before closing and deleting tabs.
+If the window has ancestor windows, delete will keep loaded tabs by merging
+into the nearest ancestor window, creating one if not found.  Deleting an
+unloaded window simply unwraps it.
 
 If a label is converted to a window and it contains open tabs, those tabs are
 moved into the new window automatically.  Converting a loaded window back into
