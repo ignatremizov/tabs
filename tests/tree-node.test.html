@@ -756,6 +756,30 @@
         assert(match2.id !== match1.id, 'Exclude list should prevent reuse');
       });
 
+      test('promoteKidsToParentAtIndex preserves order', async () => {
+        const tree = createTree();
+        const parent = await addChild(tree.root, { id: 'p1' });
+        const node = await addChild(parent, { id: 'n1' });
+        const a = await addChild(node, { id: 'a', label: 'A' });
+        const b = await addChild(node, { id: 'b', label: 'B' });
+        const c = await addChild(node, { id: 'c', label: 'C' });
+
+        await node.promoteKidsToParentAtIndex(
+          parent,
+          node.indexOf(),
+          { reason: 'userAction' }
+        );
+
+        const ids = parent.nodes.map(n => n.id);
+        assertEqual(ids[0], 'a', 'First promoted child should stay first');
+        assertEqual(ids[1], 'b', 'Second promoted child should stay second');
+        assertEqual(ids[2], 'c', 'Third promoted child should stay third');
+        assertEqual(ids[3], 'n1', 'Original parent should follow promoted children');
+        assertEqual(a.parent, parent, 'Child A should move to parent');
+        assertEqual(b.parent, parent, 'Child B should move to parent');
+        assertEqual(c.parent, parent, 'Child C should move to parent');
+      });
+
       async function runTests() {
         const results = [];
 

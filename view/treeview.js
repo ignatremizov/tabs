@@ -67,6 +67,7 @@ export class TreeView extends Tree {
     };
 
     this.openWindowOnRootMove = false;
+    this.openWindowOnRootLoadTopmost = false;
   }
 
   destroy () {
@@ -139,9 +140,12 @@ export class TreeView extends Tree {
     this.initStorageObserver();
     await this.updateKeyBindings();
     const behaviorOptions = await api.storage.local.get({
-      openWindowOnRootMove: false
+      openWindowOnRootMove: false,
+      openWindowOnRootLoadTopmost: false
     });
     this.openWindowOnRootMove = behaviorOptions.openWindowOnRootMove;
+    this.openWindowOnRootLoadTopmost =
+      behaviorOptions.openWindowOnRootLoadTopmost;
     // get the window this view is attached to
     this.windowObj = await api.windows.getCurrent();
     this.windowId = this.windowObj.id;
@@ -248,6 +252,10 @@ export class TreeView extends Tree {
     }
     if (changes.openWindowOnRootMove) {
       this.openWindowOnRootMove = changes.openWindowOnRootMove.newValue;
+    }
+    if (changes.openWindowOnRootLoadTopmost) {
+      this.openWindowOnRootLoadTopmost =
+        changes.openWindowOnRootLoadTopmost.newValue;
     }
   }
 
@@ -953,8 +961,6 @@ export class TreeView extends Tree {
     // never delete root
     if (cursor.isRoot()) return;
     if (cursor === this.viewRoot) return;
-    // don't delete an open window
-    if (this.cursor.isWindow() && this.cursor.isLoaded()) return;
     // do nothing if cursor is outside of viewRoot
     if (! this.cursor.isChildOf(this.viewRoot, false)) return;
 
@@ -970,6 +976,102 @@ export class TreeView extends Tree {
     // delete depending on the node type and state
     const toDelete = cursor;
     const line = cursor.toLine();
+    if (toDelete.isWindow() && toDelete.isLoaded()) {
+      if (toDelete.isCollapsed()) {
+        const tabCount = toDelete.getLoadedAndUnloadedTabs().length;
+        const tabLabel = (tabCount === 1) ? 'tab' : 'tabs';
+        const confirmed = await this.confirmDialog(
+          'Delete Window',
+          `This will close the window and delete ${tabCount} ${tabLabel}. Continue?`
+        );
+        if (! confirmed) return;
+        await toDelete.unload({ reason: 'userAction' });
+        await toDelete.deleteSelf({ reason: 'userAction' });
+        this.setStatus(`deleted ${line}`);
+        this.setCursor(newCursor);
+        return;
+      }
+
+      const parentWindow = toDelete.parent
+        ? toDelete.parent.getWindowNode(true)
+        : null;
+      if (parentWindow) {
+        const destParent = toDelete.parent;
+        const destIndex = toDelete.indexOf();
+        await toDelete.promoteKidsToParentAtIndex(
+          destParent,
+          destIndex,
+          { reason: 'userAction' }
+        );
+        await toDelete.deleteSelf({ reason: 'userAction' });
+        this.setStatus(`unwrapped ${line}`);
+        this.setCursor(newCursor);
+        return;
+      }
+
+      const unloadedAncestor = toDelete.findParent(
+        (n) => (n.isWindow() && (! n.isLoaded()))
+      );
+      if (unloadedAncestor) {
+        await unloadedAncestor.setTabFields({
+          type: 'window',
+          windowId: toDelete.windowId,
+          loaded: true,
+          active: toDelete.active,
+          geometry: toDelete.geometry,
+          incognito: toDelete.incognito,
+          windowState: toDelete.windowState
+        }, { reason: 'userAction' });
+        const destParent = toDelete.parent;
+        const destIndex = toDelete.indexOf();
+        await toDelete.promoteKidsToParentAtIndex(
+          destParent,
+          destIndex,
+          { reason: 'userAction' }
+        );
+        await toDelete.deleteSelf({ reason: 'userAction' });
+        this.setStatus(`unwrapped ${line}`);
+        this.setCursor(newCursor);
+        return;
+      }
+
+      const wrapNode = this.getWrapNodeForWindowDelete(toDelete);
+      if (wrapNode && (! wrapNode.isRoot())) {
+        const innerParent = toDelete.parent;
+        const innerIndex = toDelete.indexOf();
+        const wrapParent = wrapNode.parent;
+        const wrapIndex = wrapNode.indexOf();
+        const kids = [...toDelete.nodes];
+        await toDelete.moveTo(wrapParent, wrapIndex, { reason: 'userAction' });
+        await wrapNode.moveTo(toDelete, 0, { reason: 'userAction' });
+        const reversed = kids.reverse();
+        for (const node of reversed) {
+          await node.moveTo(innerParent, innerIndex, { reason: 'userAction' });
+        }
+        this.setStatus(`unwrapped ${line}`);
+        this.setCursor(newCursor);
+        return;
+      }
+      const tabCount = toDelete.getLoadedAndUnloadedTabs().length;
+      const tabLabel = (tabCount === 1) ? 'tab' : 'tabs';
+      const confirmed = await this.confirmDialog(
+        'Delete Window',
+        `This will close the window and unload ${tabCount} ${tabLabel}. Continue?`
+      );
+      if (! confirmed) return;
+      await toDelete.unload({ reason: 'userAction' });
+      const destParent = toDelete.parent;
+      const destIndex = toDelete.indexOf();
+      await toDelete.promoteKidsToParentAtIndex(
+        destParent,
+        destIndex,
+        { reason: 'userAction' }
+      );
+      await toDelete.deleteSelf({ reason: 'userAction' });
+      this.setStatus(`deleted ${line}`);
+      this.setCursor(newCursor);
+      return;
+    }
     // if leaf, just delete it... simple
     if (cursor.isLeaf()) {
       //debug('delete leaf node');
@@ -1008,6 +1110,19 @@ export class TreeView extends Tree {
 
     // update the cursor
     this.setCursor(newCursor);
+  }
+
+  getWrapNodeForWindowDelete (windowNode) {
+    let wrapNode = windowNode.parent;
+    if (! wrapNode) return null;
+    if (this.openWindowOnRootLoadTopmost) {
+      while (wrapNode.parent
+        && (! wrapNode.parent.isRoot())
+        && (! wrapNode.parent.isWindow())) {
+        wrapNode = wrapNode.parent;
+      }
+    }
+    return wrapNode;
   }
 
   async action_unloadNode (event) {

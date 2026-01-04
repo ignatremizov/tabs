@@ -69,6 +69,21 @@ export async function createNewUserTutorialNodes (tree, parentNode) {
           ]}
         ]}
       ]},
+    { label: 'Window delete + unwrap tips', expanded: false,
+      note: 'Press "D" on a window node.  If it is expanded and loaded, it unwraps the children (keeps tabs, removes the window node).  If it is collapsed and loaded, you will be asked to confirm closing the window and deleting its tabs.  Deleting an unloaded window simply unwraps it.\n\nIf the window has ancestor windows, delete will keep loaded tabs by merging into the nearest ancestor window, creating one if not found.',
+      nodes: [
+        { label: 'Loaded Window (expanded)', type: 'window', loaded: false, expanded: true,
+          note: 'Open this window, then press "D" to unwrap its children without closing tabs.',
+          nodes: [
+            { title: 'Example Domain', url: 'https://example.com/', loaded: false },
+            { title: 'Example Domain (child)', url: 'https://example.com/', loaded: false }
+          ]},
+        { label: 'Loaded Window (collapsed)', type: 'window', loaded: false, expanded: false,
+          note: 'Open this window, collapse it, then press "D" to see the confirmation.',
+          nodes: [
+            { title: 'Example Domain', url: 'https://example.com/', loaded: false }
+          ]}
+      ]},
     { label: 'Checkboxes', expanded: false,
       title: 'Double click me',
       url: '/docs/checkboxes.html',

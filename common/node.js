@@ -160,6 +160,16 @@ export class Node {
     }
   }
 
+  async promoteKidsToParentAtIndex (destParent, destIndex, args) {
+    debug('Node.promoteKidsToParentAtIndex()');
+    if (this.isRoot()) return;
+    if (! this.hasKids()) return;
+    const reversed = [...this.nodes].reverse();
+    for (const node of reversed) {
+      await node.moveTo(destParent, destIndex, args);
+    }
+  }
+
   indexOf () {
     if (!this.parent) return 0;
     if (!this.parent.nodes) return 0;
