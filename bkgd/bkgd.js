@@ -697,6 +697,9 @@ export class Bkgd {
       debug('bkgd_loadSavedNode() using existing window', createProperties);
       try {
         await api.tabs.create(createProperties);
+        if ('userAction' === msg.reason) {
+          await api.windows.update(windowNode.windowId, { focused: true });
+        }
       } catch (err) {
         this.nodesLoading.pop(node);
         warn(`loadSavedTab failed: ${err}`);
@@ -707,6 +710,18 @@ export class Bkgd {
     // TODO: need to modify onTabCreated and onWindowCreated
     //   to check a queue of nodes which are in the process of being loaded
     if (! response.result) response.result = 'ok';
+    return response;
+  }
+
+  async bkgd_focusWindow (msg) {
+    const response = {};
+    if (! msg || (! msg.windowId)) return response;
+    try {
+      await api.windows.update(msg.windowId, { focused: true });
+    } catch (err) {
+      warn(`bkgd_focusWindow failed: ${err}`);
+      response.result = err;
+    }
     return response;
   }
 

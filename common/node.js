@@ -1240,8 +1240,12 @@ export class Node {
     }
 
     // if we're the originator and the tab isn't focused, focus it
-    if (active && ('userAction' === args.reason))
+    if (active && ('userAction' === args.reason)) {
       await api.tabs.update(this.tabId, { active: true });
+      if (this.windowId) {
+        await api.windows.update(this.windowId, { focused: true });
+      }
+    }
 
     return true;
   }

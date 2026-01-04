@@ -58,6 +58,9 @@ Known issues:
 - Firefox 115-142 generates some warnings about the manifest because the manifest
   is written for newer versions.
 
+- Firefox on macOS: focusing a tab from another window may not switch to its
+  split Space; OS/window manager limits programmatic focus.
+
 - Edge has no way to move the sidepanel to the left side.  It did in the past,
   but Microsoft removed it.
 

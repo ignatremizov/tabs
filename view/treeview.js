@@ -68,6 +68,7 @@ export class TreeView extends Tree {
 
     this.openWindowOnRootMove = false;
     this.openWindowOnRootLoadTopmost = false;
+    this.focusActiveTabOnLoadOrEdit = false;
   }
 
   destroy () {
@@ -141,11 +142,14 @@ export class TreeView extends Tree {
     await this.updateKeyBindings();
     const behaviorOptions = await api.storage.local.get({
       openWindowOnRootMove: false,
-      openWindowOnRootLoadTopmost: false
+      openWindowOnRootLoadTopmost: false,
+      focusActiveTabOnLoadOrEdit: false
     });
     this.openWindowOnRootMove = behaviorOptions.openWindowOnRootMove;
     this.openWindowOnRootLoadTopmost =
       behaviorOptions.openWindowOnRootLoadTopmost;
+    this.focusActiveTabOnLoadOrEdit =
+      behaviorOptions.focusActiveTabOnLoadOrEdit;
     // get the window this view is attached to
     this.windowObj = await api.windows.getCurrent();
     this.windowId = this.windowObj.id;
@@ -256,6 +260,10 @@ export class TreeView extends Tree {
     if (changes.openWindowOnRootLoadTopmost) {
       this.openWindowOnRootLoadTopmost =
         changes.openWindowOnRootLoadTopmost.newValue;
+    }
+    if (changes.focusActiveTabOnLoadOrEdit) {
+      this.focusActiveTabOnLoadOrEdit =
+        changes.focusActiveTabOnLoadOrEdit.newValue;
     }
   }
 
@@ -1289,6 +1297,14 @@ export class TreeView extends Tree {
     // if loaded tab but not focused, focus it
     else if (cursor.isLoaded() && (!cursor.isActive()) && (!cursor.isWindow())) {
       cursor.setActive(true, { reason: 'userAction' });
+    }
+    // if loaded tab is already active, still focus its window
+    else if (cursor.isLoaded() && cursor.isActive() && (!cursor.isWindow())) {
+      if (allowEdit && this.focusActiveTabOnLoadOrEdit) {
+        await emit('bkgd_focusWindow',
+          { windowId: cursor.windowId, reason: 'userAction' });
+        return;
+      }
     }
     // if unloaded window, load it
     else if (cursor.isUnloadedWindow()) {

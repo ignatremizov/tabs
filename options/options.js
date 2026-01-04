@@ -113,15 +113,21 @@ function initBehaviorForm () {
     'openWindowOnRootLoadTopmost'
   );
   const $reorderTabsOnCreate = document.getElementById('reorderTabsOnCreate');
+  const $focusActiveTabOnLoadOrEdit = document.getElementById(
+    'focusActiveTabOnLoadOrEdit'
+  );
   api.storage.local.get({
     openWindowOnRootMove: false,
     openWindowOnRootLoadTopmost: false,
-    reorderTabsOnCreate: true
+    reorderTabsOnCreate: true,
+    focusActiveTabOnLoadOrEdit: false
   }).then((result) => {
     $openWindowOnRootMove.checked = result.openWindowOnRootMove;
     $openWindowOnRootLoadTopmost.checked =
       result.openWindowOnRootLoadTopmost;
     $reorderTabsOnCreate.checked = result.reorderTabsOnCreate;
+    $focusActiveTabOnLoadOrEdit.checked =
+      result.focusActiveTabOnLoadOrEdit;
   });
   $openWindowOnRootMove.addEventListener('click', () => {
     api.storage.local.set({
@@ -136,6 +142,11 @@ function initBehaviorForm () {
   $reorderTabsOnCreate.addEventListener('click', () => {
     api.storage.local.set({
       reorderTabsOnCreate: $reorderTabsOnCreate.checked
+    });
+  });
+  $focusActiveTabOnLoadOrEdit.addEventListener('click', () => {
+    api.storage.local.set({
+      focusActiveTabOnLoadOrEdit: $focusActiveTabOnLoadOrEdit.checked
     });
   });
 }

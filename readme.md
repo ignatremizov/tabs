@@ -409,6 +409,8 @@ General project stuff:
 - [ ] Detect per-browser defaults for new-tab placement (avoid double-reorder).
 - [ ] Investigate downloads in Chromium forks where backups lose `.json`
   filenames/extensions.
+- [ ] Firefox on macOS: focusing a tab from another window may not switch to
+  its split Space; OS/window manager limits programmatic focus.
 
 
 ## Tips / Best practices
