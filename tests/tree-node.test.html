@@ -16,6 +16,17 @@
     #summary { font-size: 1.2em; padding: 10px; margin-bottom: 20px; }
     #summary.all-pass { background: #dfd; }
     #summary.has-fail { background: #fdd; }
+    .snapshot { line-height: 1.4; }
+    .snap-line { display: block; white-space: pre; }
+    .snap-dot { display: inline-block; width: 0.9em; text-align: center; }
+    .snap-loaded { color: #1a7f37; }
+    .snap-unloaded { color: #b36b00; }
+    .snap-window { color: #0b5cad; }
+    .snap-label { color: #6f42c1; }
+    .snap-node { color: #444; }
+    .snap-root { color: #222; font-weight: 600; }
+    .legend { margin-top: 6px; font-size: 0.9em; color: #555; }
+    .legend span { margin-right: 12px; }
   </style>
 </head>
 <body>
@@ -121,8 +132,12 @@
 
       const tests = [];
 
+      function testGroup(title) {
+        tests.push({ type: 'group', title });
+      }
+
       function test(name, fn) {
-        tests.push({ name, fn });
+        tests.push({ type: 'test', name, fn });
       }
 
       function assert(condition, message) {
@@ -134,6 +149,25 @@
       function assertEqual(actual, expected, message) {
         if (actual !== expected) {
           throw new Error(message || `Expected "${expected}" but got "${actual}"`);
+        }
+      }
+
+      function makeAssertionError(message, snapshot) {
+        const err = new Error(message || 'Assertion failed');
+        if (snapshot) err.snapshot = snapshot;
+        return err;
+      }
+
+      function assertWithSnapshot(condition, message, snapshot) {
+        if (!condition) throw makeAssertionError(message, snapshot);
+      }
+
+      function assertEqualWithSnapshot(actual, expected, message, snapshot) {
+        if (actual !== expected) {
+          throw makeAssertionError(
+            message || `Expected "${expected}" but got "${actual}"`,
+            snapshot
+          );
         }
       }
 
@@ -151,12 +185,13 @@
         function walk(node, depth) {
           const indent = '  '.repeat(depth);
           const type = node.type ? node.type : 'node';
+          const name = node.isRoot() ? 'root' : `${type}:${node.id}`;
           const parts = [
-            `${indent}- ${type}:${node.id}`,
+            `${indent}- ${name}`,
             node.windowId ? `win=${node.windowId}` : null,
             node.tabId ? `tab=${node.tabId}` : null,
-            (node.loaded === true) ? 'loaded' : null,
-            (node.loaded === false) ? 'unloaded' : null,
+            (! node.isRoot() && (node.loaded === true)) ? 'loaded' : null,
+            (! node.isRoot() && (node.loaded === false)) ? 'unloaded' : null,
             node.label ? `label="${node.label}"` : null,
             node.title ? `title="${node.title}"` : null
           ].filter(Boolean);
@@ -172,8 +207,103 @@
         return `\nEvents:\n${log.map((line) => `- ${line}`).join('\n')}`;
       }
 
-      function formatSnapshotPair(before, after) {
+      function renderSnapshot(pre, snapshot) {
+        pre.classList.add('snapshot');
+        const lines = snapshot.split('\n');
+        for (const line of lines) {
+          const $line = document.createElement('span');
+          $line.className = 'snap-line';
+          const parts = line.split('- ');
+          const indent = (parts.length > 1) ? parts[0] : '';
+          const content = (parts.length > 1) ? parts.slice(1).join('- ') : line;
+          const isRoot = content.startsWith('root');
+          const isWindow = content.startsWith('window:');
+          const isLabel = content.startsWith('node:') && content.includes('label=');
+          const isLoaded = content.includes(' loaded');
+          const isUnloaded = content.includes(' unloaded');
+
+          const $indent = document.createTextNode(indent + '- ');
+          const $dot = document.createElement('span');
+          $dot.className = 'snap-dot';
+          $dot.textContent = isLoaded ? '●' : (isUnloaded ? '○' : '•');
+          if (isLoaded) $dot.classList.add('snap-loaded');
+          if (isUnloaded) $dot.classList.add('snap-unloaded');
+          if (isRoot) $dot.classList.add('snap-root');
+
+          const $text = document.createElement('span');
+          if (isRoot) $text.classList.add('snap-root');
+          else if (isWindow) $text.classList.add('snap-window');
+          else if (isLabel) $text.classList.add('snap-label');
+          else $text.classList.add('snap-node');
+          const statusMatch = content.match(/\s(loaded|unloaded)(?=\s|$)/);
+          if (statusMatch) {
+            const status = statusMatch[1];
+            const index = statusMatch.index;
+            const beforeText = content.slice(0, index);
+            const afterText = content.slice(index + status.length + 1);
+            $text.appendChild(document.createTextNode(beforeText + ' '));
+            const $status = document.createElement('span');
+            $status.className = (status === 'loaded') ? 'snap-loaded' : 'snap-unloaded';
+            $status.textContent = status;
+            $text.appendChild($status);
+            $text.appendChild(document.createTextNode(afterText));
+          } else {
+            $text.textContent = content;
+          }
+
+          $line.appendChild($indent);
+          $line.appendChild($dot);
+          $line.appendChild(document.createTextNode(' '));
+          $line.appendChild($text);
+          pre.appendChild($line);
+        }
+      }
+
+      function renderSnapshotPair(container, before, after) {
+        const $before = document.createElement('div');
+        const $after = document.createElement('div');
+        const $beforeLabel = document.createElement('div');
+        const $afterLabel = document.createElement('div');
+        const $beforePre = document.createElement('pre');
+        const $afterPre = document.createElement('pre');
+        $beforeLabel.textContent = 'Before:';
+        $afterLabel.textContent = 'After:';
+        renderSnapshot($beforePre, before);
+        renderSnapshot($afterPre, after);
+        $before.appendChild($beforeLabel);
+        $before.appendChild($beforePre);
+        $after.appendChild($afterLabel);
+        $after.appendChild($afterPre);
+        container.appendChild($before);
+        container.appendChild($after);
+      }
+
+      function renderLegend(container) {
+        const $legend = document.createElement('div');
+        $legend.className = 'legend';
+        const legendItems = [
+          { text: '● loaded', className: 'snap-loaded' },
+          { text: '○ unloaded', className: 'snap-unloaded' },
+          { text: '• neutral', className: '' },
+          { text: 'window', className: 'snap-window' },
+          { text: 'label', className: 'snap-label' },
+          { text: 'node', className: 'snap-node' }
+        ];
+        for (const item of legendItems) {
+          const $span = document.createElement('span');
+          $span.className = item.className;
+          $span.textContent = item.text;
+          $legend.appendChild($span);
+        }
+        container.appendChild($legend);
+      }
+
+      function formatSnapshotPairText(before, after) {
         return `\nBefore:\n${before}\nAfter:\n${after}`;
+      }
+
+      function formatSnapshotPair(before, after) {
+        return formatSnapshotPairText(before, after);
       }
 
       async function addChild(parent, details) {
@@ -181,6 +311,7 @@
         return await parent.addChild(index, details, { reason: 'test' });
       }
 
+      testGroup('Tab Removal');
       test('onTabRemoved removes boring last tab and window', async () => {
         const tree = createTree();
         const windowNode = await addChild(tree.root, {
@@ -197,11 +328,15 @@
           url: 'about:blank'
         });
 
+        const before = treeSnapshot(tree.root);
         await tree.onTabRemoved(10, { windowId: 1, isWindowClosing: true });
+        const after = treeSnapshot(tree.root);
+        const snap = { before, after };
 
-        assert(!tree.nodes.t1, 'Tab node should be deleted');
-        assert(!tree.nodes.w1, 'Window node should be deleted');
-        assertEqual(tree.root.nodes.length, 0, 'Root should be empty');
+        assertWithSnapshot(!tree.nodes.t1, 'Tab node should be deleted', snap);
+        assertWithSnapshot(!tree.nodes.w1, 'Window node should be deleted', snap);
+        assertEqualWithSnapshot(tree.root.nodes.length, 0, 'Root should be empty', snap);
+        return snap;
       });
 
       test('onTabRemoved keeps window with metadata', async () => {
@@ -221,13 +356,17 @@
           url: 'about:blank'
         });
 
+        const before = treeSnapshot(tree.root);
         await tree.onTabRemoved(10, { windowId: 1, isWindowClosing: true });
+        const after = treeSnapshot(tree.root);
+        const snap = { before, after };
 
-        assert(!tree.nodes.t1, 'Tab node should be deleted');
-        assert(tree.nodes.w1, 'Window node should remain');
-        assertEqual(tree.root.nodes.length, 1, 'Root should still contain window');
-        assertEqual(tree.nodes.w1.loaded, false, 'Window should be unloaded');
-        assertEqual(tree.nodes.w1.nodes.length, 0, 'Window should have no tabs');
+        assertWithSnapshot(!tree.nodes.t1, 'Tab node should be deleted', snap);
+        assertWithSnapshot(tree.nodes.w1, 'Window node should remain', snap);
+        assertEqualWithSnapshot(tree.root.nodes.length, 1, 'Root should still contain window', snap);
+        assertEqualWithSnapshot(tree.nodes.w1.loaded, false, 'Window should be unloaded', snap);
+        assertEqualWithSnapshot(tree.nodes.w1.nodes.length, 0, 'Window should have no tabs', snap);
+        return snap;
       });
 
       test('windowClosed before tabRemoved still clears boring window', async () => {
@@ -279,6 +418,7 @@
         assert(!tree.windowsClosing.has(1), 'windowClosed flag should clear');
       });
 
+      testGroup('Window Attach/Created');
       test('onTabAttached uses windowsLoading queue', async () => {
         const tree = createTree();
         const savedWindow = await addChild(tree.root, {
@@ -695,6 +835,7 @@
           `Should not call bkgd_loadSavedWindow when target window is already loaded.${formatSnapshotPair(before, after)}${formatLog(log)}`);
       });
 
+      testGroup('Window Loading');
       test('moveTo loaded tab into unloaded window triggers saved-window load', async () => {
         const tree = createTree();
         tree.bkgd = null;
@@ -730,6 +871,7 @@
         assert(autoLoad, 'Should open saved window when moving loaded tab');
       });
 
+      testGroup('Tree Utilities');
       test('findMatchingWindow honors exclude list', async () => {
         const tree = createTree();
         const win1 = await addChild(tree.root, { id: 'w1', type: 'window' });
@@ -784,14 +926,20 @@
         const results = [];
 
         for (const item of tests) {
+          if (item.type === 'group') {
+            results.push({ type: 'group', title: item.title });
+            continue;
+          }
           try {
-            await item.fn();
-            results.push({ name: item.name, pass: true });
+            const snap = await item.fn();
+            results.push({ type: 'test', name: item.name, pass: true, snap });
           } catch (e) {
             results.push({
+              type: 'test',
               name: item.name,
               pass: false,
-              error: e && e.message ? e.message : String(e)
+              error: e && e.message ? e.message : String(e),
+              snap: e && e.snapshot ? e.snapshot : null
             });
           }
         }
@@ -803,6 +951,12 @@
         let failCount = 0;
 
         for (const result of results) {
+          if (result.type === 'group') {
+            const $group = document.createElement('h2');
+            $group.textContent = result.title;
+            $results.appendChild($group);
+            continue;
+          }
           const $div = document.createElement('div');
           $div.className = 'test-section';
 
@@ -814,6 +968,9 @@
             $status.className = 'test-pass';
             $status.textContent = 'PASS:';
             $div.append($status, $name);
+            if (result.snap) {
+              renderSnapshotPair($div, result.snap.before, result.snap.after);
+            }
           } else {
             failCount++;
             $status.className = 'test-fail';
@@ -821,13 +978,19 @@
             const $error = document.createElement('pre');
             $error.textContent = result.error;
             $div.append($status, $name, $error);
+            if (result.snap) {
+              renderSnapshotPair($div, result.snap.before, result.snap.after);
+            }
           }
 
           $results.appendChild($div);
         }
 
-        $summary.textContent = `${passCount} passed, ${failCount} failed out of ${results.length} tests`;
+        const totalTests = results.filter(r => r.type === 'test').length;
+        $summary.textContent = `${passCount} passed, ${failCount} failed out of ${totalTests} tests`;
         $summary.className = failCount === 0 ? 'all-pass' : 'has-fail';
+
+        renderLegend(document.body);
 
         window.__TEST_RESULTS__ = { passCount, failCount, total: results.length };
         window.__TEST_DONE__ = true;
