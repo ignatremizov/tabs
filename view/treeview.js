@@ -1302,7 +1302,12 @@ export class TreeView extends Tree {
     else if (cursor.isLoaded() && cursor.isActive() && (!cursor.isWindow())) {
       if (allowEdit && this.focusActiveTabOnLoadOrEdit) {
         await emit('bkgd_focusWindow',
-          { windowId: cursor.windowId, reason: 'userAction' });
+          {
+            nodeId: cursor.id,
+            tabId: cursor.tabId,
+            windowId: cursor.windowId,
+            reason: 'userAction'
+          });
         return;
       }
     }

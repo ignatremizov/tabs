@@ -715,9 +715,24 @@ export class Bkgd {
 
   async bkgd_focusWindow (msg) {
     const response = {};
-    if (! msg || (! msg.windowId)) return response;
+    if (! msg) return response;
+    let windowId = msg.windowId;
+    if (! windowId && msg.nodeId) {
+      const node = this.tree.nodes[msg.nodeId];
+      if (node) windowId = node.windowId;
+      if (node && node.tabId) msg.tabId = node.tabId;
+    }
+    if (msg.tabId) {
+      try {
+        const tab = await api.tabs.get(msg.tabId);
+        if (tab && tab.windowId) windowId = tab.windowId;
+      } catch (err) {
+        warn(`bkgd_focusWindow tab lookup failed: ${err}`);
+      }
+    }
+    if (! windowId) return response;
     try {
-      await api.windows.update(msg.windowId, { focused: true });
+      await api.windows.update(windowId, { focused: true });
     } catch (err) {
       warn(`bkgd_focusWindow failed: ${err}`);
       response.result = err;

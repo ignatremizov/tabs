@@ -1242,8 +1242,20 @@ export class Node {
     // if we're the originator and the tab isn't focused, focus it
     if (active && ('userAction' === args.reason)) {
       await api.tabs.update(this.tabId, { active: true });
-      if (this.windowId) {
-        await api.windows.update(this.windowId, { focused: true });
+      let focusWindowId = this.windowId;
+      if (this.tabId) {
+        try {
+          const tab = await api.tabs.get(this.tabId);
+          if (tab && tab.windowId) {
+            focusWindowId = tab.windowId;
+            if (tab.windowId !== this.windowId) this.windowId = tab.windowId;
+          }
+        } catch (err) {
+          warn(`Node.setActive(): tab lookup failed: ${err}`);
+        }
+      }
+      if (focusWindowId) {
+        await api.windows.update(focusWindowId, { focused: true });
       }
     }
 
