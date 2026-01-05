@@ -11,7 +11,9 @@ help:
 	@echo "  all          - Build both Firefox and Chrome zip files"
 	@echo "  firefox-zip  - Build Firefox extension zip file"
 	@echo "  chrome-zip   - Build Chrome/Chromium extension zip file"
+	@echo "  chrome-dir   - Create dist/chromium for Load Unpacked"
 	@echo "  firefox-sign - Sign Firefox extension via AMO (requires .env JWT_ISSUER/JWT_SECRET)"
+	@echo "  bump         - Bump SemVer patch and create a git tag"
 	@echo "  test         - Open unit tests in browser"
 	@echo "  todo         - List TODO/FIXME comments in source files"
 	@echo "  coverage     - Run node-based tests with V8 coverage"
@@ -27,8 +29,16 @@ chrome-zip:
 	./bin/update-version.sh
 	./make-zip.sh chromium
 
+chrome-dir: chrome-zip
+	rm -rf dist/chromium
+	mkdir -p dist
+	mv build dist/chromium
+
+bump:
+	./bin/bump-version.sh
+
 firefox-sign:
-	./bin/sign-firefox.sh
+	./bin/firefox-sign.sh
 
 # Open unit tests in browser
 test:

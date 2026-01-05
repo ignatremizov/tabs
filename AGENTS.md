@@ -104,7 +104,7 @@ TKTSTO is a **Manifest V3 browser extension** that provides:
 ├── img/                # Icons (16, 32, 48, 64, 128 px)
 │
 ├── bin/                # Development scripts
-│   ├── sign-firefox.sh # Sign for Firefox (requires AMO credentials)
+│   ├── firefox-sign.sh # Sign for Firefox (requires AMO credentials)
 │   ├── update-version.sh
 │   └── *.py            # Utility scripts
 │

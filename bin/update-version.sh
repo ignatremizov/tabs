@@ -10,22 +10,46 @@ ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 # - 4 numeric parts, each <= 65535 (Chrome limit)
 # - no leading zeros in non-zero parts
 # - BUILD increments on each release build for fast deploys
-VERSION_FILE="$ROOT_DIR/VERSION"
 BUILD_FILE="$ROOT_DIR/VERSION_BUILD"
 
-BASE_VERSION=$(cat "$VERSION_FILE")
+BASE_VERSION=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
+if [ -z "$BASE_VERSION" ]; then
+  BASE_VERSION=$(git describe --tags --abbrev=0 2>/dev/null || true)
+fi
+
+if [ -z "$BASE_VERSION" ]; then
+  echo "No git tag found. Create a tag like v0.0.2 for the base version." >&2
+  exit 1
+fi
+
+BASE_VERSION=$(echo "$BASE_VERSION" | sed 's/^v//')
 IFS='.' read -r MAJOR MINOR PATCH <<EOF
 $BASE_VERSION
 EOF
 
 if [ -z "${MAJOR:-}" ] || [ -z "${MINOR:-}" ] || [ -z "${PATCH:-}" ]; then
-  echo "Invalid VERSION format, expected MAJOR.MINOR.PATCH in $VERSION_FILE" >&2
+  echo "Invalid tag format, expected MAJOR.MINOR.PATCH in git tag" >&2
   exit 1
 fi
 
+for part in "$MAJOR" "$MINOR" "$PATCH"; do
+  if [ "$part" -gt 65535 ] 2>/dev/null; then
+    echo "Version part exceeds Chrome limit (65535): $part" >&2
+    exit 1
+  fi
+done
+
 BUILD=0
+BUILD_BASE=''
 if [ -f "$BUILD_FILE" ]; then
-  BUILD=$(cat "$BUILD_FILE")
+  read -r BUILD_BASE BUILD <<EOF
+$(cat "$BUILD_FILE")
+EOF
+  BUILD=${BUILD:-0}
+fi
+
+if [ "$BUILD_BASE" != "$BASE_VERSION" ]; then
+  BUILD=0
 fi
 
 BUILD=$((BUILD + 1))
@@ -52,6 +76,6 @@ else
   done
 fi
 
-echo "$BUILD" > "$BUILD_FILE"
+echo "$BASE_VERSION $BUILD" > "$BUILD_FILE"
 
 echo "Version updated in: $MANIFESTS"

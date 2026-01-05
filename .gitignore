@@ -42,3 +42,6 @@ coverage/
 
 # Project-specific
 todo.otl
+VERSION_BUILD
+.build
+.version

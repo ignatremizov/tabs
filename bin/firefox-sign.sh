@@ -1,5 +1,5 @@
 #!/bin/sh
-# sign-firefox.sh: sign the Firefox extension via AMO using web-ext
+# firefox-sign.sh: sign the Firefox extension via AMO using web-ext
 
 set -eu
 
