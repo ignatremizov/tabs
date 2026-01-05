@@ -1,9 +1,13 @@
 #!/bin/sh
 # update-version.sh: Update version in manifests with SemVer + build counter
+# Copyright (C) 2025 Ignat Remizov
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+. "$ROOT_DIR/bin/version-utils.sh"
+ensure_git_repo
 
 # Cross-browser version format (Chrome + Firefox):
 #   MAJOR.MINOR.PATCH.BUILD
@@ -12,32 +16,15 @@ ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 # - BUILD increments on each release build for fast deploys
 BUILD_FILE="$ROOT_DIR/VERSION_BUILD"
 
-BASE_VERSION=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || true)
-if [ -z "$BASE_VERSION" ]; then
-  BASE_VERSION=$(git describe --tags --abbrev=0 2>/dev/null || true)
-fi
-
-if [ -z "$BASE_VERSION" ]; then
-  echo "No git tag found. Create a tag like v0.0.2 for the base version." >&2
-  exit 1
-fi
-
-BASE_VERSION=$(echo "$BASE_VERSION" | sed 's/^v//')
-IFS='.' read -r MAJOR MINOR PATCH <<EOF
-$BASE_VERSION
-EOF
-
-if [ -z "${MAJOR:-}" ] || [ -z "${MINOR:-}" ] || [ -z "${PATCH:-}" ]; then
+BASE_VERSION=$(get_tag_version required)
+if ! validate_version "$BASE_VERSION"; then
   echo "Invalid tag format, expected MAJOR.MINOR.PATCH in git tag" >&2
   exit 1
 fi
 
-for part in "$MAJOR" "$MINOR" "$PATCH"; do
-  if [ "$part" -gt 65535 ] 2>/dev/null; then
-    echo "Version part exceeds Chrome limit (65535): $part" >&2
-    exit 1
-  fi
-done
+IFS=' ' read -r MAJOR MINOR PATCH <<EOF
+$(split_version "$BASE_VERSION")
+EOF
 
 BUILD=0
 BUILD_BASE=''

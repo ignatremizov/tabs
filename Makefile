@@ -1,8 +1,8 @@
 # Makefile: a very basic, uh, Makefile ... pretty self-explanatory
-# Copyright (C) 2025 Selene ToyKeeper
+# Copyright (C) 2025 Selene ToyKeeper & Ignat Remizov
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-.PHONY: all help firefox-zip chrome-zip chrome-dir firefox-sign bump test todo coverage
+.PHONY: all help firefox-zip chrome-zip chrome-dir firefox-sign tag test todo coverage
 
 all: firefox-zip chrome-zip
 
@@ -13,7 +13,7 @@ help:
 	@echo "  chrome-zip   - Build Chrome/Chromium extension zip file"
 	@echo "  chrome-dir   - Create dist/chromium for Load Unpacked"
 	@echo "  firefox-sign - Sign Firefox extension via AMO (requires .env JWT_ISSUER/JWT_SECRET)"
-	@echo "  bump         - Bump SemVer patch and create a git tag"
+	@echo "  tag          - Bump version tag (default: patch) or set a tag"
 	@echo "  test         - Open unit tests in browser"
 	@echo "  todo         - List TODO/FIXME comments in source files"
 	@echo "  coverage     - Run node-based tests with V8 coverage"
@@ -34,11 +34,17 @@ chrome-dir: chrome-zip
 	mkdir -p dist
 	mv build dist/chromium
 
-bump:
-	./bin/bump-version.sh
-
 firefox-sign:
 	./bin/firefox-sign.sh
+
+tag:
+	./bin/tag-version.sh $(TAG_ARGS)
+
+# Allow: make tag [major|minor|patch] [vX.Y.Z]
+ifeq (tag,$(firstword $(MAKECMDGOALS)))
+  TAG_ARGS := $(wordlist 2,$(words $(MAKECMDGOALS)),$(MAKECMDGOALS))
+  $(foreach arg,$(TAG_ARGS),$(eval $(arg):;@:))
+endif
 
 # Open unit tests in browser
 test:
