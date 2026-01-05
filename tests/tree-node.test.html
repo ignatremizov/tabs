@@ -92,6 +92,7 @@
       let Tree;
       let Node;
       let isIllegalURL;
+      let sanitizeClientId;
       try {
         const [treeMod, nodeMod, commonMod] = await Promise.all([
           import('../common/tree.js'),
@@ -101,6 +102,7 @@
         Tree = treeMod.Tree;
         Node = nodeMod.Node;
         isIllegalURL = commonMod.isIllegalURL;
+        sanitizeClientId = commonMod.sanitizeClientId;
       } catch (err) {
         $summary.textContent = `Failed to load modules: ${err}`;
         $summary.className = 'has-fail';
@@ -920,6 +922,15 @@
         assertEqual(a.parent, parent, 'Child A should move to parent');
         assertEqual(b.parent, parent, 'Child B should move to parent');
         assertEqual(c.parent, parent, 'Child C should move to parent');
+      });
+
+      testGroup('Common Utilities');
+      test('sanitizeClientId strips non-alphanumerics', async () => {
+        assertEqual(sanitizeClientId('ab-12_34'), 'ab1234');
+        assertEqual(sanitizeClientId('  X Y Z  '), 'XYZ');
+        assertEqual(sanitizeClientId('###'), '');
+        assertEqual(sanitizeClientId(123), '123');
+        assertEqual(sanitizeClientId(null), '');
       });
 
       async function runTests() {

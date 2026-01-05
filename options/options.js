@@ -5,7 +5,7 @@
 "use strict";
 import { api, isChrome, isFirefox } from '/api.js';
 
-import { log, warn, debug, emit } from '/common/common.js';
+import { log, warn, debug, emit, sanitizeClientId } from '/common/common.js';
 import { buildEventName } from '/common/events.js';
 import { defaultKeyBindings, keyBindingActions } from '/common/keybindings.js';
 
@@ -22,11 +22,23 @@ function initClientIdForm () {
     }
   });
 
+  clientIdInput.addEventListener('blur', () => {
+    const rawClientId = clientIdInput.value;
+    const clientId = sanitizeClientId(rawClientId);
+    if (clientId !== rawClientId) clientIdInput.value = clientId;
+  });
+
   // save on form submit
   form.addEventListener('submit', (event) => {
     event.preventDefault();
-    const clientId = clientIdInput.value;
-    // FIXME: strip everything except letters and numbers from ID
+    const rawClientId = clientIdInput.value;
+    const clientId = sanitizeClientId(rawClientId);
+    if (! clientId) {
+      warn('Client ID must contain letters or numbers.');
+      alert('Client ID must contain letters or numbers.');
+      return;
+    }
+    if (clientId !== rawClientId) clientIdInput.value = clientId;
     api.storage.local.set({ clientId }).then(() => {
       alert('Saved!');
     });

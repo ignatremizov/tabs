@@ -3,6 +3,7 @@
 What changed, and when?  You know the drill.
 
 # Next
+- Sanitize client IDs in Options/background and note it in the Options UI.
 
 # 0.0.1.0 (2025-05-19)
 

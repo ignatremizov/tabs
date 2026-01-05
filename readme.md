@@ -224,7 +224,7 @@ view while it has focus.  Or there's the "Help" button for full documentation.
 Basic setup:
 
 - Click the "Options" button to get the config settings.
-- Set a client name.
+- Set a client name (non-alphanumeric characters are removed automatically).
 - Configure automatic backups.
 - Choose a theme, and any other options you'd like.
 - If your browser already opens new tabs next to the current tab, you can turn

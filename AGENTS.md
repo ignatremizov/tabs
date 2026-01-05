@@ -289,7 +289,7 @@ Stored in `chrome.storage.local`:
 
 | Key | Type | Description |
 |-----|------|-------------|
-| `clientId` | string | 2-char base32 identifier for this client |
+| `clientId` | string | Alphanumeric identifier for this client; non-alphanumerics stripped |
 | `theme` | string | Selected theme name |
 | `localBackupInterval` | number | Auto-backup interval in minutes |
 | `humanFriendlyBackups` | boolean | Pretty-print backup JSON |
@@ -767,7 +767,7 @@ Follow the [Conventional Commits](https://www.conventionalcommits.org/) specific
 |------|-------------|
 | `feat` | New feature or functionality |
 | `fix` | Bug fix |
-| `docs` | Documentation changes only |
+| `docs` | Documentation changes only (README, ChangeLog, docs/, and tutorial copy in `bkgd/new-user.js` when user-facing) |
 | `style` | Code style (formatting, whitespace, semicolons) |
 | `refactor` | Code change that neither fixes a bug nor adds a feature |
 | `perf` | Performance improvement |

@@ -6,7 +6,15 @@
 import { api, isChrome, isFirefox } from '/api.js';
 
 import {
-  log, debug, warn, error, fmtDate, emit, jsonSchema, isIllegalURL
+  log,
+  debug,
+  warn,
+  error,
+  fmtDate,
+  emit,
+  jsonSchema,
+  isIllegalURL,
+  sanitizeClientId
 } from '/common/common.js';
 import { IdGenerator } from '/common/id-generator.js';
 import * as sidepanel from './sidepanel.js';
@@ -152,16 +160,22 @@ export class Bkgd {
     // load client name from storage
     const result = await api.storage.local.get('clientId');
     if (result.clientId) {
-      this.clientId = result.clientId;
-      log(`clientId: ${this.clientId}`);
-    } else {
-      // detect first run and generate random client name
-      // generate 2-digit base32 string
-      let num = Math.floor(Math.random() * (32**2));
-      this.clientId = base32encode(num, 2);
-      await api.storage.local.set({ 'clientId': this.clientId });
-      log(`rand clientId: ${this.clientId}`);
+      const sanitized = sanitizeClientId(result.clientId);
+      if (sanitized) {
+        if (sanitized !== result.clientId) {
+          await api.storage.local.set({ 'clientId': sanitized });
+        }
+        this.clientId = sanitized;
+        log(`clientId: ${this.clientId}`);
+        return;
+      }
     }
+    // detect first run and generate random client name
+    // generate 2-digit base32 string
+    let num = Math.floor(Math.random() * (32**2));
+    this.clientId = base32encode(num, 2);
+    await api.storage.local.set({ 'clientId': this.clientId });
+    log(`rand clientId: ${this.clientId}`);
   }
 
   async initLocalBackupAlarm (reset = false) {
@@ -558,10 +572,15 @@ export class Bkgd {
 
   async bkgd_setClientId (msg) {
     await this.configLoaded;  // wait for config to finish loading
-    // FIXME: strip everything but a-zA-Z0-9
-    // TODO: save to config
-    this.clientId = msg.clientId;
+    const clientId = sanitizeClientId(msg.clientId);
+    if (! clientId) {
+      warn('bkgd_setClientId(): invalid clientId', msg.clientId);
+      return { error: 'Invalid clientId' };
+    }
+    this.clientId = clientId;
     this.idGen.name = this.clientId;
+    await api.storage.local.set({ 'clientId': this.clientId });
+    return { clientId: this.clientId };
   }
 
   async bkgd_getTree (msg) {

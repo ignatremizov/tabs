@@ -120,6 +120,11 @@ export async function emit (name, args, retry = true) {
   return response;
 }
 
+export function sanitizeClientId (clientId) {
+  if (! clientId) return '';
+  return String(clientId).replace(/[^a-zA-Z0-9]/g, '');
+}
+
 export function isIllegalURL (url) {
   if (! url) return false;
 
@@ -160,4 +165,3 @@ export function isIllegalURL (url) {
   // if no match, assume it's allowed
   return false;
 }
-
