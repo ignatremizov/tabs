@@ -23,6 +23,10 @@ else
 fi
 
 if [ -n "$INPUT_TAG" ]; then
+  if is_build_tag "$INPUT_TAG"; then
+    echo "Invalid tag format: use vMAJOR.MINOR.PATCH (not vMAJOR.MINOR.PATCH.BUILD)." >&2
+    exit 1
+  fi
   VERSION=$(strip_v_prefix "$INPUT_TAG")
 else
   BASE_VERSION=$(get_tag_version optional)

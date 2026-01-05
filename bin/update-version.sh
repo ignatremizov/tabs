@@ -17,6 +17,10 @@ ensure_git_repo
 BUILD_FILE="$ROOT_DIR/VERSION_BUILD"
 
 BASE_VERSION=$(get_tag_version required)
+if is_build_tag "$BASE_VERSION"; then
+  echo "Invalid tag format: use vMAJOR.MINOR.PATCH (not vMAJOR.MINOR.PATCH.BUILD)." >&2
+  exit 1
+fi
 if ! validate_version "$BASE_VERSION"; then
   echo "Invalid tag format, expected MAJOR.MINOR.PATCH in git tag" >&2
   exit 1

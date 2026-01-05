@@ -49,6 +49,12 @@ validate_part() {
   return 0
 }
 
+is_build_tag() {
+  local value
+  value=$(strip_v_prefix "$1")
+  echo "$value" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'
+}
+
 split_version() {
   local version="$1"
   local major minor patch
@@ -61,6 +67,21 @@ EOF
 validate_version() {
   local version="$1"
   local major minor patch
+  local rest rest2 rest3
+
+  rest=${version#*.}
+  if [ "$rest" = "$version" ]; then
+    return 1
+  fi
+  rest2=${rest#*.}
+  if [ "$rest2" = "$rest" ]; then
+    return 1
+  fi
+  rest3=${rest2#*.}
+  if [ "$rest3" != "$rest2" ]; then
+    return 1
+  fi
+
   IFS=' ' read -r major minor patch <<EOF
 $(split_version "$version")
 EOF
