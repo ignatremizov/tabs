@@ -24,10 +24,10 @@ firefox-zip:
 	./make-zip.sh firefox
 
 chrome-zip:
+	./bin/update-version.sh
 	./make-zip.sh chromium
 
 firefox-sign:
-	./bin/update-version.sh
 	./bin/sign-firefox.sh
 
 # Open unit tests in browser

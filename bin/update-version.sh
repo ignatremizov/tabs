@@ -1,39 +1,57 @@
 #!/bin/sh
-# update-version.sh: Update version in manifest-ff.json with unique timestamp+hash
+# update-version.sh: Update version in manifests with SemVer + build counter
 
 set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-MANIFEST="$ROOT_DIR/manifest-ff.json"
 
-# Create a unique, monotonically increasing build number: YYMMHHMMS
-# Firefox allows max 4 version parts, each up to 9 digits
-# Format: 0.0.1.YYMMHHMMS where S = seconds/10 (10-second resolution)
-# This is always increasing and readable: 2601143025 = Jan 2026, 14:30:2X
+# Cross-browser version format (Chrome + Firefox):
+#   MAJOR.MINOR.PATCH.BUILD
+# - 4 numeric parts, each <= 65535 (Chrome limit)
+# - no leading zeros in non-zero parts
+# - BUILD increments on each release build for fast deploys
+VERSION_FILE="$ROOT_DIR/VERSION"
+BUILD_FILE="$ROOT_DIR/VERSION_BUILD"
 
-# Get date/time components
-YY=$(date +%y)
-MM=$(date +%m)
-HH=$(date +%H)
-MIN=$(date +%M)
-SS=$(date +%S | sed 's/^0*//')
-SS=${SS:-0}  # Handle empty string if SS was "00"
+BASE_VERSION=$(cat "$VERSION_FILE")
+IFS='.' read -r MAJOR MINOR PATCH <<EOF
+$BASE_VERSION
+EOF
 
-# Seconds divided by 10 (0-9 for each 10-second window)
-S=$((SS / 10))
+if [ -z "${MAJOR:-}" ] || [ -z "${MINOR:-}" ] || [ -z "${PATCH:-}" ]; then
+  echo "Invalid VERSION format, expected MAJOR.MINOR.PATCH in $VERSION_FILE" >&2
+  exit 1
+fi
 
-NEW_VERSION="0.0.1.${YY}${MM}${HH}${MIN}${S}"
+BUILD=0
+if [ -f "$BUILD_FILE" ]; then
+  BUILD=$(cat "$BUILD_FILE")
+fi
+
+BUILD=$((BUILD + 1))
+
+if [ "$BUILD" -gt 65535 ]; then
+  echo "BUILD overflow (>65535). Reset BUILD or bump VERSION." >&2
+  exit 1
+fi
+
+NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}.${BUILD}"
 
 echo "Updating version to: $NEW_VERSION"
 
-# Update version in manifest-ff.json using sed
-# Works on both macOS and Linux
+MANIFESTS="$ROOT_DIR/manifest.json $ROOT_DIR/manifest-ff.json"
+
+# Update version in manifests using sed (GNU/BSD compatible)
 if sed --version >/dev/null 2>&1; then
-  # GNU sed
-  sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$NEW_VERSION\"/" "$MANIFEST"
+  for manifest in $MANIFESTS; do
+    sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$NEW_VERSION\"/" "$manifest"
+  done
 else
-  # BSD sed (macOS)
-  sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$NEW_VERSION\"/" "$MANIFEST"
+  for manifest in $MANIFESTS; do
+    sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$NEW_VERSION\"/" "$manifest"
+  done
 fi
 
-echo "Version updated in manifest-ff.json"
+echo "$BUILD" > "$BUILD_FILE"
+
+echo "Version updated in: $MANIFESTS"
