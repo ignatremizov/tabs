@@ -2,7 +2,7 @@
 # Copyright (C) 2025 Selene ToyKeeper
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-.PHONY: all help firefox-zip chrome-zip firefox-sign test todo coverage
+.PHONY: all help firefox-zip chrome-zip chrome-dir firefox-sign bump test todo coverage
 
 all: firefox-zip chrome-zip
 

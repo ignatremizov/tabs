@@ -124,14 +124,53 @@ Install from your browser's app store, ideally.  It boosts the numbers in the
 app store and helps this extension gain more visibility.  It also allows easier
 updates, in case you want updates when a new version is released.
 
-However, installing from source is easy:
+However, installing from source is possible too:
 
-- In Chromium-based browsers, you can "load unpacked extension" straight from
-  a fresh git source repository, without compiling or installing anything.
+### Chrome
 
-- In Firefox, just run `make` to generate a compatible .zip file.  All it does
-  is copy some files and zip them.  Then you should be able to load that .zip
-  file as an extension.
+In Chromium-based browsers:
+
+- Enable "developer mode" in the browser's extensions page.
+- `git clone --tags https://github.com/ignatremizov/tabs.git`
+- `cd tabs`
+- `make chrome-dir`
+- Use "load unpacked extension" in the browser, to load the copy in
+  `dist/chromium`.
+
+This process mostly just copies all the files into `active/`.  If you set
+`EXT_NAME` in `.env`, the build step will override the manifest name.
+
+Upstream: https://github.com/ToyKeeper/tktsto
+
+### Firefox
+
+In Firefox, it's necessary to sign the extension because most 2025-and-later
+versions won't run unsigned extensions even if you configure it to not require
+signatures.  If you're lucky enough to be able to run unsigned extensions, then
+just run `make` to generate a compatible .zip file, and load it from the
+`dist/` dir.  You can still load a temporary unsigned extension via
+`about:debugging#/runtime/this-firefox`.  Otherwise, try the following...
+
+Create an account and API keys at https://addons.mozilla.org/developers/
+(under "API Keys").
+
+Create a `.env` file containing a few settings:
+
+```sh
+# get these from your account at addons.mozilla.org/developers
+JWT_ISSUER=user:XXXXXXXX:XXX
+JWT_SECRET=your_amo_api_secret
+
+# set your own extension ID and name here
+EXT_NAME="TK Tree Style Tab Outliner (My Name's personal build)"
+FF_EXT_ID="your-email-address+tktsto@your-email-domain.com"
+```
+
+Run `make firefox-sign`.
+
+Install the `.xpi` file.
+
+### Server
 
   **Note:** Firefox builds require version 142+ due to the mandatory
   `data_collection_permissions` field (required for Firefox desktop 140+ and
@@ -166,6 +205,11 @@ You can also open individual tests:
 
 Tests use a simple browser-based framework with no external dependencies,
 following the project's vanilla JavaScript philosophy.
+
+## AI-assisted contributions
+
+AI assistance is allowed, with contributor responsibility for review, testing,
+and licensing.  See [AI Contribution Policy](AI_POLICY.md) for details.
 
 
 ## Usage
@@ -395,11 +439,10 @@ General project stuff:
 
 - [x] Git repo
 - [x] Chat / community server
-- [ ] GitHub project
+- [x] GitHub project
 - [ ] GitHub bug template
-- [ ] Code of conduct
-- [ ] Contributor agreement (like, verify you actually wrote the code you're
-  contributing, and agree to the code of conduct)
+- [x] Code of conduct, DCO, AI policy
+- [ ] CLA (optional; not planned)
 - [ ] Upload official builds to extension stores for each browser
 
 
