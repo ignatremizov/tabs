@@ -1,0 +1,111 @@
+<!-- docs/dev-node-ids.html: Developer notes on node ID flow -->
+<!-- Copyright (C) 2025 Ignat Remizov -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html>
+<head>
+<title>Node ID Flow (Developer Notes)</title>
+<style><!--
+body {
+  font-size: 1.2rem;
+  line-height: 1.5;
+}
+code {
+  background: #f5f5f5;
+  padding: 0 0.2rem;
+}
+--></style>
+</head>
+<body>
+
+  <h1>Node ID Flow (Developer Notes)</h1>
+
+  <p>
+  This document explains how node IDs are generated, distributed, and stored.
+  IDs are currently treated as opaque strings by the app, but their structure
+  enables future tooling like ordering by creation time or ID validation.
+  </p>
+
+  <h2>ID format</h2>
+  <p>
+  IDs are created by <code>IdGenerator</code> in <code>common/id-generator.js</code>.
+  The format is <code>date-seq-name</code>:
+  </p>
+  <ul>
+    <li><code>date</code>: base32 timestamp (ms resolution)</li>
+    <li><code>seq</code>: base32 sequence counter (optional if zero)</li>
+    <li><code>name</code>: client ID (sanitized hostname or user ID)</li>
+  </ul>
+  <p>
+  Base32 encoding uses Crockford-style digits in <code>common/base32.js</code>.
+  Decode is available for future use, but the app currently treats IDs as opaque.
+  </p>
+
+  <h2>Where IDs are generated</h2>
+  <p>
+  IDs are generated only in the background service worker:
+  </p>
+  <ul>
+    <li>
+      <code>bkgd/bkgd.js</code> initializes <code>IdGenerator</code> and exposes
+      <code>bkgd_newNodeId</code> for the UI to request new IDs.
+    </li>
+    <li>
+      <code>bkgd/nodestore.js</code> uses <code>IdGenerator</code> directly when
+      background code creates nodes.
+    </li>
+  </ul>
+
+  <h2>UI flow (NodeView)</h2>
+  <ol>
+    <li>
+      The view requests an ID via <code>emit('bkgd_newNodeId')</code>
+      in <code>view/nodeview.js</code>.
+    </li>
+    <li>
+      The background replies with <code>IdGenerator.newId()</code>.
+    </li>
+    <li>
+      The view uses that ID when creating a new node in the tree.
+    </li>
+  </ol>
+
+  <h2>Background flow (NodeStore)</h2>
+  <ol>
+    <li>
+      Background code creates nodes through <code>NodeStore.addChild()</code>
+      in <code>bkgd/nodestore.js</code>.
+    </li>
+    <li>
+      If no ID is supplied, <code>NodeStore.newNodeId()</code> allocates one
+      via <code>IdGenerator</code>.
+    </li>
+    <li>
+      The node is saved into IndexedDB (see <code>bkgd/idb.js</code>).
+    </li>
+  </ol>
+
+  <h2>Where IDs are used</h2>
+  <ul>
+    <li>
+      Primary key for nodes in memory (<code>Tree.nodes</code> cache).
+    </li>
+    <li>
+      IndexedDB key for stored nodes (object store <code>Nodes</code>).
+    </li>
+    <li>
+      Message payload references (e.g., move/delete events).
+    </li>
+    <li>
+      DOM node identifiers in the view (<code>node${id}</code>).
+    </li>
+  </ul>
+
+  <h2>Potential future uses</h2>
+  <ul>
+    <li>Sync/merge tooling that compares creation times.</li>
+    <li>Debug tools that search or jump to a node by ID.</li>
+    <li>Import/migration workflows that validate or normalize IDs.</li>
+  </ul>
+
+</body>
+</html>

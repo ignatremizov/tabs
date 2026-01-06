@@ -416,6 +416,9 @@ Client (browser extension):
     - [ ] Built-in help pages
     - [ ] Styling
 
+Developer notes:
+- `docs/dev/dev-node-ids.html` – Node ID generation flow and future use cases.
+
 Server:
 
 - [ ] Select a server framework (probably python + fastapi)

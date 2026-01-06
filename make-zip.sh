@@ -64,6 +64,9 @@ for d in $SUBDIRS ; do
   done
 done
 
+# Remove developer-only docs from packaged builds.
+rm -rf build/docs/dev
+
 mkdir -p dist
 cd build
 ZIPFILE=../dist/"$PROGRAM"-"$VERSION"-"$BROWSER".zip
