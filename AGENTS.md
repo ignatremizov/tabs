@@ -10,6 +10,9 @@ TKTSTO is a **Manifest V3 browser extension** that provides:
 - Cross-browser compatibility (Chrome, Firefox, Edge, Brave, Vivaldi)
 - Local backups and future sync capabilities
 
+When working on tasks, fix obvious logic errors you notice along the way, and
+add tests for them when practical.
+
 **License:** AGPL-3.0-or-later  
 **Language:** Vanilla JavaScript (ES modules, no build tools or npm dependencies)
 
