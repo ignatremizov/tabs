@@ -37,6 +37,7 @@ export class Bkgd {
     this.treeLoaded = new Promise(resolve => {
       this.resolveTreeLoaded = resolve;
     });
+    this.backupQueued = false;
 
     // queues for saved nodes which are in the process of being loaded
     // (empty except during brief moments before browser opens stuff)
@@ -177,15 +178,35 @@ export class Bkgd {
   }
 
   async initLocalBackupAlarm (reset = false) {
-    const stored = await api.storage.local.get('localBackupInterval');
+    const stored = await api.storage.local.get([
+      'localBackupInterval',
+      'lastBackupTime',
+      'backupOnStartup'
+    ]);
     let interval = stored.localBackupInterval;
     const alarm = await api.alarms.get(this.localBackupAlarmName);
     // 0.5 minutes is the shortest the browser allows
     const backupDisabled = (! interval) || (interval < 0.5);
 
-    // TODO: check last backup time, and if last + interval < now, backup now
+    // check last backup time, and if last + interval < now, backup now
     // because sometimes alarms don't persist across browser restarts, and
     // if a user sets interval=24h but they restart daily, it may never fire
+    if (! backupDisabled && (stored.backupOnStartup !== false)) {
+      const lastBackupTime = stored.lastBackupTime;
+      const intervalMs = interval * 60 * 1000;
+      if (lastBackupTime && ((Date.now() - lastBackupTime) >= intervalMs)) {
+        if (! this.backupQueued) {
+          this.backupQueued = true;
+          this.treeLoaded.then(async () => {
+            try {
+              await this.tree.downloadBackupNow();
+            } finally {
+              this.backupQueued = false;
+            }
+          });
+        }
+      }
+    }
 
     debug(`Bkgd.initLocalBackupAlarm: reset=${reset} interval=${interval}, alarm=${alarm}, backupDisabled=${backupDisabled}`);
 
@@ -326,7 +347,9 @@ export class Bkgd {
       }
     }
 
-    console.timeEnd('mergeOpenWindowsIntoTree');
+    if (! globalThis.__TKTSTO_TEST_QUIET__) {
+      console.timeEnd('mergeOpenWindowsIntoTree');
+    }
     log('mergeOpenWindowsIntoTree() done');
   }
 

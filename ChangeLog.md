@@ -85,6 +85,8 @@ development yet.
   - Prevent ID generator collisions across restarts and document ID flow.
   - Add cache-busting imports for browser tests and extend ID generator tests.
   - Skip self-emitted tree messages to avoid double-applied deletes (and tests).
+  - Trigger overdue backups on startup and store last backup time.
+  - Add backup startup behavior toggle in Options.
 - 2026-01-04:
   - Refined window delete behavior to unload root windows while preserving tabs as wasLoaded.
   - Added mergeOpenWindowsIntoTree de-dup guard, tests, and window delete tutorial updates.

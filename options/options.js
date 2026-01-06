@@ -29,10 +29,14 @@ function initBackupsForm () {
 
   // automatic local backup interval
   const $localBackupHours = document.getElementById('localBackupHours');
+  const $backupOnStartup = document.getElementById('backupOnStartup');
   api.storage.local.get(['localBackupInterval'], (result) => {
     if (undefined !== result.localBackupInterval) {
       $localBackupHours.value = result.localBackupInterval / 60;
     }
+  });
+  api.storage.local.get({ backupOnStartup: true }).then((result) => {
+    $backupOnStartup.checked = result.backupOnStartup;
   });
   let localBackupHoursDebounceTimer;
   $localBackupHours.addEventListener("input", () => {
@@ -51,6 +55,9 @@ function initBackupsForm () {
       api.storage.local.set({ localBackupInterval: minutes });
       debug(`User set localBackupInterval = ${minutes} minutes`);
     }, 3000); // 3 second debounce delay
+  });
+  $backupOnStartup.addEventListener('click', () => {
+    api.storage.local.set({ backupOnStartup: $backupOnStartup.checked });
   });
 }
 

@@ -261,6 +261,7 @@ export class Tree {
     await this.treeLoaded;  // wait until tree is ready
 
     const when = new Date();
+    const whenMs = Number(when);
     // determine whether to pretty-print the data
     let prettyPrint = 0;
     const result = await api.storage.local.get('humanFriendlyBackups');
@@ -300,7 +301,10 @@ export class Tree {
       saveAs: false
     });
     let downloadId;
-    function onStarted (id) { downloadId = id; }
+    function onStarted (id) {
+      downloadId = id;
+      api.storage.local.set({ lastBackupTime: whenMs });
+    }
     function progress (delta) {
       //debug('Download delta', delta);
       if ((delta.id === downloadId)

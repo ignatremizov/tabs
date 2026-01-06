@@ -62,6 +62,15 @@
       if (!api.windows.remove) api.windows.remove = async () => {};
       if (!api.windows.get) api.windows.get = async () => ({});
 
+      if (!api.downloads) api.downloads = {};
+      if (!api.downloads.download) api.downloads.download = async () => (1);
+      if (!api.downloads.onChanged) {
+        api.downloads.onChanged = {
+          addListener: () => {},
+          removeListener: () => {}
+        };
+      }
+
       if (!api.storage) api.storage = {};
       if (!api.storage.local) {
         const localStore = {};
@@ -1019,6 +1028,22 @@
         assertEqual(base32decode('a'), base32decode('A'));
         assertEqual(base32decode('z'), base32decode('Z'));
         assertEqual(base32decode('10a'), base32decode('10A'));
+      });
+
+      test('downloadBackupNow stores lastBackupTime', async () => {
+        const tree = createTree();
+        const api = getApi();
+        const before = Date.now();
+        const originalDownload = api.downloads.download;
+        api.downloads.download = async () => (1);
+        try {
+          await tree.downloadBackupNow();
+          await new Promise(r => setTimeout(r, 0));
+          const stored = await api.storage.local.get('lastBackupTime');
+          assert(stored.lastBackupTime >= before, 'Should persist lastBackupTime');
+        } finally {
+          api.downloads.download = originalDownload;
+        }
       });
 
       test('Tree ignores own tree_* messages', async () => {

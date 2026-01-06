@@ -2,7 +2,15 @@
 # Copyright (C) 2025 Selene ToyKeeper & Ignat Remizov
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-.PHONY: all help firefox-zip chrome-zip chrome-dir firefox-sign tag test todo coverage
+.PHONY: all help firefox-zip chrome-zip chrome-dir firefox-sign tag test todo coverage v
+
+ifneq ($(filter v,$(MAKECMDGOALS)),)
+VERBOSE=1
+MAKECMDGOALS := $(filter-out v,$(MAKECMDGOALS))
+endif
+
+v:
+	@:
 
 all: firefox-zip chrome-zip
 
@@ -48,6 +56,8 @@ endif
 
 # Open unit tests in browser
 test:
+	@echo "Running node-based tests..."
+	@TKTSTO_TEST_VERBOSE=$(if $(filter 1 true yes,$(VERBOSE) $(V)),1,) node --import 'data:text/javascript,import { register } from "node:module"; import { pathToFileURL } from "node:url"; register("./tests/node/loader.mjs", pathToFileURL("./"));' ./tests/node/run-tests.mjs
 	@echo "Starting local test server at http://127.0.0.1:8765 ..."
 	@python3 -m http.server 8765 --directory . >/dev/null 2>&1 & echo $$! > /tmp/tktsto-test-server.pid
 	@sleep 0.5

@@ -5,6 +5,7 @@
 "use strict";
 
 globalThis.__TKTSTO_TEST__ = true;
+globalThis.__TKTSTO_TEST_QUIET__ = !process.env.TKTSTO_TEST_VERBOSE;
 
 if (!globalThis.chrome) {
   globalThis.chrome = {
@@ -26,7 +27,12 @@ if (!globalThis.chrome) {
       onChanged: { addListener: () => {} }
     },
     commands: { onCommand: { addListener: () => {} } },
-    alarms: { onAlarm: { addListener: () => {} } },
+    alarms: {
+      onAlarm: { addListener: () => {} },
+      get: async () => null,
+      clear: async () => {},
+      create: async () => {}
+    },
     sidePanel: { setPanelBehavior: async () => {} }
   };
 }
@@ -129,6 +135,67 @@ test('mergeOpenWindowsIntoTree assigns unique window nodes', async () => {
   assertEqual(uniqueIds.size, 2, 'Window nodes should be unique');
   assert(uniqueIds.has(60), 'Should attach window 60');
   assert(uniqueIds.has(1098), 'Should attach window 1098');
+});
+
+test('initLocalBackupAlarm triggers overdue backup', async () => {
+  const originalGet = api.storage.local.get;
+  const originalSet = api.storage.local.set;
+  const originalAlarmsGet = api.alarms.get;
+  const originalAlarmsCreate = api.alarms.create;
+  const originalAlarmsClear = api.alarms.clear;
+  try {
+    api.storage.local.get = async () => ({
+      localBackupInterval: 1,
+      lastBackupTime: Date.now() - 120000,
+      backupOnStartup: true
+    });
+    api.storage.local.set = async () => ({});
+    api.alarms.get = async () => null;
+    api.alarms.create = async () => {};
+    api.alarms.clear = async () => {};
+
+    const bkgd = new Bkgd();
+    let backupCalls = 0;
+    bkgd.tree = { downloadBackupNow: async () => { backupCalls += 1; } };
+    bkgd.resolveTreeLoaded();
+    await bkgd.initLocalBackupAlarm();
+    await new Promise(r => setTimeout(r, 0));
+    assertEqual(backupCalls, 1, 'Should run overdue backup once');
+    assertEqual(bkgd.backupQueued, false, 'Backup queue should reset');
+  } finally {
+    api.storage.local.get = originalGet;
+    api.storage.local.set = originalSet;
+    api.alarms.get = originalAlarmsGet;
+    api.alarms.create = originalAlarmsCreate;
+    api.alarms.clear = originalAlarmsClear;
+  }
+});
+
+test('initLocalBackupAlarm respects backupOnStartup false', async () => {
+  const originalGet = api.storage.local.get;
+  const originalAlarmsGet = api.alarms.get;
+  const originalAlarmsCreate = api.alarms.create;
+  try {
+    api.storage.local.get = async () => ({
+      localBackupInterval: 1,
+      lastBackupTime: Date.now() - 120000,
+      backupOnStartup: false
+    });
+    api.alarms.get = async () => null;
+    api.alarms.create = async () => {};
+
+    const bkgd = new Bkgd();
+    let backupCalls = 0;
+    bkgd.tree = { downloadBackupNow: async () => { backupCalls += 1; } };
+    bkgd.resolveTreeLoaded();
+    await bkgd.initLocalBackupAlarm();
+    await new Promise(r => setTimeout(r, 0));
+    assertEqual(backupCalls, 0, 'Should not run overdue backup');
+  } finally {
+    api.storage.local.get = originalGet;
+    api.alarms.get = originalAlarmsGet;
+    api.alarms.create = originalAlarmsCreate;
+  }
 });
 
 async function runTests() {

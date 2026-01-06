@@ -6,10 +6,12 @@
 import { api, isChrome, isFirefox } from '/api.js';
 
 export function debug (...args) {
+  if (globalThis.__TKTSTO_TEST_QUIET__) return;
   console.debug(...args);
 }
 
 export function log (...args) {
+  if (globalThis.__TKTSTO_TEST_QUIET__) return;
   console.log(...args);
 }
 
