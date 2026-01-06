@@ -5,49 +5,12 @@
 "use strict";
 import { api, isChrome, isFirefox } from '/api.js';
 
-import { log, warn, debug, emit, sanitizeClientId } from '/common/common.js';
+import { log, warn, debug, emit } from '/common/common.js';
 import { buildEventName } from '/common/events.js';
 import { defaultKeyBindings, keyBindingActions } from '/common/keybindings.js';
+import { initClientIdForm } from '/options/client-id-form.js';
 
 log('options.js running');
-
-function initClientIdForm () {
-  const form = document.getElementById('options-form');
-  const clientIdInput = document.getElementById('client-id');
-
-  // load saved client ID
-  api.storage.local.get('clientId').then((result) => {
-    if (result.clientId) {
-      clientIdInput.value = result.clientId;
-    }
-  });
-
-  clientIdInput.addEventListener('blur', () => {
-    const rawClientId = clientIdInput.value;
-    const clientId = sanitizeClientId(rawClientId);
-    if (clientId !== rawClientId) clientIdInput.value = clientId;
-  });
-
-  // save on form submit
-  form.addEventListener('submit', (event) => {
-    event.preventDefault();
-    const rawClientId = clientIdInput.value;
-    const clientId = sanitizeClientId(rawClientId);
-    if (! clientId) {
-      warn('Client ID must contain letters or numbers.');
-      alert('Client ID must contain letters or numbers.');
-      return;
-    }
-    if (clientId !== rawClientId) clientIdInput.value = clientId;
-    api.storage.local.set({ clientId }).then(() => {
-      alert('Saved!');
-    });
-    api.runtime.sendMessage({
-      'msg':'bkgd_setClientId',
-      'clientId': clientId
-    });
-  });
-}
 
 function initBackupsForm () {
   // humanFriendlyBackups checkbox

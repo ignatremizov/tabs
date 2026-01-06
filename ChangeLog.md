@@ -2,8 +2,6 @@
 
 What changed, and when?  You know the drill.
 
-# Next
-- Sanitize client IDs in Options/background and note it in the Options UI.
 
 # 0.0.1.0 (2025-05-19)
 
@@ -65,6 +63,9 @@ Known issues:
 # History (by month)
 
 ## 2026-01
+- 2026-01-06: 
+  - Sanitize client IDs in Options/background and note it in the Options UI.
+  - Add client ID flow integration coverage and options form tests.
 - 2026-01-04:
   - Refined window delete behavior to unload root windows while preserving tabs as wasLoaded.
   - Added mergeOpenWindowsIntoTree de-dup guard, tests, and window delete tutorial updates.

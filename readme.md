@@ -202,9 +202,12 @@ make test
 You can also open individual tests:
 - `http://127.0.0.1:8765/tests/dom-safety.test.html`
 - `http://127.0.0.1:8765/tests/tree-node.test.html` (use `?env=firefox` or `?env=chrome` to force rules)
+- `http://127.0.0.1:8765/tests/client-id-flow.test.html`
 
 Tests use a simple browser-based framework with no external dependencies,
 following the project's vanilla JavaScript philosophy.
+
+Manual check: in Options, client ID should sanitize on blur and reject empty input.
 
 ## AI-assisted contributions
 

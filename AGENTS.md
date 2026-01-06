@@ -570,14 +570,26 @@ Before committing, verify:
 
 ### Unit Tests
 
-Browser-based unit tests are located in `tests/`. Run them with `make test` (starts a local HTTP server and opens the pages), or open the test pages via `http://` (module-based tests won't run from `file://` due to browser CORS rules).
+#### Browser-based tests
+
+Browser-based tests live in `tests/`. Run them with `make test` (starts a local HTTP server and opens the pages), or open the test pages via `http://` (module-based tests won't run from `file://` due to browser CORS rules).
 
 | Test File | Purpose |
 |-----------|----------|
 | `dom-safety.test.html` | Tests for XSS prevention - verifies that DOM rendering uses safe methods (`textContent`, `createElement`) instead of `innerHTML` |
-| `tree-node.test.html` | Tests for Tree/Node behavior, including browser event ordering edge cases |
+| `tree-node.test.html` | Tests for Tree/Node behavior, plus shared utilities and options form sanitization |
+| `client-id-flow.test.html` | Tests for the background client ID handler, storage updates, and IdGenerator state |
+| `merge-open-windows.test.html` | Tests for mergeOpenWindowsIntoTree matching across browsers |
+| `delete-window-behavior.test.html` | Tests for unload/delete behavior and window handling across browsers |
 
-`tree-node.test.html` supports `?env=firefox` and `?env=chrome` to force browser-specific rules; otherwise it auto-detects via user agent.
+`tree-node.test.html`, `merge-open-windows.test.html`, and `delete-window-behavior.test.html` support `?env=firefox` and `?env=chrome` to force browser-specific rules; otherwise they auto-detect via user agent.
+
+#### Node-based tests and coverage
+
+`tests/node/` provides a Node-based runner for core modules with API stubs.
+
+- Run `node tests/node/run-tests.mjs` for quick checks.
+- Run `make coverage` to collect V8 coverage and update the badge in `readme.md`.
 
 #### Writing New Tests
 
@@ -597,6 +609,9 @@ test('description of what is being tested', () => {
 });
 ```
 
+For browser tests that touch `api.*`, mock `window.browser`/`window.chrome` before importing modules (see `tests/client-id-flow.test.html`).
+For Node-based tests, follow `tests/node/run-tests.mjs` and update coverage if you add new core cases.
+
 **Guidelines for test payloads:**
 - Avoid using actual `alert()` calls in test strings
 - When testing `<script>` tag escaping, split the string: `'<scr' + 'ipt>'` to prevent the browser from interpreting it as closing the main script block
@@ -610,6 +625,7 @@ Before releasing:
 1. **Basic Functionality**
    - [ ] Extension loads without errors
    - [ ] Side panel opens and displays tree
+   - [ ] Client ID sanitizes on blur and rejects empty input in Options
    - [ ] Can create, edit, delete nodes
    - [ ] Can load/unload tabs
    - [ ] Drag-and-drop works
@@ -646,8 +662,8 @@ console.log(bkgd.tree.nodes);
 
 Areas that could benefit from additional test coverage:
 
-1. **Unit Tests** - Test individual classes (`Node`, `Tree`) in isolation
-2. **Integration Tests** - Test message passing between view and background
+1. **Unit Tests** - Expand core class coverage in Node-based tests
+2. **Integration Tests** - Grow message-passing coverage beyond client ID flows
 3. **E2E Tests** - Use Puppeteer/Playwright for browser automation
 
 New test files should follow the pattern established in `tests/dom-safety.test.html`:

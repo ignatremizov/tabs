@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<!-- client-id-flow.test.html: tests for client ID handler -->
+<!-- Copyright (C) 2025 Ignat Remizov -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Client ID Flow Tests</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 20px; }
+    .test-pass { color: green; }
+    .test-fail { color: red; font-weight: bold; }
+    .test-section { margin: 20px 0; padding: 10px; border: 1px solid #ccc; }
+    #summary { font-size: 1.2em; padding: 10px; margin-bottom: 20px; }
+    #summary.all-pass { background: #dfd; }
+    #summary.has-fail { background: #fdd; }
+  </style>
+</head>
+<body>
+  <h1>Client ID Flow Tests</h1>
+  <div id="summary"></div>
+  <div id="results"></div>
+
+  <script>
+    const storageStore = {};
+    window.__TKTSTO_TEST__ = true;
+    window.browser = {
+      runtime: {
+        onConnect: { addListener: () => {} },
+        onMessage: { addListener: () => {} },
+        sendMessage: async () => ({})
+      },
+      storage: {
+        local: {
+          get: async (keys) => {
+            if (!keys) return { ...storageStore };
+            if ('string' === typeof keys) return { [keys]: storageStore[keys] };
+            if (Array.isArray(keys)) {
+              const result = {};
+              for (const key of keys) result[key] = storageStore[key];
+              return result;
+            }
+            if (keys && ('object' === typeof keys)) {
+              const result = {};
+              for (const key of Object.keys(keys)) {
+                result[key] = (key in storageStore) ? storageStore[key] : keys[key];
+              }
+              return result;
+            }
+            return {};
+          },
+          set: async (items) => {
+            Object.assign(storageStore, items);
+          }
+        }
+      }
+    };
+  </script>
+  <script type="module">
+    "use strict";
+
+    const tests = [];
+
+    function test(name, fn) {
+      tests.push({ name, fn });
+    }
+
+    function assert(condition, message) {
+      if (!condition) {
+        throw new Error(message || 'Assertion failed');
+      }
+    }
+
+    function assertEqual(actual, expected, message) {
+      if (actual !== expected) {
+        throw new Error(message || `Expected "${expected}" but got "${actual}"`);
+      }
+    }
+
+    async function main() {
+      const $summary = document.getElementById('summary');
+      if ('file:' === location.protocol) {
+        $summary.textContent = 'Run via http (example: python3 -m http.server).';
+        $summary.className = 'has-fail';
+        return;
+      }
+
+      let api;
+      let Bkgd;
+      let IdGenerator;
+      try {
+        const [apiMod, bkgdMod, idMod] = await Promise.all([
+          import('../api.js'),
+          import('../bkgd/bkgd.js'),
+          import('../common/id-generator.js')
+        ]);
+        api = apiMod.api;
+        Bkgd = bkgdMod.Bkgd;
+        IdGenerator = idMod.IdGenerator;
+      } catch (err) {
+        $summary.textContent = `Failed to load modules: ${err}`;
+        $summary.className = 'has-fail';
+        return;
+      }
+
+      const bkgd = new Bkgd();
+      bkgd.clientId = 'AA';
+      bkgd.idGen = new IdGenerator(bkgd.clientId, 9, 2);
+      bkgd.resolveConfigLoaded();
+
+      test('bkgd_setClientId sanitizes and persists', async () => {
+        const response = await bkgd.bkgd_setClientId({ clientId: 'ab-12' });
+        assertEqual(response.clientId, 'ab12');
+        const stored = await api.storage.local.get('clientId');
+        assertEqual(stored.clientId, 'ab12');
+        assertEqual(bkgd.idGen.name, 'ab12');
+      });
+
+      test('bkgd_setClientId rejects invalid values', async () => {
+        const response = await bkgd.bkgd_setClientId({ clientId: '###' });
+        assert(response && response.error, 'Expected error response');
+        const stored = await api.storage.local.get('clientId');
+        assertEqual(stored.clientId, 'ab12');
+        assertEqual(bkgd.idGen.name, 'ab12');
+      });
+
+      const results = [];
+      for (const t of tests) {
+        try {
+          await t.fn();
+          results.push({ name: t.name, pass: true });
+        } catch (err) {
+          results.push({
+            name: t.name,
+            pass: false,
+            error: err && err.message ? err.message : String(err)
+          });
+        }
+      }
+
+      const $results = document.getElementById('results');
+      let passCount = 0;
+      let failCount = 0;
+      for (const result of results) {
+        const $div = document.createElement('div');
+        $div.className = 'test-section';
+        const $status = document.createElement('span');
+        const $name = document.createTextNode(' ' + result.name);
+        if (result.pass) {
+          passCount++;
+          $status.className = 'test-pass';
+          $status.textContent = 'PASS:';
+        } else {
+          failCount++;
+          $status.className = 'test-fail';
+          $status.textContent = 'FAIL:';
+          const $error = document.createElement('div');
+          $error.textContent = result.error;
+          $div.appendChild($error);
+        }
+        $div.appendChild($status);
+        $div.appendChild($name);
+        $results.appendChild($div);
+      }
+
+      $summary.textContent = `${passCount} passed, ${failCount} failed.`;
+      $summary.className = failCount ? 'has-fail' : 'all-pass';
+    }
+
+    main();
+  </script>
+</body>
+</html>

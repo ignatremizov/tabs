@@ -61,6 +61,38 @@
       if (!api.windows) api.windows = {};
       if (!api.windows.remove) api.windows.remove = async () => {};
       if (!api.windows.get) api.windows.get = async () => ({});
+
+      if (!api.storage) api.storage = {};
+      if (!api.storage.local) {
+        const localStore = {};
+        api.storage.local = {
+          _store: localStore,
+          get: async (keys) => {
+            if (! keys) return { ...localStore };
+            if ('string' === typeof keys) return { [keys]: localStore[keys] };
+            if (Array.isArray(keys)) {
+              const result = {};
+              for (const key of keys) result[key] = localStore[key];
+              return result;
+            }
+            if (keys && ('object' === typeof keys)) {
+              const result = {};
+              for (const key of Object.keys(keys)) {
+                result[key] = (key in localStore) ? localStore[key] : keys[key];
+              }
+              return result;
+            }
+            return {};
+          },
+          set: async (items) => {
+            Object.assign(localStore, items);
+          }
+        };
+      }
+      if (!api.storage.onChanged) api.storage.onChanged = {};
+      if (!api.storage.onChanged.addListener) {
+        api.storage.onChanged.addListener = () => {};
+      }
     }
 
     if ('firefox' === env) {
@@ -93,16 +125,19 @@
       let Node;
       let isIllegalURL;
       let sanitizeClientId;
+      let initClientIdForm;
       try {
-        const [treeMod, nodeMod, commonMod] = await Promise.all([
+        const [treeMod, nodeMod, commonMod, optionsMod] = await Promise.all([
           import('../common/tree.js'),
           import('../common/node.js'),
-          import('../common/common.js')
+          import('../common/common.js'),
+          import('../options/client-id-form.js')
         ]);
         Tree = treeMod.Tree;
         Node = nodeMod.Node;
         isIllegalURL = commonMod.isIllegalURL;
         sanitizeClientId = commonMod.sanitizeClientId;
+        initClientIdForm = optionsMod.initClientIdForm;
       } catch (err) {
         $summary.textContent = `Failed to load modules: ${err}`;
         $summary.className = 'has-fail';
@@ -175,6 +210,43 @@
 
       function getApi() {
         return ('firefox' === env) ? window.browser : window.chrome;
+      }
+
+      function createStorageMock(initial = {}) {
+        const store = { ...initial };
+        const local = {
+          get: async (keys) => {
+            if (! keys) return { ...store };
+            if ('string' === typeof keys) return { [keys]: store[keys] };
+            if (Array.isArray(keys)) {
+              const result = {};
+              for (const key of keys) result[key] = store[key];
+              return result;
+            }
+            if (keys && ('object' === typeof keys)) {
+              const result = {};
+              for (const key of Object.keys(keys)) {
+                result[key] = (key in store) ? store[key] : keys[key];
+              }
+              return result;
+            }
+            return {};
+          },
+          set: async (items) => {
+            Object.assign(store, items);
+          }
+        };
+        return { store, apiStorage: { local, onChanged: { addListener: () => {} } } };
+      }
+
+      function createClientIdForm() {
+        const form = document.createElement('form');
+        form.id = 'options-form';
+        const input = document.createElement('input');
+        input.id = 'client-id';
+        form.appendChild(input);
+        document.body.appendChild(form);
+        return { form, input };
       }
 
       function skipUnlessFirefox() {
@@ -931,6 +1003,54 @@
         assertEqual(sanitizeClientId('###'), '');
         assertEqual(sanitizeClientId(123), '123');
         assertEqual(sanitizeClientId(null), '');
+      });
+
+      testGroup('Options Client ID Form');
+      test('client ID input sanitizes on blur', async () => {
+        const { form, input } = createClientIdForm();
+        const api = getApi();
+        const originalStorage = api.storage;
+        const storageMock = createStorageMock();
+        api.storage = storageMock.apiStorage;
+        try {
+          initClientIdForm();
+          input.value = 'ab-12_34';
+          input.dispatchEvent(new Event('blur'));
+          assertEqual(input.value, 'ab1234');
+        } finally {
+          api.storage = originalStorage;
+          form.remove();
+        }
+      });
+
+      test('client ID submit rejects empty after sanitization', async () => {
+        const { form, input } = createClientIdForm();
+        const api = getApi();
+        const originalStorage = api.storage;
+        const originalSendMessage = api.runtime.sendMessage;
+        const originalAlert = window.alert;
+        const storageMock = createStorageMock();
+        const sentMessages = [];
+        let alertMessage = null;
+        api.storage = storageMock.apiStorage;
+        api.runtime.sendMessage = async (msg) => {
+          sentMessages.push(msg);
+          return {};
+        };
+        window.alert = (msg) => { alertMessage = msg; };
+        try {
+          initClientIdForm();
+          input.value = '###';
+          form.dispatchEvent(new Event('submit', { cancelable: true }));
+          assertEqual(alertMessage, 'Client ID must contain letters or numbers.');
+          assertEqual(sentMessages.length, 0, 'Should not send message');
+          assertEqual(storageMock.store.clientId, undefined, 'Should not save ID');
+        } finally {
+          api.storage = originalStorage;
+          api.runtime.sendMessage = originalSendMessage;
+          window.alert = originalAlert;
+          form.remove();
+        }
       });
 
       async function runTests() {
