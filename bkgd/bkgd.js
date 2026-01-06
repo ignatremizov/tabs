@@ -269,7 +269,7 @@ export class Bkgd {
       // match by windowId (old, unreliable, windowId changes or goes stale)
       //let winNode = this.tree.root.getWindowId(window.id);
       // search for a Window in the tree with matching tabs
-      let winNode = this.tree.findMatchingWindow(window, attachedNodeIds);
+      let winNode = await this.tree.findMatchingWindow(window, attachedNodeIds);
       if (winNode) {
         winNode.load({ reason: 'mergeOpenWindowsIntoTree' });
       }

@@ -88,6 +88,7 @@ development yet.
   - Trigger overdue backups on startup and store last backup time.
   - Add backup startup behavior toggle in Options.
   - Avoid redundant tab moves when the tab is already in place (with test).
+  - Persist tab attachment when matching windows (and cover via tests).
 - 2026-01-04:
   - Refined window delete behavior to unload root windows while preserving tabs as wasLoaded.
   - Added mergeOpenWindowsIntoTree de-dup guard, tests, and window delete tutorial updates.

@@ -88,13 +88,16 @@ test('findMatchingWindow honors exclude list', async () => {
     ]
   };
 
-  const match1 = tree.findMatchingWindow(realWindow);
+  const match1 = await tree.findMatchingWindow(realWindow);
   assert(match1, 'Should match a window node');
 
   const exclude = new Set([match1.id]);
-  const match2 = tree.findMatchingWindow(realWindow, exclude);
+  const match2 = await tree.findMatchingWindow(realWindow, exclude);
   assert(match2, 'Should match a second window node');
   assert(match2.id !== match1.id, 'Exclude list should prevent reuse');
+  const tab = tree.nodes.t1;
+  assertEqual(tab.tabId, 1, 'Should attach tabId to matched node');
+  assertEqual(tab.wasLoaded, false, 'Matched tab should reset wasLoaded');
 });
 
 test('mergeOpenWindowsIntoTree assigns unique window nodes', async () => {

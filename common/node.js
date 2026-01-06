@@ -734,7 +734,8 @@ export class Node {
         this[key] = value;
       }
     }
-    if (undefined !== changes.loaded) this.wasLoaded = changes.loaded;
+    if ((undefined !== changes.loaded) && (!('wasLoaded' in changes)))
+      this.wasLoaded = changes.loaded;
     // bump timestamp
     this.bump('mtime', args);
     // notify others

@@ -1086,7 +1086,7 @@ export class Tree {
   // Further tie-breaking prefers the window with the most metadata,
   // so a window with a label beats one without... and further ties are
   // broken by which window occurs first in the session tree.
-  findMatchingWindow (window, excludeNodeIds) {
+  async findMatchingWindow (window, excludeNodeIds) {
     // find the "needle" (realTabList) in the "haystack"
     //const realTabList = [...window.tabs];
     const realTabList = [];
@@ -1139,19 +1139,18 @@ export class Tree {
           if (tabNode.url === realTab.url) {
             found = true;
             realTab.attached = true;
-            // FIXME: use setTabFields()
-            tabNode.tabId = realTab.id;
-            tabNode.loaded = true;
-            tabNode.wasLoaded = false;
+            await tabNode.setTabFields({
+              tabId: realTab.id,
+              windowId: window.id,
+              loaded: true,
+              wasLoaded: false
+            }, { reason: 'mergeOpenWindowsIntoTree' });
             break;  // stop searching realTabList for this tabNode
           }
         }
         // if a "loaded" tab node wasn't found, assign it as "wasLoaded"
         if ((! found) && tabNode.isLoaded()) {
-          // FIXME: use tabNode.setWasLoaded()
-          // (that would allow for any syncing and stuff to happen)
-          tabNode.loaded = false;
-          tabNode.wasLoaded = true;
+          await tabNode.unload({ reason: 'mergeOpenWindowsIntoTree' });
         }
       }
       return bestMatch.winNode;
