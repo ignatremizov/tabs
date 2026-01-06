@@ -3,6 +3,21 @@
 What changed, and when?  You know the drill.
 
 
+# 0.0.2 (2026-01-06)
+
+Highlights:
+
+- Added configurable keybindings, appearance settings (font/row/indent), and
+  new behavior toggles (tab reorder, root-move window handling).
+- Improved window/tab handling with window wrapping, mergeOpenWindows de-dup,
+  refined window delete behavior, refocus option, and orphan reattach via fsck.
+- Added favicon support with backfill and batch load/unload shortcuts.
+- Hardened DOM rendering against XSS, added client ID sanitization hints, and
+  expanded browser and Node-based test coverage (including V8 coverage output).
+- Added tooling and packaging support (Firefox signing, versioning script,
+  backup archive helper, json2md export tool).
+- Updated manifests and README notes for supported versions and permissions.
+
 # 0.0.1.0 (2025-05-19)
 
 First public release.
@@ -12,7 +27,7 @@ This is alpha software.  To be safe, enable automatic backups!
 The client (browser extension) mostly works, but the server hasn't even started
 development yet.
 
-Supported/tested browsers include:
+# Supported/tested browsers include:
 
 - Firefox 142
 - Chromium 134
@@ -20,8 +35,9 @@ Supported/tested browsers include:
 - Vivaldi 7.3
 - Brave 1.78
 - Ungoogled Chromium 135
+- Maxthon 7.5.2.3100
 
-Known issues:
+# Known issues:
 
 - A bunch of functions and features are not implemented yet.
 
