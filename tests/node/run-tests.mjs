@@ -137,6 +137,36 @@ test('mergeOpenWindowsIntoTree assigns unique window nodes', async () => {
   assert(uniqueIds.has(1098), 'Should attach window 1098');
 });
 
+test('onTabMoved ignores no-op moves', async () => {
+  const tree = createTree(null);
+  const win = await addChild(tree.root, {
+    id: 'w1',
+    type: 'window',
+    windowId: 1,
+    loaded: true
+  });
+  const tab1 = await addChild(win, {
+    id: 't1',
+    tabId: 10,
+    loaded: true
+  });
+  await addChild(win, {
+    id: 't2',
+    tabId: 11,
+    loaded: true
+  });
+
+  let moved = false;
+  const originalMoveTo = tab1.moveTo;
+  tab1.moveTo = async (...args) => {
+    moved = true;
+    return await originalMoveTo.apply(tab1, args);
+  };
+
+  await tree.onTabMoved(10, { fromIndex: 0, toIndex: 0, windowId: 1 });
+  assertEqual(moved, false, 'No-op move should not re-move tab');
+});
+
 test('initLocalBackupAlarm triggers overdue backup', async () => {
   const originalGet = api.storage.local.get;
   const originalSet = api.storage.local.set;

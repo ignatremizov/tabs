@@ -87,6 +87,7 @@ development yet.
   - Skip self-emitted tree messages to avoid double-applied deletes (and tests).
   - Trigger overdue backups on startup and store last backup time.
   - Add backup startup behavior toggle in Options.
+  - Avoid redundant tab moves when the tab is already in place (with test).
 - 2026-01-04:
   - Refined window delete behavior to unload root windows while preserving tabs as wasLoaded.
   - Added mergeOpenWindowsIntoTree de-dup guard, tests, and window delete tutorial updates.
