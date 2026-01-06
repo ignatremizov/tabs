@@ -82,6 +82,8 @@ development yet.
 - 2026-01-06: 
   - Sanitize client IDs in Options/background and note it in the Options UI.
   - Add client ID flow integration coverage and options form tests.
+  - Prevent ID generator collisions across restarts and document ID flow.
+  - Add cache-busting imports for browser tests and extend ID generator tests.
 - 2026-01-04:
   - Refined window delete behavior to unload root windows while preserving tabs as wasLoaded.
   - Added mergeOpenWindowsIntoTree de-dup guard, tests, and window delete tutorial updates.

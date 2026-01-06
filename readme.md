@@ -454,6 +454,8 @@ General project stuff:
 
 ## Known issues / TODOs
 
+Run `make todo` to see all TODO's in the code. The following are issues without code comments:
+
 - [x] Handle Firefox's out-of-order tab/window events (onTabCreated/onTabAttached
   before onWindowCreated); covered by tests in tests/tree-node.test.html.
   Monitor for regressions in Firefox event ordering.

@@ -89,10 +89,11 @@
       let Bkgd;
       let IdGenerator;
       try {
+        const cacheBust = `?v=${Date.now()}`;
         const [apiMod, bkgdMod, idMod] = await Promise.all([
-          import('../api.js'),
-          import('../bkgd/bkgd.js'),
-          import('../common/id-generator.js')
+          import('../api.js' + cacheBust),
+          import('../bkgd/bkgd.js' + cacheBust),
+          import('../common/id-generator.js' + cacheBust)
         ]);
         api = apiMod.api;
         Bkgd = bkgdMod.Bkgd;

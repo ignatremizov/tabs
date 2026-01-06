@@ -36,28 +36,46 @@ export class IdGenerator {
     this.maxSeq = 2 ** (5 * this.seqDigits);
     this.date = 0;  // last timestamp encountered
     this.seq = 0;  // sequential counter within a single timestamp
+    this.cache = null;  // optional map of existing IDs
   }
 
   newId (when) {
-    let now = when;
-    if (when === undefined) { now = Date.now(); }
+    const explicitWhen = (when !== undefined);
+    let now = explicitWhen ? when : Date.now();
     // if this timestamp has already been used,
     // increment the sequence counter instead
     if (now === this.date) { this.seq ++; }
     // new timestamp, start with sequence counter of zero
     else { this.seq = 0; }
-    // if we exceeded the maximum IDs per timestamp...
-    if (this.seq >= this.maxSeq) {
-      // TODO: wait for a new timestamp maybe?  throw an error?
-      throw `exceeded maximum IDs for timestamp ${now}`;
-    }
+    const buildId = (date, seq) => {
+      const d32 = base32encode(date, this.dateDigits);
+      let s32 = '';  // omit sequence digits if zero
+      if (seq > 0) { s32 = base32encode(seq, this.seqDigits); }
+      return d32 + '-' + s32 + '-' + this.name;
+    };
     this.date = now;
-    // generate and return the ID string
-    const d32 = base32encode(now, this.dateDigits);
-    let s32 = '';  // omit sequence digits if zero
-    if (this.seq > 0) { s32 = base32encode(this.seq, this.seqDigits); }
-    return d32 + '-' + s32 + '-' + this.name;
+    const advanceTimestamp = () => {
+      if (explicitWhen) {
+        throw `exceeded maximum IDs for timestamp ${now}`;
+      }
+      let next = Date.now();
+      while (next <= this.date) { next = Date.now(); }
+      now = next;
+      this.date = now;
+      this.seq = 0;
+    };
+    while (true) {
+      if (this.seq >= this.maxSeq) {
+        advanceTimestamp();
+        continue;
+      }
+      const id = buildId(now, this.seq);
+      if (! this.cache ||
+          (! Object.prototype.hasOwnProperty.call(this.cache, id))) {
+        return id;
+      }
+      this.seq ++;
+    }
   }
 
 }
-

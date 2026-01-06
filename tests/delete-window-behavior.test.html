@@ -96,8 +96,9 @@
 
       let TreeView;
       try {
+        const cacheBust = `?v=${Date.now()}`;
         const [viewMod] = await Promise.all([
-          import('../view/treeview.js')
+          import('../view/treeview.js' + cacheBust)
         ]);
         TreeView = viewMod.TreeView;
       } catch (err) {

@@ -39,6 +39,11 @@ code {
   Base32 encoding uses Crockford-style digits in <code>common/base32.js</code>.
   Decode is available for future use, but the app currently treats IDs as opaque.
   </p>
+  <p>
+  When <code>IdGenerator.newId()</code> is called without a timestamp, it waits
+  for the next millisecond if the per-ms sequence counter overflows. If a
+  timestamp is passed explicitly, overflow throws to preserve deterministic IDs.
+  </p>
 
   <h2>Where IDs are generated</h2>
   <p>
@@ -48,6 +53,10 @@ code {
     <li>
       <code>bkgd/bkgd.js</code> initializes <code>IdGenerator</code> and exposes
       <code>bkgd_newNodeId</code> for the UI to request new IDs.
+    </li>
+    <li>
+      After the tree loads, <code>IdGenerator.cache</code> is set to
+      <code>TreeStore.nodes</code> so new IDs skip existing ones on restart.
     </li>
     <li>
       <code>bkgd/nodestore.js</code> uses <code>IdGenerator</code> directly when

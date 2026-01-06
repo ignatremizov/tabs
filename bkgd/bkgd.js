@@ -82,9 +82,7 @@ export class Bkgd {
       this.tree.init().then(() => {
         debug('Bkgd.resolveTreeDbLoaded()');
         this.resolveTreeDbLoaded();  // let listeners know the IDB is loaded
-        // TODO: use tree node dict as idGen ID cache
-        // TODO: make IdGenerator check a cache to avoid duplicates
-        //this.idGen.cache = this.tree.nodes;
+        this.idGen.cache = this.tree.nodes;
         // grab all the open windows and tabs, and put them in the tree
         this.mergeOpenWindowsIntoTree().then(() => {
           // and if this is the first boot, add tutorial nodes

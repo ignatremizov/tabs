@@ -81,11 +81,12 @@
       let Node;
       let api;
       try {
+        const cacheBust = `?v=${Date.now()}`;
         const [bkgdMod, treeMod, nodeMod, apiMod] = await Promise.all([
-          import('../bkgd/bkgd.js'),
-          import('../common/tree.js'),
-          import('../common/node.js'),
-          import('../api.js')
+          import('../bkgd/bkgd.js' + cacheBust),
+          import('../common/tree.js' + cacheBust),
+          import('../common/node.js' + cacheBust),
+          import('../api.js' + cacheBust)
         ]);
         Bkgd = bkgdMod.Bkgd;
         Tree = treeMod.Tree;

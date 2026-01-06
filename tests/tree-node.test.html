@@ -127,13 +127,17 @@
       let sanitizeClientId;
       let initClientIdForm;
       let base32decode;
+      let base32encode;
+      let IdGenerator;
       try {
-        const [treeMod, nodeMod, commonMod, optionsMod, base32Mod] = await Promise.all([
-          import('../common/tree.js'),
-          import('../common/node.js'),
-          import('../common/common.js'),
-          import('../options/client-id-form.js'),
-          import('../common/base32.js')
+        const cacheBust = `?v=${Date.now()}`;
+        const [treeMod, nodeMod, commonMod, optionsMod, base32Mod, idGenMod] = await Promise.all([
+          import('../common/tree.js' + cacheBust),
+          import('../common/node.js' + cacheBust),
+          import('../common/common.js' + cacheBust),
+          import('../options/client-id-form.js' + cacheBust),
+          import('../common/base32.js' + cacheBust),
+          import('../common/id-generator.js' + cacheBust)
         ]);
         Tree = treeMod.Tree;
         Node = nodeMod.Node;
@@ -141,6 +145,8 @@
         sanitizeClientId = commonMod.sanitizeClientId;
         initClientIdForm = optionsMod.initClientIdForm;
         base32decode = base32Mod.base32decode;
+        base32encode = base32Mod.base32encode;
+        IdGenerator = idGenMod.IdGenerator;
       } catch (err) {
         $summary.textContent = `Failed to load modules: ${err}`;
         $summary.className = 'has-fail';
@@ -1012,6 +1018,57 @@
         assertEqual(base32decode('a'), base32decode('A'));
         assertEqual(base32decode('z'), base32decode('Z'));
         assertEqual(base32decode('10a'), base32decode('10A'));
+      });
+
+      test('IdGenerator skips cached IDs', async () => {
+        const name = 'test';
+        const dateDigits = 9;
+        const seqDigits = 2;
+        const timestamp = 1000;
+        const datePart = base32encode(timestamp, dateDigits);
+        const cachedId = `${datePart}--${name}`;
+        const idGen = new IdGenerator(name, dateDigits, seqDigits);
+        idGen.cache = { [cachedId]: true };
+        const newId = idGen.newId(timestamp);
+        assert(newId !== cachedId, 'Should not reuse cached ID');
+        assertEqual(
+          newId,
+          `${datePart}-${base32encode(1, seqDigits)}-${name}`,
+          'Should advance sequence when cached'
+        );
+      });
+
+      test('IdGenerator throws on explicit timestamp overflow', async () => {
+        const idGen = new IdGenerator('test', 2, 1);
+        const timestamp = 10;
+        idGen.date = timestamp;
+        idGen.seq = idGen.maxSeq - 1;
+        let threw = false;
+        try {
+          idGen.newId(timestamp);
+        } catch (err) {
+          threw = true;
+        }
+        assert(threw, 'Explicit timestamp overflow should throw');
+      });
+
+      test('IdGenerator waits for next ms on implicit overflow', async () => {
+        const idGen = new IdGenerator('test', 2, 1);
+        idGen.date = 100;
+        idGen.seq = idGen.maxSeq;
+        const originalNow = Date.now;
+        let calls = 0;
+        Date.now = () => {
+          calls += 1;
+          return calls < 3 ? 100 : 101;
+        };
+        try {
+          const newId = idGen.newId();
+          const datePart = base32encode(101, 2);
+          assertEqual(newId, `${datePart}--test`, 'Should advance to next ms');
+        } finally {
+          Date.now = originalNow;
+        }
       });
 
       testGroup('Options Client ID Form');
