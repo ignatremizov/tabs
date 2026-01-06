@@ -126,18 +126,21 @@
       let isIllegalURL;
       let sanitizeClientId;
       let initClientIdForm;
+      let base32decode;
       try {
-        const [treeMod, nodeMod, commonMod, optionsMod] = await Promise.all([
+        const [treeMod, nodeMod, commonMod, optionsMod, base32Mod] = await Promise.all([
           import('../common/tree.js'),
           import('../common/node.js'),
           import('../common/common.js'),
-          import('../options/client-id-form.js')
+          import('../options/client-id-form.js'),
+          import('../common/base32.js')
         ]);
         Tree = treeMod.Tree;
         Node = nodeMod.Node;
         isIllegalURL = commonMod.isIllegalURL;
         sanitizeClientId = commonMod.sanitizeClientId;
         initClientIdForm = optionsMod.initClientIdForm;
+        base32decode = base32Mod.base32decode;
       } catch (err) {
         $summary.textContent = `Failed to load modules: ${err}`;
         $summary.className = 'has-fail';
@@ -1003,6 +1006,12 @@
         assertEqual(sanitizeClientId('###'), '');
         assertEqual(sanitizeClientId(123), '123');
         assertEqual(sanitizeClientId(null), '');
+      });
+
+      test('base32decode accepts uppercase letters', async () => {
+        assertEqual(base32decode('a'), base32decode('A'));
+        assertEqual(base32decode('z'), base32decode('Z'));
+        assertEqual(base32decode('10a'), base32decode('10A'));
       });
 
       testGroup('Options Client ID Form');

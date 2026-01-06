@@ -1,5 +1,5 @@
 // base32.js: simple base32 encode / decode
-// Copyright (C) 2025 Selene ToyKeeper
+// Copyright (C) 2025 Selene ToyKeeper & Ignat Remizov
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 "use strict";
@@ -31,8 +31,7 @@ export function base32encode(integer, numDigits) {
 export function base32decode(text) {
   let integer = text.split('').reverse()
     .reduce((total, letter, currentIndex) => {
-      // TODO: parse upper-case
-      const letterNum = ALPHABET.indexOf(letter);
+      const letterNum = ALPHABET.indexOf(letter.toLowerCase());
       if (letterNum < 0) {
         throw `base32decode: invalid input "${text}"`;
       }
@@ -40,4 +39,3 @@ export function base32decode(text) {
     }, 0);
   return integer;
 }
-
