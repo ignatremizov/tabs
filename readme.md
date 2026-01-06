@@ -451,10 +451,13 @@ General project stuff:
 
 ## Known issues / TODOs
 
-- [ ] Batch browser events to handle Firefox's out-of-order tab/window events.
+- [x] Handle Firefox's out-of-order tab/window events (onTabCreated/onTabAttached
+  before onWindowCreated); covered by tests in tests/tree-node.test.html.
+  Monitor for regressions in Firefox event ordering.
 - [ ] Detect per-browser defaults for new-tab placement (avoid double-reorder).
+  Deferred due to cross-browser testing surface.
 - [ ] Investigate downloads in Chromium forks where backups lose `.json`
-  filenames/extensions.
+  filenames/extensions. Deferred pending repro in affected browser forks.
 
 
 ## Tips / Best practices
