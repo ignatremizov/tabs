@@ -1,5 +1,5 @@
 // common/common.js: code shared by all scripts
-// Copyright (C) 2025 Selene ToyKeeper
+// Copyright (C) 2025 Selene ToyKeeper & Ignat Remizov
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 "use strict";
@@ -72,12 +72,17 @@ export function fmtDate (date) {
   return date.toLocaleString("en-CA", { hour12: false });
 }
 
+const emitSourceId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+globalThis.__tktstoEmitSourceId = emitSourceId;
+export { emitSourceId };
+
 export async function emit (name, args, retry = true) {
   // ensure valid args
   if (!((typeof name === 'string') || (name instanceof String)))
     throw new TypeError(`emit(name): name was not a string: ${name}`);
   if (undefined === args) args = {};
   args['msg'] = name;
+  if (! args.sourceId) args.sourceId = emitSourceId;
   // debug info except for noisy pings
   if ('bkgd_ping' !== name) debug(`emit(${name})`, args);
   // abort if we're the Bkgd script and there are no receivers

@@ -1,13 +1,12 @@
 // common/tree.js: Tree class
-// Copyright (C) 2025 Selene ToyKeeper
+// Copyright (C) 2025 Selene ToyKeeper & Ignat Remizov
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 "use strict";
 import { api, isChrome, isFirefox } from '/api.js';
 
-import {
-  log, debug, warn, error, emit, jsonSchema, dateTupleStrings
-} from '/common/common.js';
+import * as common from '/common/common.js';
+const { log, debug, warn, error, emit, jsonSchema, dateTupleStrings } = common;
 import { Node } from '/common/node.js';
 import { Mutex } from '/common/mutex.js';
 
@@ -912,6 +911,8 @@ export class Tree {
     }
     // if message not for us, ignore it and abort
     if (! msg.msg.startsWith('tree_')) return;
+    const sourceId = common.emitSourceId || globalThis.__tktstoEmitSourceId;
+    if (sourceId && msg.sourceId && (msg.sourceId === sourceId)) return;
 
     // below here, no sendResponse() is expected
     // and we must return 'false' or nothing at all,
@@ -961,23 +962,8 @@ export class Tree {
     const nodeId = msg.nodeId;
     debug('tree_nodeDeleted()', nodeId);
     let node = this.nodes[nodeId];
-    // FIXME: this happens reliably when deleting loaded tabs from the TreeView
-    //if (! node) {
-    //  const found = this.root.findNodes((node) =>
-    //    { return nodeId === node.id; });
-    //  if (found) {
-    //    warn(`tree_nodeDeleted(): node cache miss: "${nodeId}"`);
-    //    node = found[0];
-    //    this.nodes[nodeId] = node;
-    //  }
-    //}
     if (! node) {
-      // FIXME: this happens reliably when deleting loaded tabs from the TreeView
-      // probably already deleted the node in a different event,
-      // and a second event triggered the same deletion
-      // (like pressing 'd' in the TreeView to delete a loaded tab,
-      //  then getting a onTabRemoved event for the same ID)
-      //warn(`tree_nodeDeleted(): couldn't find node "${nodeId}"`);
+      // Node was already removed locally, ignore duplicate delete.
       return;
     }
     // un-cache and delete it

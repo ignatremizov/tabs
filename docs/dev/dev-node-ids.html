@@ -116,5 +116,12 @@ code {
     <li>Import/migration workflows that validate or normalize IDs.</li>
   </ul>
 
+  <h2>Internal messaging note</h2>
+  <p>
+  Tree event messages carry a <code>sourceId</code> so each script can ignore
+  its own <code>tree_*</code> broadcasts and avoid double-applying changes.
+  This lives in <code>common/common.js</code> as <code>emitSourceId</code>.
+  </p>
+
 </body>
 </html>

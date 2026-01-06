@@ -173,6 +173,7 @@
         const tree = new Tree(TestNode);
         tree.nextId = 0;
         tree.bkgd = { windowsLoading: [], nodesLoading: [] };
+        tree.resolveTreeLoaded();
         return tree;
       }
 
@@ -1018,6 +1019,40 @@
         assertEqual(base32decode('a'), base32decode('A'));
         assertEqual(base32decode('z'), base32decode('Z'));
         assertEqual(base32decode('10a'), base32decode('10A'));
+      });
+
+      test('Tree ignores own tree_* messages', async () => {
+        const tree = createTree();
+        let called = false;
+        const original = tree.tree_nodeChanged;
+        tree.tree_nodeChanged = async () => { called = true; };
+        try {
+          const sourceId = globalThis.__tktstoEmitSourceId;
+          tree.onMessage({
+            msg: 'tree_nodeChanged',
+            sourceId,
+            nodeId: 'root',
+            type: 'setNotes',
+            label: '',
+            note: ''
+          });
+          assert(!called, 'Should ignore self-emitted message');
+        } finally {
+          tree.tree_nodeChanged = original;
+        }
+      });
+
+      test('tree_nodeDeleted ignores missing node', async () => {
+        const tree = createTree();
+        let logged = false;
+        const originalError = console.error;
+        console.error = () => { logged = true; };
+        try {
+          await tree.tree_nodeDeleted({ nodeId: 'does-not-exist' });
+          assert(!logged, 'Should not log an error for missing node');
+        } finally {
+          console.error = originalError;
+        }
       });
 
       test('IdGenerator skips cached IDs', async () => {
