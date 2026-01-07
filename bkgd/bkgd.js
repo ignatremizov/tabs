@@ -412,7 +412,24 @@ export class Bkgd {
   async onWindowBoundsChanged (...args) {
     debug('bkgd.onWindowBoundsChanged', ...args);
     await this.treeLoaded;
-    // TODO: update window geometry
+    const window = args[0];
+    if (! window) return;
+    const node = this.tree.root.getWindowId(window.id);
+    if (! node) return;
+    const hasGeometry = (
+      Number.isFinite(window.width) &&
+      Number.isFinite(window.height) &&
+      Number.isFinite(window.left) &&
+      Number.isFinite(window.top)
+    );
+    const changes = {};
+    if (hasGeometry) {
+      changes.geometry = [window.width, window.height, window.left, window.top];
+    }
+    if (undefined !== window.state) changes.windowState = window.state;
+    if (undefined !== window.incognito) changes.incognito = window.incognito;
+    if (Object.keys(changes).length === 0) return;
+    await node.setTabFields(changes, { reason: 'onWindowBoundsChanged' });
   }
 
   async onTabCreated (tab) {

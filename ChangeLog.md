@@ -79,16 +79,19 @@ development yet.
 # History (by month)
 
 ## 2026-01
+- 2026-01-07:
+  - Persist window geometry/state/incognito and update bounds changes.
+  - Document IndexedDB persistence details for maintainers.
 - 2026-01-06: 
   - Sanitize client IDs in Options/background and note it in the Options UI.
   - Add client ID flow integration coverage and options form tests.
   - Prevent ID generator collisions across restarts and document ID flow.
   - Add cache-busting imports for browser tests and extend ID generator tests.
-  - Skip self-emitted tree messages to avoid double-applied deletes (and tests).
+  - Skip self-emitted tree messages to avoid double-applied deletes.
   - Trigger overdue backups on startup and store last backup time.
   - Add backup startup behavior toggle in Options.
-  - Avoid redundant tab moves when the tab is already in place (with test).
-  - Persist tab attachment when matching windows (and cover via tests).
+  - Avoid redundant tab moves when the tab is already in place.
+  - Persist tab attachment when matching windows.
 - 2026-01-04:
   - Refined window delete behavior to unload root windows while preserving tabs as wasLoaded.
   - Added mergeOpenWindowsIntoTree de-dup guard, tests, and window delete tutorial updates.

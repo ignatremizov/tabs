@@ -1,0 +1,91 @@
+<!-- docs/dev/dev-indexeddb.html: Developer notes on IndexedDB storage -->
+<!-- Copyright (C) 2025 Ignat Remizov -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html>
+<head>
+<title>IndexedDB Storage (Developer Notes)</title>
+<style><!--
+body {
+  font-size: 1.2rem;
+  line-height: 1.5;
+}
+code {
+  background: #f5f5f5;
+  padding: 0 0.2rem;
+}
+--></style>
+</head>
+<body>
+
+  <h1>IndexedDB Storage (Developer Notes)</h1>
+
+  <p>
+  Tree data is persisted in IndexedDB so it survives browser restarts. The
+  background service worker owns all database access; UI views fetch tree data
+  through <code>emit('bkgd_getTree')</code>.
+  </p>
+
+  <h2>Database layout</h2>
+  <p>
+  Database name: <code>TKTSTO</code>. Object stores:
+  </p>
+  <ul>
+    <li><code>Nodes</code> — node records keyed by node ID.</li>
+    <li><code>Snapshots</code> — full tree snapshots keyed by name.</li>
+    <li><code>Transactions</code> — reserved for future log/undo support.</li>
+  </ul>
+
+  <h2>How nodes are stored</h2>
+  <p>
+  Each node is serialized via <code>Node.toDict()</code> and stored by ID.
+  The list of persisted fields is defined by <code>Tree.dictable</code>.
+  Add new persistent fields by updating both <code>Node</code> defaults and
+  <code>Tree.dictable</code>.
+  </p>
+
+  <h3>Key persisted fields</h3>
+  <ul>
+    <li><code>id</code>, <code>type</code>, <code>parent</code>, <code>nodes[]</code></li>
+    <li><code>label</code>, <code>note</code>, <code>title</code>, <code>url</code></li>
+    <li><code>windowId</code>, <code>tabId</code>, <code>loaded</code>, <code>wasLoaded</code></li>
+    <li><code>geometry</code>, <code>windowState</code>, <code>incognito</code></li>
+    <li><code>expanded</code>, <code>marked</code>, <code>checkbox</code></li>
+    <li><code>ctime</code>, <code>mtime</code>, <code>atime</code></li>
+  </ul>
+
+  <h2>Persistence flow</h2>
+  <ol>
+    <li>
+      Tree nodes live in memory in <code>TreeStore</code> (background).
+    </li>
+    <li>
+      Mutations in the background use <code>NodeStore</code>, which calls
+      <code>db.saveNode()</code> after changes.
+    </li>
+    <li>
+      UI changes emit events to the background; background updates nodes and
+      persists them.
+    </li>
+    <li>
+      On startup, <code>TreeStore.loadTreeFromDB()</code> loads nodes and
+      rebuilds the tree from serialized data.
+    </li>
+  </ol>
+
+  <h2>Backups vs IndexedDB</h2>
+  <p>
+  Backups are JSON exports generated from the in-memory tree (see
+  <code>Tree.downloadBackupNow()</code>). These are separate from the
+  IndexedDB storage and are meant for user-controlled archival or migration.
+  </p>
+
+  <h2>Where to look</h2>
+  <ul>
+    <li><code>bkgd/idb.js</code> — database wrapper.</li>
+    <li><code>bkgd/treestore.js</code> — loading/saving nodes.</li>
+    <li><code>bkgd/nodestore.js</code> — write-through persistence on node edits.</li>
+    <li><code>common/tree.js</code> — <code>dictable</code> field list.</li>
+  </ul>
+
+</body>
+</html>

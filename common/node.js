@@ -22,6 +22,9 @@ export class Node {
     // browser attachment
     this.windowId = undefined;
     this.tabId = undefined;
+    this.geometry = undefined;
+    this.windowState = undefined;
+    this.incognito = undefined;
     // attributes
     this.label = undefined;
     this.note = undefined;

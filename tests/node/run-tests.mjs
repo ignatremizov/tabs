@@ -170,6 +170,50 @@ test('onTabMoved ignores no-op moves', async () => {
   assertEqual(moved, false, 'No-op move should not re-move tab');
 });
 
+test('serializeNodes includes window geometry fields', async () => {
+  const tree = createTree(null);
+  await addChild(tree.root, {
+    id: 'w1',
+    type: 'window',
+    windowId: 1,
+    geometry: [800, 600, 10, 20],
+    windowState: 'maximized',
+    incognito: true
+  });
+
+  const data = tree.serializeNodes();
+  const saved = data.w1;
+  assertEqual(saved.geometry[0], 800, 'Should persist geometry width');
+  assertEqual(saved.windowState, 'maximized', 'Should persist windowState');
+  assertEqual(saved.incognito, true, 'Should persist incognito');
+});
+
+test('onWindowBoundsChanged updates window geometry', async () => {
+  const bkgd = new Bkgd();
+  const tree = createTree(bkgd);
+  bkgd.tree = tree;
+  bkgd.resolveTreeLoaded();
+  const win = await addChild(tree.root, {
+    id: 'w1',
+    type: 'window',
+    windowId: 1
+  });
+
+  await bkgd.onWindowBoundsChanged({
+    id: 1,
+    width: 900,
+    height: 700,
+    left: 12,
+    top: 34,
+    state: 'normal',
+    incognito: false
+  });
+
+  assertEqual(win.geometry[0], 900, 'Should update geometry width');
+  assertEqual(win.windowState, 'normal', 'Should update windowState');
+  assertEqual(win.incognito, false, 'Should update incognito');
+});
+
 test('initLocalBackupAlarm triggers overdue backup', async () => {
   const originalGet = api.storage.local.get;
   const originalSet = api.storage.local.set;
