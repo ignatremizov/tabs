@@ -1,11 +1,11 @@
 <!DOCTYPE html>
-<!-- delete-window-behavior.test.html: tests for window delete/unwrap behavior -->
+<!-- treeview-actions.test.html: tests for TreeView actions -->
 <!-- Copyright (C) 2025 Ignat Remizov -->
 <!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Delete Window Behavior Tests</title>
+  <title>TreeView Action Tests</title>
   <style>
     body { font-family: system-ui, sans-serif; margin: 20px; }
     .test-pass { color: green; }
@@ -31,7 +31,15 @@
   </style>
 </head>
 <body>
-  <h1>Delete Window Behavior Tests</h1>
+  <h1>TreeView Action Tests</h1>
+  <div id="toc">
+    <strong>TOC:</strong>
+    <span>Move Nodes</span> |
+    <span>Basic Deletes</span> |
+    <span>Root Window Deletes</span> |
+    <span>Ancestor Window Deletes</span> |
+    <span>Confirmations</span>
+  </div>
   <div id="summary"></div>
   <div id="results"></div>
   <div class="hidden-test-ui">
@@ -86,7 +94,7 @@
       const env = window.testEnv || 'chrome';
       const $summary = document.getElementById('summary');
       const $title = document.querySelector('h1');
-      $title.textContent = `Delete Window Behavior Tests (${env})`;
+      $title.textContent = `TreeView Action Tests (${env})`;
 
       if ('file:' === location.protocol) {
         $summary.textContent = 'Run via http (example: python3 -m http.server).';
@@ -275,6 +283,54 @@
           );
         }
       }
+
+      testGroup('Move Nodes');
+      test('move down keeps window above sibling leaf', async () => {
+        const view = createView();
+        const windowA = await addChild(view.root, {
+          id: 'wa',
+          type: 'window',
+          loaded: false,
+          expanded: true
+        });
+        const parent = await addChild(windowA, {
+          id: 'p1',
+          tabId: 1,
+          windowId: 'wa',
+          loaded: true,
+          expanded: true
+        });
+        const windowB = await addChild(parent, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        await addChild(windowB, {
+          id: 't2',
+          tabId: 2,
+          windowId: 10,
+          loaded: true
+        });
+        await addChild(view.root, {
+          id: 't3',
+          tabId: 3,
+          windowId: 10,
+          loaded: false
+        });
+
+        view.cursor = windowB;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeDown({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(windowB.parent, view.root, 'Window should move to root', snap);
+        assertEqual(view.root.nodes[1].id, 'w1', 'Window should land before leaf', snap);
+        assertEqual(view.root.nodes[2].id, 't3', 'Leaf should remain after window', snap);
+        return { before, after };
+      });
 
       testGroup('Basic Deletes');
       test('delete leaf node removes it', async () => {

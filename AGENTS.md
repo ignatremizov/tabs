@@ -583,9 +583,9 @@ Browser-based tests live in `tests/`. Run them with `make test` (starts a local 
 | `tree-node.test.html` | Tests for Tree/Node behavior, plus shared utilities and options form sanitization |
 | `client-id-flow.test.html` | Tests for the background client ID handler, storage updates, and IdGenerator state |
 | `merge-open-windows.test.html` | Tests for mergeOpenWindowsIntoTree matching across browsers |
-| `delete-window-behavior.test.html` | Tests for unload/delete behavior and window handling across browsers |
+| `treeview-actions.test.html` | Tests for TreeView actions (delete/unwrap/move behavior) |
 
-`tree-node.test.html`, `merge-open-windows.test.html`, and `delete-window-behavior.test.html` support `?env=firefox` and `?env=chrome` to force browser-specific rules; otherwise they auto-detect via user agent.
+`tree-node.test.html`, `merge-open-windows.test.html`, and `treeview-actions.test.html` support `?env=firefox` and `?env=chrome` to force browser-specific rules; otherwise they auto-detect via user agent.
 
 #### Node-based tests and coverage
 

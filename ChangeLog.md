@@ -82,6 +82,7 @@ development yet.
 - 2026-01-07:
   - Persist window geometry/state/incognito and update bounds changes.
   - Document IndexedDB persistence details for maintainers.
+  - Fix Shift+Down move to avoid skipping a sibling leaf.
 - 2026-01-06: 
   - Sanitize client IDs in Options/background and note it in the Options UI.
   - Add client ID flow integration coverage and options form tests.

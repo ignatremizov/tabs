@@ -804,7 +804,11 @@ export class TreeView extends Tree {
     }
     else {  // take position of next visible row
       destParent = nextRow.parent;
-      destIndex = nextRow.indexOf() + 1;
+      if (destParent === this.cursor.parent) {
+        destIndex = nextRow.indexOf() + 1;
+      } else {
+        destIndex = nextRow.indexOf();
+      }
     }
 
     // move it
