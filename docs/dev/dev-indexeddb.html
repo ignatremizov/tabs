@@ -33,7 +33,40 @@ code {
     <li><code>Nodes</code> — node records keyed by node ID.</li>
     <li><code>Snapshots</code> — full tree snapshots keyed by name.</li>
     <li><code>Transactions</code> — reserved for future log/undo support.</li>
+    <li><code>Ops</code> — durable background ops (intent queue + reconcile).</li>
   </ul>
+
+  <h2>Ops queue storage</h2>
+  <p>
+  The <code>Ops</code> store persists resumable background operations so the
+  service worker can recover after termination. Each record is keyed by
+  <code>opId</code> and includes a <code>state</code> (pending/running/failed/done),
+  timestamps, and an optional <code>cursor</code> for replay checkpoints.
+  </p>
+  <p>
+  Ops record fields:
+  <code>opId</code>, <code>state</code>, <code>type</code>, <code>name</code>,
+  <code>source</code>, <code>createdAt</code>, <code>updatedAt</code>,
+  <code>retryCount</code>, <code>lastError</code>, <code>payload</code>,
+  <code>cursor</code>.
+  </p>
+  <p>
+  Retry behavior:
+  failed ops are re-queued after a backoff delay, while stale running ops
+  (left running after a service worker crash) are re-queued after a longer
+  threshold. Both are bounded by <code>maxRetries</code>.
+  </p>
+  <p>
+  Reconcile scheduling:
+  the background registers a <code>periodicReconcile</code> alarm and runs
+  a reconcile pass on startup. Dirty hints are tracked with
+  <code>reconcileDirtyAt</code> and <code>reconcileDirtySource</code> for
+  future scheduling/diagnostics.
+  </p>
+  <p>
+  See <code>bkgd/ops.js</code> for queue behavior and <code>bkgd/reconcile.js</code>
+  for the periodic reconcile pass that keeps tree state aligned with browser state.
+  </p>
 
   <h2>How nodes are stored</h2>
   <p>
