@@ -54,6 +54,10 @@ ignore/
 # Project-specific
 todo.otl
 VERSION_BUILD
+
+# AI workflows
+.codex/
 agents/
 .worktrees/
 delegate.sh
+PRD.md
