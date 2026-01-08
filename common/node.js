@@ -99,9 +99,9 @@ export class Node {
     // bump timestamp
     this.bump('mtime', args);
     // notify others
-    if (['userAction', 'onTabRemoved'].includes(args.reason))
+    if ((args.emit !== false) && ['userAction', 'onTabRemoved'].includes(args.reason))
       await emit('tree_nodeDeleted',
-        { nodeId: this.id, when: this.mtime });
+        { nodeId: this.id, when: this.mtime, actionReason: args.reason });
 
     // TODO: ideally, this should wait until all threads have finished
     //       handling the tree_nodeDeleted event, but await only waits
@@ -109,7 +109,9 @@ export class Node {
     //       the events in the correct order regardless?
 
     // close tab if it's open (but only if we're the originator of this event)
-    if (('userAction' === args.reason) && this.isLoaded()) {
+    if ((this.tree && this.tree.bkgd)
+      && ('userAction' === args.reason)
+      && this.isLoaded()) {
       // TODO: handle deleting a loaded window
       // close the tab
       if (this.tabId) {
@@ -772,16 +774,17 @@ export class Node {
     this.bump('atime', args);
 
     // notify others, if event originated here
-    if (['userAction', 'onTabCreated', 'mergeOpenWindowsIntoTree'
-    ].includes(args.reason))
+    if ((args.emit !== false)
+      && ['userAction', 'onTabCreated', 'mergeOpenWindowsIntoTree'
+      ].includes(args.reason))
       await emit('tree_nodeChanged',
         { nodeId: this.id, type: 'load',
-          when: this.atime });
+          when: this.atime, actionReason: args.reason });
 
     // AFTER everyone has marked the tab as loaded,
     // then it's finally safe to open the tab itself
     // if not already opened by browser, opened the tab
-    if ('userAction' === args.reason) {
+    if ((this.tree && this.tree.bkgd) && ('userAction' === args.reason)) {
       // there's some jank involved, so it's much easier to
       // only let the bkgd script open the actual tab
       // (so it can keep some internal state for its onTabCreated handler
@@ -848,14 +851,17 @@ export class Node {
     this.bump('mtime', args);
 
     // notify others, if event originated here
-    if (['userAction',
-      'onTabRemoved', 'onWindowRemoved', 'onWindowUnloaded',
-      'mergeOpenWindowsIntoTree'
-    ].includes(args.reason))
+    if ((args.emit !== false)
+      && ['userAction',
+        'onTabRemoved', 'onWindowRemoved', 'onWindowUnloaded',
+        'mergeOpenWindowsIntoTree'
+      ].includes(args.reason))
       await emit('tree_nodeChanged',
         { nodeId: this.id, type: 'unload',
           wasLoaded: this.wasLoaded,
-          when: this.mtime });
+          when: this.mtime,
+          actionReason: args.reason,
+          keepTabsOnClose: args.keepTabsOnClose });
 
     if (this.isWindow() && args.keepTabsOnClose) {
       const tabList = this.getLoadedTabs();
@@ -878,7 +884,8 @@ export class Node {
     // AFTER everyone has unloaded the tab from the tree,
     // then it's finally safe to close the tab itself
     // if not already closed by browser, close the tab
-    if (['userAction', 'onWindowUnloaded'].includes(args.reason)) {
+    if ((this.tree && this.tree.bkgd)
+      && ['userAction', 'onWindowUnloaded'].includes(args.reason)) {
       // actually close the tab
       if (tabId) {
         try {
@@ -1094,7 +1101,8 @@ export class Node {
       && prevParent
       && (! prevParent.isRoot())
     );
-    if ([
+    const shouldEmit = (args.emit !== false);
+    if (shouldEmit && [
       'userAction',
       'onTabMoved', 'onTabRemoved', 'onTabAttached',
       'moveTo',
@@ -1116,6 +1124,7 @@ export class Node {
       if (args.openWindowOnRootMove) {
         moveMsg.openWindowOnRootMove = true;
       }
+      moveMsg.actionReason = args.reason;
       emit('tree_nodeMoved', moveMsg);
 
       // loaded tabs need extra care when they move

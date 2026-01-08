@@ -19,8 +19,10 @@ import {
 import { IdGenerator } from '/common/id-generator.js';
 import * as sidepanel from './sidepanel.js';
 import { TreeStore } from './treestore.js';
+import { OpsQueue } from '/bkgd/ops.js';
 import { base32encode } from '/common/base32.js';
 import { createNewUserTutorialNodes } from '/bkgd/new-user.js';
+import { runReconcile } from '/bkgd/reconcile.js';
 
 log('/bkgd/bkgd.js running');
 
@@ -46,6 +48,18 @@ export class Bkgd {
 
     // local backups
     this.localBackupAlarmName = 'periodicLocalBackup';
+    this.reconcileAlarmName = 'periodicReconcile';
+    this.reconcileIntervalMinutes = 5;
+    this.reconcileInFlight = false;
+
+    // ops queue processor state
+    this.opsQueue = null;
+    this.opsProcessing = false;
+    this.opsProcessingRequested = false;
+    this.opsProcessingTimer = null;
+
+    // reconcile dirty hint state
+    this.reconcileDirtyAt = 0;
   }
 
   init () {
@@ -77,6 +91,7 @@ export class Bkgd {
       this.resolveConfigLoaded();  // let listeners know the config is ready
 
       this.tree = new TreeStore(this);
+      this.opsQueue = new OpsQueue(this.tree.db);
       // give the tree a link to the bkgd object
       this.tree.bkgd = this;
       //  actually load the tree from storage
@@ -90,14 +105,212 @@ export class Bkgd {
           if (this.tree.needsTutorial) {
             createNewUserTutorialNodes(this.tree);
           }
+          runReconcile.call(this, { reason: 'startup' });
           // tree is ready to use
           debug('Bkgd.resolveTreeLoaded()');
           this.resolveTreeLoaded();  // let listeners know the tree is loaded
           this.tree.resolveTreeLoaded();
+          this.scheduleOpsProcessing();
         });
       });
     });
 
+  }
+
+  async enqueueIntent (name, payload, source = 'unknown') {
+    await this.treeDbLoaded;
+    if (! this.opsQueue) {
+      if (! this.tree || ! this.tree.db) {
+        throw new Error('OpsQueue requires initialized tree db');
+      }
+      this.opsQueue = new OpsQueue(this.tree.db);
+    }
+    const record = await this.opsQueue.enqueue({
+      name,
+      source,
+      payload
+    });
+    this.scheduleOpsProcessing();
+    return record;
+  }
+
+  scheduleOpsProcessing () {
+    if (this.opsProcessing) {
+      this.opsProcessingRequested = true;
+      return;
+    }
+    if (this.opsProcessingTimer) return;
+    this.opsProcessingTimer = setTimeout(() => {
+      this.opsProcessingTimer = null;
+      this.processOpsQueue();
+    }, 0);
+  }
+
+  async processOpsQueue (opts = {}) {
+    const budgetMs = Number.isFinite(opts.budgetMs) ? opts.budgetMs : 50;
+    const batchLimit = Number.isFinite(opts.batchLimit) ? opts.batchLimit : 10;
+    const maxRetries = Number.isFinite(opts.maxRetries) ? opts.maxRetries : 3;
+    const retryDelayMs = Number.isFinite(opts.retryDelayMs) ? opts.retryDelayMs : 1000;
+
+    if (this.opsProcessing) {
+      this.opsProcessingRequested = true;
+      return;
+    }
+    this.opsProcessing = true;
+    this.opsProcessingRequested = false;
+    let processed = 0;
+    const start = performance.now();
+    try {
+      while ((performance.now() - start) < budgetMs) {
+        const ops = await this.opsQueue.claimNextOps(batchLimit);
+        if (ops.length === 0) {
+          // Try to recover stuck ops before giving up
+          const requeuedFailed = await this.opsQueue.requeueFailedOps({
+            limit: batchLimit,
+            maxRetries,
+            minAgeMs: retryDelayMs
+          });
+          const requeuedStale = await this.opsQueue.requeueStaleRunningOps({
+            limit: batchLimit,
+            minAgeMs: 30000  // 30 seconds for stale running ops
+          });
+          if (! requeuedFailed && ! requeuedStale) break;
+          continue;
+        }
+        for (const op of ops) {
+          if ((performance.now() - start) >= budgetMs) {
+            this.opsProcessingRequested = true;
+            break;
+          }
+          try {
+            await this.executeOp(op);
+            await this.opsQueue.markDone(op.opId);
+            processed += 1;
+          } catch (err) {
+            await this.opsQueue.markFailed(op.opId, err);
+          }
+        }
+        if (this.opsProcessingRequested) break;
+      }
+    } finally {
+      this.opsProcessing = false;
+    }
+
+    if (processed > 0) {
+      await this.markReconcileDirty('opsBatch');
+    }
+
+    if (this.opsProcessingRequested) {
+      this.scheduleOpsProcessing();
+    }
+  }
+
+  async executeOp (op) {
+    if (! op || ! op.name) {
+      throw new Error('executeOp requires op name');
+    }
+    if ('ensureLoaded' === op.name) {
+      return this.ensureLoaded(op.payload || {}, op);
+    }
+    if ('ensureUnloaded' === op.name) {
+      return this.ensureUnloaded(op.payload || {}, op);
+    }
+    if ('ensureMoved' === op.name) {
+      return this.ensureMoved(op.payload || {}, op);
+    }
+    if ('ensureDeleted' === op.name) {
+      return this.ensureDeleted(op.payload || {}, op);
+    }
+    throw new Error(`Unknown op name: ${op.name}`);
+  }
+
+  async ensureLoaded (payload, op) {
+    const node = this.tree.nodes[payload.nodeId];
+    if (! node) return;
+    const shouldLoad = node.isUnloadedTab() || node.isUnloadedWindow();
+    if (! shouldLoad) return;
+    const args = {
+      reason: payload.reason || 'tree_nodeChanged',
+      when: payload.when
+    };
+    if (undefined !== payload.discarded) args.discarded = payload.discarded;
+    return await node.load(args);
+  }
+
+  async ensureUnloaded (payload, op) {
+    const node = this.tree.nodes[payload.nodeId];
+    if (! node) return;
+    const alreadyUnloaded = (
+      (! node.isLoaded())
+      && (! node.tabId)
+      && (! node.windowId)
+      && (
+        (undefined === payload.wasLoaded)
+        || (node.wasLoaded === payload.wasLoaded)
+      )
+    );
+    if (alreadyUnloaded) return;
+    const args = {
+      reason: payload.reason || 'tree_nodeChanged',
+      when: payload.when
+    };
+    if (undefined !== payload.wasLoaded) args.wasLoaded = payload.wasLoaded;
+    if (payload.keepTabsOnClose) {
+      node.keepTabsOnClose = true;
+      args.keepTabsOnClose = true;
+    }
+    return await node.unload(args);
+  }
+
+  async ensureMoved (payload, op) {
+    const node = this.tree.nodes[payload.nodeId];
+    const destParent = this.tree.nodes[payload.destParentId];
+    if (! node || ! destParent) return;
+    if (node.parent === destParent && node.indexOf() === payload.destIndex) {
+      return;
+    }
+    const args = {
+      reason: payload.reason || 'tree_nodeMoved',
+      when: payload.when
+    };
+    if (payload.openWindowOnRootMove) {
+      args.openWindowOnRootMove = true;
+    }
+    if (payload.prevParentId) {
+      args.prevParentId = payload.prevParentId;
+    }
+    if (this.tree.applyMoveForIntent) {
+      return await this.tree.applyMoveForIntent(
+        node,
+        destParent,
+        payload.destIndex,
+        args,
+        op
+      );
+    }
+    return await node.moveTo(destParent, payload.destIndex, args);
+  }
+
+  async ensureDeleted (payload, op) {
+    const node = this.tree.nodes[payload.nodeId];
+    if (! node || node.isRoot()) return;
+    const args = {
+      reason: payload.reason || 'tree_nodeDeleted',
+      when: payload.when
+    };
+    if ('promoteKids' === payload.mode) {
+      return await node.deleteSelfAndPromoteKids(args);
+    }
+    return await node.deleteSelf(args);
+  }
+
+  async markReconcileDirty (source) {
+    const now = Date.now();
+    this.reconcileDirtyAt = now;
+    await api.storage.local.set({
+      reconcileDirtyAt: now,
+      reconcileDirtySource: source || 'unknown'
+    });
   }
 
   initConnectListener () {
@@ -121,6 +334,7 @@ export class Bkgd {
 
     // automatic scheduled backups
     this.initLocalBackupAlarm();
+    this.initReconcileAlarm();
     api.alarms.onAlarm.addListener( this.onAlarm.bind(this) );
   }
 
@@ -237,6 +451,18 @@ export class Bkgd {
     if (this.localBackupAlarmName === alarm.name) {
       debug(this.localBackupAlarmName);
       this.tree.downloadBackupNow();
+    } else if (this.reconcileAlarmName === alarm.name) {
+      runReconcile.call(this, { reason: 'alarm' });
+    }
+  }
+
+  async initReconcileAlarm (reset = false) {
+    const alarm = await api.alarms.get(this.reconcileAlarmName);
+    if (reset || (! alarm)) {
+      await api.alarms.create(this.reconcileAlarmName, {
+        periodInMinutes: this.reconcileIntervalMinutes
+      });
+      log(`${this.reconcileAlarmName} interval set to ${this.reconcileIntervalMinutes} minute(s)`);
     }
   }
 
@@ -680,8 +906,13 @@ export class Bkgd {
         { type: 'window' },
         { reason: 'bkgd_loadSavedNode:autoWindow' });
       // move current node as child of window node
-      await wrapNode.moveTo(windowNode, 0,
-        { reason: 'bkgd_loadSavedNode:autoWindow' });
+      await this.enqueueIntent('ensureMoved', {
+        nodeId: wrapNode.id,
+        destParentId: windowNode.id,
+        destIndex: 0,
+        reason: 'bkgd_loadSavedNode:autoWindow',
+        prevParentId: parentNode ? parentNode.id : null
+      }, 'bkgd');
     }
     // - if window not loaded, push window node to be loaded
     let needsWindow = false;
@@ -826,7 +1057,13 @@ export class Bkgd {
         }
         const labelNode = await parent.addChild(node.indexOf(), labelDetails,
           { reason: 'userAction' });
-        await node.moveTo(labelNode, 0, { reason: 'userAction' });
+        await this.enqueueIntent('ensureMoved', {
+          nodeId: node.id,
+          destParentId: labelNode.id,
+          destIndex: 0,
+          reason: 'userAction',
+          prevParentId: parent.id
+        }, 'bkgd');
         if (node.label || node.note) {
           await node.setNotes('', '', { reason: 'userAction' });
         }
@@ -876,7 +1113,13 @@ export class Bkgd {
     if (! parent) return { error: 'bkgd_wrapNodeInWindow(): no parent' };
     const windowNode = await parent.addChild(node.indexOf(), { type: 'window' },
       { reason: 'userAction' });
-    await node.moveTo(windowNode, 0, { reason: 'userAction' });
+    await this.enqueueIntent('ensureMoved', {
+      nodeId: node.id,
+      destParentId: windowNode.id,
+      destIndex: 0,
+      reason: 'userAction',
+      prevParentId: parent.id
+    }, 'bkgd');
     const openTabs = (
       node.tabId
       || node.findNodes(
@@ -1418,7 +1661,10 @@ export class Bkgd {
       //  that probably means there isn't one and we should do nothing)
     }
     if (! tabNode) { return; }
-    return tabNode.unload({ reason: 'userAction' });
+    return this.enqueueIntent('ensureUnloaded', {
+      nodeId: tabNode.id,
+      reason: 'userAction'
+    }, 'bkgd');
   }
 
   command_unmarkAll (tab) {

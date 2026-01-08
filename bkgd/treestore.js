@@ -121,22 +121,63 @@ export class TreeStore extends Tree {
     warn(`reattachOrphanedNodes(): attached ${numAttached} orphans under ${newParentName}`);
   }
 
+  async tree_nodeChanged (msg, sender, sendResponse) {
+    await this.treeLoaded;  // wait until tree is ready
+
+    if (msg.type === 'load') {
+      const actionReason = msg.actionReason || 'tree_nodeChanged';
+      return this.bkgd.enqueueIntent('ensureLoaded', {
+        nodeId: msg.nodeId,
+        reason: actionReason,
+        when: msg.when
+      }, 'view');
+    }
+    if (msg.type === 'unload') {
+      const actionReason = msg.actionReason || 'tree_nodeChanged';
+      const payload = {
+        nodeId: msg.nodeId,
+        reason: actionReason,
+        when: msg.when,
+        wasLoaded: msg.wasLoaded
+      };
+      if (undefined !== msg.keepTabsOnClose) {
+        payload.keepTabsOnClose = msg.keepTabsOnClose;
+      }
+      return this.bkgd.enqueueIntent('ensureUnloaded', {
+        ...payload
+      }, 'view');
+    }
+
+    return super.tree_nodeChanged(msg, sender, sendResponse);
+  }
+
+  async tree_nodeDeleted (msg, sender, sendResponse) {
+    await this.treeLoaded;  // wait until tree is ready
+
+    const actionReason = msg.actionReason || 'tree_nodeDeleted';
+    return this.bkgd.enqueueIntent('ensureDeleted', {
+      nodeId: msg.nodeId,
+      reason: actionReason,
+      when: msg.when
+    }, 'view');
+  }
+
   async tree_nodeMoved (msg, sender, sendResponse) {
     await this.treeLoaded;  // wait until tree is ready
 
-    // unpack
-    const nodeId = msg.nodeId;
-    const destParentId = msg.destParentId;
-    const destIndex = msg.destIndex;
+    const actionReason = msg.actionReason || 'tree_nodeMoved';
+    return this.bkgd.enqueueIntent('ensureMoved', {
+      nodeId: msg.nodeId,
+      destParentId: msg.destParentId,
+      destIndex: msg.destIndex,
+      openWindowOnRootMove: msg.openWindowOnRootMove,
+      prevParentId: msg.prevParentId,
+      reason: actionReason,
+      when: msg.when
+    }, 'view');
+  }
 
-    // find nodes
-    const node = this.nodes[nodeId];
-    const destParent = this.nodes[destParentId];
-    if (! node)
-      return error(`tree_nodeMoved(): couldn't find node "${nodeId}"`);
-    if (! destParent)
-      return error(`tree_nodeMoved(): couldn't find parent "${destParentId}"`);
-
+  async applyMoveForIntent (node, destParent, destIndex, msg, op = null) {
     // if moving to root, optionally wrap in a new window
     if (destParent.isRoot() && (! node.isWindow()) && (! node.parent.isRoot())) {
       let shouldOpenWindow = false;
@@ -162,12 +203,41 @@ export class TreeStore extends Tree {
         isWholeWindowContent = true;
       }
       if (shouldOpenWindow && openTabs && (! isWholeWindowContent)) {
-        const windowNode = await this.root.addChild(destIndex,
+        if (op && op.cursor && op.cursor.windowNodeId) {
+          const existingWindow = this.nodes[op.cursor.windowNodeId];
+          if (existingWindow) {
+            if (node.parent !== existingWindow) {
+              await node.moveTo(existingWindow, 0, { reason: 'userAction' });
+            }
+            if (! existingWindow.isLoaded()) {
+              await this.bkgd.bkgd_loadSavedWindow({
+                windowNodeId: existingWindow.id,
+                nodeId: node.id
+              });
+            }
+            return true;
+          }
+        }
+        if (node.parent && node.parent.isWindow()
+          && node.parent.parent && node.parent.parent.isRoot()) {
+          if (op && this.bkgd.opsQueue) {
+            await this.bkgd.opsQueue.updateCursor(op.opId, {
+              windowNodeId: node.parent.id
+            });
+          }
+          return true;
+        }
+        const newWindowNode = await this.root.addChild(destIndex,
           { type: 'window' },
           { reason: 'userAction' });
-        await node.moveTo(windowNode, 0, { reason: 'userAction' });
+        if (op && this.bkgd.opsQueue) {
+          await this.bkgd.opsQueue.updateCursor(op.opId, {
+            windowNodeId: newWindowNode.id
+          });
+        }
+        await node.moveTo(newWindowNode, 0, { reason: 'userAction' });
         await this.bkgd.bkgd_loadSavedWindow({
-          windowNodeId: windowNode.id,
+          windowNodeId: newWindowNode.id,
           nodeId: node.id
         });
         return true;
@@ -175,12 +245,13 @@ export class TreeStore extends Tree {
     }
 
     // fall back to default behavior
-    msg.reason = 'tree_nodeMoved';
-    const moved = await node.moveTo(destParent, destIndex, msg);
+    const moveMsg = { ...msg };
+    moveMsg.reason = moveMsg.reason || 'tree_nodeMoved';
+    const moved = await node.moveTo(destParent, destIndex, moveMsg);
 
     // clean up empty, boring window nodes after moving their last child out
-    if (msg.prevParentId) {
-      const prevParent = this.nodes[msg.prevParentId];
+    if (moveMsg.prevParentId) {
+      const prevParent = this.nodes[moveMsg.prevParentId];
       if (prevParent && prevParent.isWindow()
         && (prevParent.nodes.length === 0)
         && (! prevParent.shouldUnloadNotDelete())
@@ -193,4 +264,195 @@ export class TreeStore extends Tree {
     return moved;
   }
 
+  async onTabRemoved (tabId, removeInfo) {
+    const tabNode = this.getNodeByTabId(tabId);
+    if (! tabNode) return;
+    if (! tabNode.isLoaded()) {
+      return this.bkgd.enqueueIntent('ensureUnloaded', {
+        nodeId: tabNode.id,
+        reason: 'onTabRemoved'
+      }, 'browserEvent');
+    }
+    let isWindowClosing = removeInfo && removeInfo.isWindowClosing;
+    const windowNode = tabNode.getWindowNode();
+    if (! isWindowClosing && windowNode && this.windowsClosing) {
+      if (this.windowsClosing.has(windowNode.windowId)) {
+        isWindowClosing = true;
+        this.windowsClosing.delete(windowNode.windowId);
+      }
+    }
+    if (isWindowClosing && windowNode && windowNode.keepTabsOnClose) {
+      return this.bkgd.enqueueIntent('ensureUnloaded', {
+        nodeId: tabNode.id,
+        reason: 'onWindowRemoved'
+      }, 'browserEvent');
+    }
+
+    if (isWindowClosing && windowNode) {
+      const tabIsBoringLeaf = (! tabNode.shouldUnloadNotDelete())
+        && (! tabNode.hasKids());
+      const isOnlyWindowChild = (1 === windowNode.nodes.length)
+        && (windowNode.nodes[0] === tabNode);
+      if (tabIsBoringLeaf && isOnlyWindowChild) {
+        await this.bkgd.enqueueIntent('ensureDeleted', {
+          nodeId: tabNode.id,
+          reason: 'onTabRemoved'
+        }, 'browserEvent');
+        if (windowNode.shouldUnloadNotDelete()) {
+          await this.bkgd.enqueueIntent('ensureUnloaded', {
+            nodeId: windowNode.id,
+            reason: 'onWindowRemoved'
+          }, 'browserEvent');
+        } else {
+          await this.bkgd.enqueueIntent('ensureDeleted', {
+            nodeId: windowNode.id,
+            reason: 'onTabRemoved'
+          }, 'browserEvent');
+        }
+        return;
+      }
+    }
+    if (isWindowClosing) {
+      return this.bkgd.enqueueIntent('ensureUnloaded', {
+        nodeId: tabNode.id,
+        reason: 'onWindowRemoved'
+      }, 'browserEvent');
+    }
+    if (tabNode.shouldUnloadNotDelete()) {
+      return this.bkgd.enqueueIntent('ensureUnloaded', {
+        nodeId: tabNode.id,
+        reason: 'onTabRemoved'
+      }, 'browserEvent');
+    }
+    if (tabNode.hasKids()) {
+      return this.bkgd.enqueueIntent('ensureDeleted', {
+        nodeId: tabNode.id,
+        reason: 'onTabRemoved',
+        mode: 'promoteKids'
+      }, 'browserEvent');
+    }
+    return this.bkgd.enqueueIntent('ensureDeleted', {
+      nodeId: tabNode.id,
+      reason: 'onTabRemoved'
+    }, 'browserEvent');
+  }
+
+  async onTabMoved (tabId, moveInfo) {
+    const windowNode = this.root.getWindowId(moveInfo.windowId);
+    if (! windowNode) {
+      return error(`Tree.onTabMoved() can't find windowId="${moveInfo.windowId}"`);
+    }
+    const tabNode = this.getNodeByTabId(tabId);
+    if (! tabNode) {
+      return error(`Tree.onTabMoved() can't find tabId="${tabId}"`);
+    }
+    debug(`Tree.onTabMoved(): ${tabNode.toLine()}`);
+    async function enqueueMove(destParent, destIndex) {
+      return await this.bkgd.enqueueIntent('ensureMoved', {
+        nodeId: tabNode.id,
+        destParentId: destParent.id,
+        destIndex: destIndex,
+        reason: 'onTabMoved',
+        prevParentId: tabNode.parent ? tabNode.parent.id : null
+      }, 'browserEvent');
+    }
+    const tabList = windowNode.getLoadedTabs();
+    if (tabList.length < 1) {
+      debug('Tree.onTabMoved(): new window?', moveInfo.fromIndex, moveInfo.toIndex);
+      return await enqueueMove.call(this, windowNode, 0);
+    }
+    if (moveInfo.toIndex >= tabList.length) {
+      const prevNode = tabList[moveInfo.toIndex - 1];
+      const destParent = prevNode.parent;
+      const destIndex = prevNode.indexOf() + 1;
+      debug('Tree.onTabMoved(): past end of window', moveInfo.fromIndex, moveInfo.toIndex);
+      return await enqueueMove.call(this, destParent, destIndex);
+    }
+    if (tabNode === tabList[moveInfo.toIndex]) {
+      debug('Tree.onTabMoved(): tab already at correct index', moveInfo.fromIndex, moveInfo.toIndex);
+      return;
+    }
+    if (moveInfo.toIndex < moveInfo.fromIndex) {
+      const prevNode = tabList[moveInfo.toIndex];
+      const destParent = prevNode.parent;
+      const destIndex = prevNode.indexOf();
+      debug('Tree.onTabMoved(): moving left', moveInfo.fromIndex, moveInfo.toIndex);
+      return await enqueueMove.call(this, destParent, destIndex);
+    }
+    const nextNode = tabList[moveInfo.toIndex + 1];
+    if (nextNode) {
+      const destParent = nextNode.parent;
+      const destIndex = nextNode.indexOf();
+      debug('Tree.onTabMoved(): moving right', moveInfo.fromIndex, moveInfo.toIndex);
+      return await enqueueMove.call(this, destParent, destIndex);
+    }
+    const lastNode = tabList[tabList.length - 1];
+    const destParent = lastNode.parent;
+    const destIndex = lastNode.indexOf() + 1;
+    debug('Tree.onTabMoved(): right-most tab', moveInfo.fromIndex, moveInfo.toIndex);
+    return await enqueueMove.call(this, destParent, destIndex);
+  }
+
+  async onTabAttached (tabId, attachInfo) {
+    const newIndex = attachInfo.newPosition;
+    const windowId = attachInfo.newWindowId;
+    debug(`Tree.onTabAttached(${tabId}) -> ${windowId}, ${newIndex}`);
+
+    const tabNode = this.getNodeByTabId(tabId);
+    if (! tabNode) return warn(`Tree.onTabAttached(${tabId}): no tab found`);
+
+    let windowNode;
+    const found = this.root.findNodes((node) =>
+      { return node.isWindow() && (node.windowId === windowId); });
+    if (found.length > 0) { windowNode = found[0]; }
+    else if (this.bkgd.windowsLoading.length > 0) {
+      windowNode = this.bkgd.windowsLoading[0];
+      windowNode.windowId = windowId;
+    }
+    else {
+      const destParent = this.root;
+      const destIndex = destParent.nodes.length;
+      windowNode = await destParent.addChild(destIndex, {
+        type: 'window',
+        windowId: windowId
+      }, { reason: 'onTabAttached' });
+      debug('Tree.onTabAttached(new window)');
+    }
+
+    const tabList = windowNode.getLoadedTabs();
+    let destParent;
+    let destIndex;
+    let skip = false;
+    if (tabNode === tabList[newIndex]) {
+      debug('Tree.onTabAttached(): already correct:', tabNode.toLine());
+      skip = true;
+    }
+    else if (0 === tabList.length) {
+      destParent = windowNode;
+      destIndex = 0;
+    }
+    else if (newIndex >= tabList.length) {
+      const lastNode = tabList[tabList.length - 1];
+      destParent = lastNode.parent;
+      destIndex = lastNode.indexOf() + 1;
+    }
+    else {
+      const nextNode = tabList[newIndex];
+      destParent = nextNode.parent;
+      destIndex = nextNode.indexOf();
+    }
+    if (! skip) {
+      debug('Tree.onTabAttached(): moving', tabNode.toLine(), destParent.toLine(), destIndex);
+      await this.bkgd.enqueueIntent('ensureMoved', {
+        nodeId: tabNode.id,
+        destParentId: destParent.id,
+        destIndex: destIndex,
+        reason: 'onTabAttached',
+        prevParentId: tabNode.parent ? tabNode.parent.id : null
+      }, 'browserEvent');
+    }
+
+    debug(`onTabAttached(): active tab: auto`);
+    await windowNode.setActiveTab({ reason: 'onTabAttached' });
+  }
 }

@@ -54,3 +54,6 @@ ignore/
 # Project-specific
 todo.otl
 VERSION_BUILD
+agents/
+.worktrees/
+delegate.sh
