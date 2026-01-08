@@ -860,6 +860,48 @@
         return { before, after };
       });
 
+      test('move down no descend stays at sibling level', async () => {
+        const view = createView();
+        const first = await addChild(view.root, { id: 'n1' });
+        const mover = await addChild(view.root, { id: 'n2', loaded: true });
+        const third = await addChild(view.root, { id: 'n3' });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeDownNoDescend({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(mover.parent, view.root, 'Node should stay at root', snap);
+        assertEqual(view.root.nodes[1].id, 'n3', 'Next sibling should move up', snap);
+        assertEqual(view.root.nodes[2].id, 'n2', 'Node should move after sibling', snap);
+        assertEqual(first.parent, view.root, 'First node should remain at root', snap);
+        assertEqual(third.parent, view.root, 'Third node should remain at root', snap);
+        return { before, after };
+      });
+
+      test('move down no descend escapes to parent level', async () => {
+        const view = createView();
+        const parent = await addChild(view.root, {
+          id: 'p1',
+          expanded: true
+        });
+        await addChild(parent, { id: 'c1', loaded: true });
+        const mover = await addChild(parent, { id: 'c2', loaded: true });
+        await addChild(view.root, { id: 'n2', loaded: true });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeDownNoDescend({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(mover.parent, view.root, 'Node should move to root', snap);
+        assertEqual(view.root.nodes[1].id, 'c2', 'Node should move after parent', snap);
+        assertEqual(parent.nodes.length, 1, 'Parent should retain first child', snap);
+        return { before, after };
+      });
+
       test('move down inverts to nest into expanded sibling (Toggle off)', async () => {
         const view = createView();
         view.moveDownIntoExpandedSibling = false;

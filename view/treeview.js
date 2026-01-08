@@ -926,9 +926,33 @@ export class TreeView extends Tree {
     this.setStatus(`moved up: ${this.cursor.toLine()}`);
   }
 
-  action_moveNodeDownNoDescend (event) {
-    // TODO: this one is somewhat more complicated
-    //this.setStatus(`moved down: ${this.cursor.toLine()}`);
+  async action_moveNodeDownNoDescend (event) {
+    debug('TreeView.action_moveNodeDownNoDescend()');
+
+    // if last child of root, do nothing
+    if (! this.cursor) return;
+    if (this.cursor.isRoot()) return;
+    if (! this.cursor.isChildOf(this.viewRoot, false)) return;
+    const lastIndex = this.cursor.parent.nodes.length - 1;
+    if (this.cursor.parent.isRoot() && (lastIndex === this.cursor.indexOf())) return;
+    if ((this.cursor.parent === this.viewRoot) && (lastIndex === this.cursor.indexOf()))
+      return;
+
+    let destParent;
+    let destIndex;
+    // if last child, take parent's parent and index after parent
+    if (lastIndex === this.cursor.indexOf()) {
+      destParent = this.cursor.parent.parent;
+      destIndex = this.cursor.parent.indexOf() + 1;
+    }
+    // if next sibling, move after it
+    else {
+      destParent = this.cursor.parent;
+      destIndex = this.cursor.indexOf() + 2;
+    }
+
+    await this.cursor.moveTo(destParent, destIndex, { reason: 'userAction' });
+    this.setStatus(`moved down: ${this.cursor.toLine()}`);
   }
 
   async action_moveNodeRight (event) {

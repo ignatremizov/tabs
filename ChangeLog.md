@@ -82,7 +82,8 @@ development yet.
 - 2026-01-07:
   - Persist window geometry/state/incognito and update bounds changes.
   - Document IndexedDB persistence details for maintainers.
-  - Fix and enhance Shift+Up/Shift+Down move behavior (prevent sibling skipping, stay at sibling level, handle ancestors, add nesting toggles and inverted shortcuts, move loaded tabs to previous loaded window)
+  - Fix and enhance Shift+Up/Shift+Down move behavior (prevent sibling skipping, stay at sibling level, handle ancestors, add nesting toggles and inverted shortcuts, move loaded tabs to previous loaded window).
+  - Implement Shift+PageDown to move nodes at the same level without nesting.
 - 2026-01-06: 
   - Sanitize client IDs in Options/background and note it in the Options UI.
   - Add client ID flow integration coverage and options form tests.
