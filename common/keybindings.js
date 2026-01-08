@@ -43,6 +43,8 @@ export const defaultKeyBindings = {
   // move by one visible row, period
   'Shift+ArrowUp': 'moveNodeUp',
   'Shift+ArrowDown': 'moveNodeDown',
+  'Shift+Alt+ArrowUp': 'moveNodeUpInvertNest',
+  'Shift+Alt+ArrowDown': 'moveNodeDownInvertNest',
   // move by one sibling, never going to a deeper level (but maybe higher)
   'Shift+PageUp': 'moveNodeUpNoDescend',
   'Shift+PageDown': 'moveNodeDownNoDescend',
@@ -88,6 +90,8 @@ export const keyBindingActions = [
   { action: 'cursorEnd', label: 'Cursor to last node' },
   { action: 'moveNodeUp', label: 'Move node up' },
   { action: 'moveNodeDown', label: 'Move node down' },
+  { action: 'moveNodeUpInvertNest', label: 'Move node up (invert nesting)' },
+  { action: 'moveNodeDownInvertNest', label: 'Move node down (invert nesting)' },
   { action: 'moveNodeUpNoDescend', label: 'Move node up (same level)' },
   { action: 'moveNodeDownNoDescend', label: 'Move node down (same level)' },
   { action: 'moveNodeLeft', label: 'Move node left (outdent)' },

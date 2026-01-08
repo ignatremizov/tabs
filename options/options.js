@@ -98,11 +98,19 @@ function initBehaviorForm () {
   const $focusActiveTabOnLoadOrEdit = document.getElementById(
     'focusActiveTabOnLoadOrEdit'
   );
+  const $moveDownIntoExpandedSibling = document.getElementById(
+    'moveDownIntoExpandedSibling'
+  );
+  const $moveUpIntoExpandedSibling = document.getElementById(
+    'moveUpIntoExpandedSibling'
+  );
   api.storage.local.get({
     openWindowOnRootMove: false,
     openWindowOnRootLoadTopmost: false,
     reorderTabsOnCreate: true,
-    focusActiveTabOnLoadOrEdit: false
+    focusActiveTabOnLoadOrEdit: false,
+    moveDownIntoExpandedSibling: true,
+    moveUpIntoExpandedSibling: true
   }).then((result) => {
     $openWindowOnRootMove.checked = result.openWindowOnRootMove;
     $openWindowOnRootLoadTopmost.checked =
@@ -110,6 +118,10 @@ function initBehaviorForm () {
     $reorderTabsOnCreate.checked = result.reorderTabsOnCreate;
     $focusActiveTabOnLoadOrEdit.checked =
       result.focusActiveTabOnLoadOrEdit;
+    $moveDownIntoExpandedSibling.checked =
+      result.moveDownIntoExpandedSibling;
+    $moveUpIntoExpandedSibling.checked =
+      result.moveUpIntoExpandedSibling;
   });
   $openWindowOnRootMove.addEventListener('click', () => {
     api.storage.local.set({
@@ -129,6 +141,16 @@ function initBehaviorForm () {
   $focusActiveTabOnLoadOrEdit.addEventListener('click', () => {
     api.storage.local.set({
       focusActiveTabOnLoadOrEdit: $focusActiveTabOnLoadOrEdit.checked
+    });
+  });
+  $moveDownIntoExpandedSibling.addEventListener('click', () => {
+    api.storage.local.set({
+      moveDownIntoExpandedSibling: $moveDownIntoExpandedSibling.checked
+    });
+  });
+  $moveUpIntoExpandedSibling.addEventListener('click', () => {
+    api.storage.local.set({
+      moveUpIntoExpandedSibling: $moveUpIntoExpandedSibling.checked
     });
   });
 }

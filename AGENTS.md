@@ -296,10 +296,13 @@ Stored in `chrome.storage.local`:
 | `theme` | string | Selected theme name |
 | `localBackupInterval` | number | Auto-backup interval in minutes |
 | `humanFriendlyBackups` | boolean | Pretty-print backup JSON |
+| `backupOnStartup` | boolean | Run overdue backups on startup |
 | `expandedRowPrefix` | boolean | Show expand/collapse indicators |
 | `openWindowOnRootMove` | boolean | Open new window when moving subtree to root |
 | `openWindowOnRootLoadTopmost` | boolean | Wrap top-most ungrouped parent when loading from root |
 | `reorderTabsOnCreate` | boolean | Reorder new tabs to match tree layout |
+| `moveDownIntoExpandedSibling` | boolean | Shift+Down nests into expanded sibling when enabled |
+| `moveUpIntoExpandedSibling` | boolean | Shift+Up nests into expanded sibling when enabled |
 
 ---
 

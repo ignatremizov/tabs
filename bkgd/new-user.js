@@ -110,7 +110,33 @@ export async function createNewUserTutorialNodes (tree, parentNode) {
     { label: "Be sure to check the",
       title: 'Options',
       url: '/options/options.html',
-      note: 'to choose a theme, set your host name, configure shortcuts, and tweak everything else to your liking.\n\nYou can also choose whether moving a subtree to the top level opens a new window.  If you move the only child of a window, the window container moves with it instead.\n\nIf your browser already opens new tabs next to the current tab, disable "Reorder browser tabs to match the tree" in Options so the tree mirrors the browser’s tab order.\n\nPrefer double-click / Enter on an already focused tab to refocus its window instead of editing?  There is an option for that too.\n\nFirefox also has a separate "Manage Extension Shortcuts" page for global commands like Toggle Side Panel, Unload current tab, and Add highlighted text to current tab’s notes.' },
+      note: 'to choose a theme, set your host name, configure shortcuts, and tweak everything else to your liking.\n\nYou can also choose whether moving a subtree to the top level opens a new window.  If you move the only child of a window, the window container moves with it instead.\n\nIf your browser already opens new tabs next to the current tab, disable "Reorder browser tabs to match the tree" in Options so the tree mirrors the browser’s tab order.\n\nPrefer double-click / Enter on an already focused tab to refocus its window instead of editing?  There is an option for that too.\n\nShift+Up and Shift+Down can optionally move into expanded siblings; each direction has its own toggle if you prefer sibling-only moves.  You can also assign custom shortcuts to invert the nesting behavior.  Loaded tabs at the top of a window will still hop into the previous loaded window when moving up.\n\nFirefox also has a separate "Manage Extension Shortcuts" page for global commands like Toggle Side Panel, Unload current tab, and Add highlighted text to current tab’s notes.' },
+    { label: 'Shift+Up/Shift+Down playground',
+      note: 'Safe-to-break branches and leaves.  Try Shift+Up and Shift+Down here (and with Shift+Alt+direction to flip behavior), or flip the Options toggles to compare behaviors.',
+      nodes: [
+        { label: 'Sibling shuffle (up/down)', expanded: true, nodes: [
+          { label: 'Amiable Branch 🌿', expanded: true, nodes: [
+            { label: 'Leaf: Alpine 🍃' },
+            { label: 'Leaf: Amber 🍁' },
+          ]},
+          { label: 'Breezy Branch 🌿 (cursor here)', expanded: true, nodes: [
+            { label: 'Leaf: Breeze 🍃' },
+            { label: 'Leaf: Bramble 🍁' },
+          ]},
+          { label: 'Chaotic Branch 🌿', expanded: true, nodes: [
+            { label: 'Leaf: Comet ☄️' },
+          ]},
+        ]},
+        { label: 'Ancestor branch 🪵', expanded: true, nodes: [
+          { label: 'Parent node 🪵', expanded: true, nodes: [
+            { label: 'First child 🍁' },
+            { label: 'Nested branch 🌿 (cursor here)', expanded: true, nodes: [
+              { label: 'Nested leaf 🍃' },
+            ]},
+            { label: 'Last child 🍁' },
+          ]},
+        ]},
+      ]},
     { label: "You're probably ready",
       note: 'to start organizing your REAL tabs and windows now.  As a first step, try giving a name to each of your windows.  Then maybe organize related tabs together, add some category labels, etc.  Tips and tricks are in the full documentation.' },
     { label: "The rest of the documentation...",

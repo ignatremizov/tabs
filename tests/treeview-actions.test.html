@@ -33,12 +33,12 @@
 <body>
   <h1>TreeView Action Tests</h1>
   <div id="toc">
-    <strong>TOC:</strong>
-    <span>Move Nodes</span> |
-    <span>Basic Deletes</span> |
-    <span>Root Window Deletes</span> |
-    <span>Ancestor Window Deletes</span> |
-    <span>Confirmations</span>
+    <strong>TOC (test group headers):</strong>
+    <a href="#move-nodes">Move Nodes</a> |
+    <a href="#basic-deletes">Basic Deletes</a> |
+    <a href="#root-window-deletes">Root Window Deletes</a> |
+    <a href="#ancestor-window-deletes">Ancestor Window Deletes</a> |
+    <a href="#confirmations">Confirmations</a>
   </div>
   <div id="summary"></div>
   <div id="results"></div>
@@ -170,6 +170,7 @@
 
       function treeSnapshot(root) {
         const lines = [];
+        const cursor = root.tree ? root.tree.cursor : null;
         function walk(node, depth) {
           const indent = '  '.repeat(depth);
           const type = node.type ? node.type : 'node';
@@ -183,7 +184,8 @@
             (! node.isRoot() && node.hasKids && node.hasKids())
               ? (node.isExpanded && node.isExpanded() ? 'expanded' : 'collapsed')
               : null,
-            node.label ? `label="${node.label}"` : null
+            node.label ? `label="${node.label}"` : null,
+            (node === cursor) ? '< cursor' : null
           ].filter(Boolean);
           lines.push(parts.join(' '));
           for (const kid of node.nodes) walk(kid, depth + 1);
@@ -264,6 +266,11 @@
 
       const tests = [];
       function testGroup(title) { tests.push({ type: 'group', title }); }
+      function groupId(title) {
+        return title.toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/(^-|-$)/g, '');
+      }
       function test(name, fn) { tests.push({ type: 'test', name, fn }); }
       function makeAssertionError(message, snapshot) {
         const err = new Error(message || 'Assertion failed');
@@ -329,6 +336,656 @@
         assertEqual(windowB.parent, view.root, 'Window should move to root', snap);
         assertEqual(view.root.nodes[1].id, 'w1', 'Window should land before leaf', snap);
         assertEqual(view.root.nodes[2].id, 't3', 'Leaf should remain after window', snap);
+        return { before, after };
+      });
+
+      async function runMoveUpEscapeTest(toggleValue) {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = toggleValue;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          toggleValue,
+          'moveUpIntoExpandedSibling should match test toggle'
+        );
+        const windowA = await addChild(view.root, {
+          id: 'wa',
+          type: 'window',
+          loaded: false,
+          expanded: true
+        });
+        const parent = await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 'wa',
+          loaded: true,
+          expanded: true
+        });
+        const windowB = await addChild(parent, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        await addChild(windowB, {
+          id: 't3',
+          tabId: 3,
+          windowId: 10,
+          loaded: true
+        });
+        await addChild(parent, {
+          id: 't2',
+          tabId: 2,
+          windowId: 'wa',
+          loaded: true,
+          expanded: true
+        });
+
+        view.cursor = windowB;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeUp({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(windowB.parent, windowA, 'Window should move to parent level', snap);
+        assertEqual(windowA.nodes[0].id, 'w1', 'Window should move before ancestor', snap);
+        assertEqual(windowA.nodes[1].id, 't1', 'Ancestor branch should move after', snap);
+        return { before, after };
+      }
+
+      test('move up escapes to parent level (Toggle off)', async () => {
+        return await runMoveUpEscapeTest(false);
+      });
+
+      test('move up escapes to parent level (Toggle on)', async () => {
+        return await runMoveUpEscapeTest(true);
+      });
+
+      test('move up stays at sibling level (Toggle off)', async () => {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = false;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          false,
+          'moveUpIntoExpandedSibling should be disabled'
+        );
+        const windowA = await addChild(view.root, {
+          id: 'wa',
+          type: 'window',
+          loaded: false,
+          expanded: true
+        });
+        await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 'wa',
+          loaded: true,
+          expanded: true
+        });
+        const windowB = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        await addChild(windowB, {
+          id: 't2',
+          tabId: 2,
+          windowId: 10,
+          loaded: true
+        });
+
+        view.cursor = windowB;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeUp({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(windowB.parent, view.root, 'Window should stay at root', snap);
+        assertEqual(view.root.nodes[0].id, 'w1', 'Window should move above sibling', snap);
+        assertEqual(view.root.nodes[1].id, 'wa', 'Sibling window should move after', snap);
+        return { before, after };
+      });
+
+      test('move up stays at nested sibling level (Toggle off)', async () => {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = false;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          false,
+          'moveUpIntoExpandedSibling should be disabled'
+        );
+        const windowA = await addChild(view.root, {
+          id: 'wa',
+          type: 'window',
+          loaded: false,
+          expanded: true
+        });
+        const parent = await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 'wa',
+          loaded: true,
+          expanded: true
+        });
+        await addChild(parent, {
+          id: 't2',
+          tabId: 2,
+          windowId: 'wa',
+          loaded: true,
+          expanded: true
+        });
+        const windowB = await addChild(windowA, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        await addChild(windowB, {
+          id: 't3',
+          tabId: 3,
+          windowId: 10,
+          loaded: true
+        });
+
+        view.cursor = windowB;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeUp({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(windowB.parent, windowA, 'Window should stay under windowA', snap);
+        assertEqual(windowA.nodes[0].id, 'w1', 'Window should move above sibling branch', snap);
+        assertEqual(windowA.nodes[1].id, 't1', 'Sibling branch should move after', snap);
+        return { before, after };
+      });
+
+      test('move down nests into expanded sibling (Toggle on)', async () => {
+        const view = createView();
+        view.moveDownIntoExpandedSibling = true;
+        assertEqual(
+          view.moveDownIntoExpandedSibling,
+          true,
+          'moveDownIntoExpandedSibling should be enabled'
+        );
+        const mover = await addChild(view.root, {
+          id: 'n1',
+          loaded: true
+        });
+        const sibling = await addChild(view.root, {
+          id: 'n2',
+          expanded: true
+        });
+        await addChild(sibling, {
+          id: 'n2c1',
+          loaded: true
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeDown({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(mover.parent, sibling, 'Node should move into sibling', snap);
+        assertEqual(sibling.nodes[0].id, 'n1', 'Node should become first child', snap);
+        return { before, after };
+      });
+
+      test('move down ignores expanded sibling (Toggle off)', async () => {
+        const view = createView();
+        view.moveDownIntoExpandedSibling = false;
+        assertEqual(
+          view.moveDownIntoExpandedSibling,
+          false,
+          'moveDownIntoExpandedSibling should be disabled'
+        );
+        const first = await addChild(view.root, {
+          id: 'n1',
+          loaded: true,
+          expanded: true
+        });
+        const sibling = await addChild(view.root, {
+          id: 'n2',
+          expanded: true
+        });
+        await addChild(sibling, {
+          id: 'n2c1',
+          loaded: true
+        });
+
+        view.cursor = first;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeDown({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(first.parent, view.root, 'Node should stay at root', snap);
+        assertEqual(view.root.nodes[1].id, 'n1', 'Node should move below sibling', snap);
+        return { before, after };
+      });
+
+      test('move up nests into expanded sibling (Toggle on)', async () => {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = true;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          true,
+          'moveUpIntoExpandedSibling should be enabled'
+        );
+        const sibling = await addChild(view.root, {
+          id: 'n1',
+          expanded: true
+        });
+        await addChild(sibling, {
+          id: 'n1c1',
+          loaded: true
+        });
+        const mover = await addChild(view.root, {
+          id: 'n2',
+          loaded: true
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeUp({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(mover.parent, sibling, 'Node should move into sibling', snap);
+        assertEqual(sibling.nodes[1].id, 'n2', 'Node should move to end of sibling', snap);
+        return { before, after };
+      });
+
+      test('move up ignores expanded sibling (Toggle off)', async () => {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = false;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          false,
+          'moveUpIntoExpandedSibling should be disabled'
+        );
+        const sibling = await addChild(view.root, {
+          id: 'n1',
+          expanded: true
+        });
+        await addChild(sibling, {
+          id: 'n1c1',
+          loaded: true
+        });
+        const mover = await addChild(view.root, {
+          id: 'n2',
+          loaded: true
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeUp({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(mover.parent, view.root, 'Node should stay at root', snap);
+        assertEqual(view.root.nodes[0].id, 'n2', 'Node should move above sibling', snap);
+        return { before, after };
+      });
+
+      test('move up nests into previous loaded window (Toggle on)', async () => {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = true;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          true,
+          'moveUpIntoExpandedSibling should be enabled'
+        );
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 10,
+          loaded: true
+        });
+        const windowB = await addChild(view.root, {
+          id: 'w2',
+          type: 'window',
+          windowId: 20,
+          loaded: true,
+          expanded: true
+        });
+        const mover = await addChild(windowB, {
+          id: 't2',
+          tabId: 2,
+          windowId: 20,
+          loaded: true
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeUp({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(mover.parent, windowA, 'Tab should move into previous window', snap);
+        assertEqual(windowA.nodes[1].id, 't2', 'Tab should move to end of window', snap);
+        return { before, after };
+      });
+
+      test('move up nests into previous loaded window (Toggle off)', async () => {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = false;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          false,
+          'moveUpIntoExpandedSibling should be disabled'
+        );
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 10,
+          loaded: true
+        });
+        const windowB = await addChild(view.root, {
+          id: 'w2',
+          type: 'window',
+          windowId: 20,
+          loaded: true,
+          expanded: true
+        });
+        const mover = await addChild(windowB, {
+          id: 't2',
+          tabId: 2,
+          windowId: 20,
+          loaded: true
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeUp({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(mover.parent, windowA, 'Tab should move into previous window', snap);
+        assertEqual(windowA.nodes[1].id, 't2', 'Tab should move to end of window', snap);
+        return { before, after };
+      });
+
+      test('move up ignores unloaded window (Toggle on)', async () => {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = true;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          true,
+          'moveUpIntoExpandedSibling should be enabled'
+        );
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          loaded: false,
+          expanded: true
+        });
+        await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 'w1',
+          loaded: false
+        });
+        const windowB = await addChild(view.root, {
+          id: 'w2',
+          type: 'window',
+          windowId: 20,
+          loaded: true,
+          expanded: true
+        });
+        const mover = await addChild(windowB, {
+          id: 't2',
+          tabId: 2,
+          windowId: 20,
+          loaded: true
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeUp({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(mover.parent, windowB, 'Tab should remain in window', snap);
+        assertEqual(windowB.nodes[0].id, 't2', 'Tab should remain in window', snap);
+        return { before, after };
+      });
+
+      test('move up moves unloaded tab to root (Toggle on)', async () => {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = true;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          true,
+          'moveUpIntoExpandedSibling should be enabled'
+        );
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          loaded: false,
+          expanded: true
+        });
+        await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 'w1',
+          loaded: false
+        });
+        const windowB = await addChild(view.root, {
+          id: 'w2',
+          type: 'window',
+          loaded: false,
+          expanded: true
+        });
+        const mover = await addChild(windowB, {
+          id: 't2',
+          tabId: 2,
+          windowId: 'w2',
+          loaded: false
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeUp({ type: 'command' });
+        await windowB.deleteSelf({ reason: 'onTabRemoved' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(mover.parent, view.root, 'Tab should move to root', snap);
+        assertEqual(view.root.nodes[1].id, 't2', 'Tab should move before window', snap);
+        assert(!view.root.nodes.includes(windowB), 'Window should be removed', snap);
+        return { before, after };
+      });
+
+      test('move up moves unloaded tab to root (Toggle off)', async () => {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = false;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          false,
+          'moveUpIntoExpandedSibling should be disabled'
+        );
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          loaded: false,
+          expanded: true
+        });
+        await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 'w1',
+          loaded: false
+        });
+        const windowB = await addChild(view.root, {
+          id: 'w2',
+          type: 'window',
+          loaded: false,
+          expanded: true
+        });
+        const mover = await addChild(windowB, {
+          id: 't2',
+          tabId: 2,
+          windowId: 'w2',
+          loaded: false
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeUp({ type: 'command' });
+        await windowB.deleteSelf({ reason: 'onTabRemoved' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(mover.parent, view.root, 'Tab should move to root', snap);
+        assertEqual(view.root.nodes[1].id, 't2', 'Tab should move before window', snap);
+        assert(!view.root.nodes.includes(windowB), 'Window should be removed', snap);
+        return { before, after };
+      });
+
+      test('move down inverts to nest into expanded sibling (Toggle off)', async () => {
+        const view = createView();
+        view.moveDownIntoExpandedSibling = false;
+        assertEqual(
+          view.moveDownIntoExpandedSibling,
+          false,
+          'moveDownIntoExpandedSibling should be disabled'
+        );
+        const mover = await addChild(view.root, {
+          id: 'n1',
+          loaded: true
+        });
+        const sibling = await addChild(view.root, {
+          id: 'n2',
+          expanded: true
+        });
+        await addChild(sibling, {
+          id: 'n2c1',
+          loaded: true
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeDownInvertNest({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(mover.parent, sibling, 'Node should move into sibling', snap);
+        assertEqual(sibling.nodes[0].id, 'n1', 'Node should become first child', snap);
+        return { before, after };
+      });
+
+      test('move down inverts to ignore expanded sibling (Toggle on)', async () => {
+        const view = createView();
+        view.moveDownIntoExpandedSibling = true;
+        assertEqual(
+          view.moveDownIntoExpandedSibling,
+          true,
+          'moveDownIntoExpandedSibling should be enabled'
+        );
+        const mover = await addChild(view.root, {
+          id: 'n1',
+          loaded: true,
+          expanded: true
+        });
+        const sibling = await addChild(view.root, {
+          id: 'n2',
+          expanded: true
+        });
+        await addChild(sibling, {
+          id: 'n2c1',
+          loaded: true
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeDownInvertNest({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(mover.parent, view.root, 'Node should stay at root', snap);
+        assertEqual(view.root.nodes[1].id, 'n1', 'Node should move below sibling', snap);
+        return { before, after };
+      });
+
+      test('move up inverts to nest into expanded sibling (Toggle off)', async () => {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = false;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          false,
+          'moveUpIntoExpandedSibling should be disabled'
+        );
+        const sibling = await addChild(view.root, {
+          id: 'n1',
+          expanded: true
+        });
+        await addChild(sibling, {
+          id: 'n1c1',
+          loaded: true
+        });
+        const mover = await addChild(view.root, {
+          id: 'n2',
+          loaded: true
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeUpInvertNest({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(mover.parent, sibling, 'Node should move into sibling', snap);
+        assertEqual(sibling.nodes[1].id, 'n2', 'Node should move to end of sibling', snap);
+        return { before, after };
+      });
+
+      test('move up inverts to ignore expanded sibling (Toggle on)', async () => {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = true;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          true,
+          'moveUpIntoExpandedSibling should be enabled'
+        );
+        const sibling = await addChild(view.root, {
+          id: 'n1',
+          expanded: true
+        });
+        await addChild(sibling, {
+          id: 'n1c1',
+          loaded: true
+        });
+        const mover = await addChild(view.root, {
+          id: 'n2',
+          loaded: true
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeUpInvertNest({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(mover.parent, view.root, 'Node should stay at root', snap);
+        assertEqual(view.root.nodes[0].id, 'n2', 'Node should move above sibling', snap);
         return { before, after };
       });
 
@@ -630,12 +1287,13 @@
         let failCount = 0;
 
         for (const result of results) {
-          if (result.type === 'group') {
-            const $group = document.createElement('h2');
-            $group.textContent = result.title;
-            $results.appendChild($group);
-            continue;
-          }
+        if (result.type === 'group') {
+          const $group = document.createElement('h2');
+          $group.id = groupId(result.title);
+          $group.textContent = result.title;
+          $results.appendChild($group);
+          continue;
+        }
           const $div = document.createElement('div');
           $div.className = 'test-section';
 
