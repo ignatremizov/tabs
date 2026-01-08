@@ -113,6 +113,10 @@ class FakeOpsDb {
     return filtered.slice(0, limit).map((op) => ({ ...op }));
   }
 
+  async countOpsByState (state) {
+    return [...this.ops.values()].filter((op) => op.state === state).length;
+  }
+
   async deleteOp (opId) {
     this.ops.delete(opId);
   }
@@ -228,6 +232,15 @@ test('OpsQueue requeueStaleRunningOps moves old running ops to pending', async (
   } finally {
     Date.now = originalNow;
   }
+});
+
+test('OpsQueue countPendingOps returns pending count', async () => {
+  const db = new FakeOpsDb();
+  const queue = new OpsQueue(db, { idGen: { newId: () => 'op-x' } });
+  db.ops.set('op-a', { opId: 'op-a', state: 'pending', createdAt: 1 });
+  db.ops.set('op-b', { opId: 'op-b', state: 'running', createdAt: 2 });
+  const count = await queue.countPendingOps();
+  assertEqual(count, 1, 'Should count pending ops');
 });
 
 test('OpsQueue updateCursor updates checkpoint data', async () => {

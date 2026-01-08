@@ -217,6 +217,18 @@ export class IDB {
     });
   }
 
+  async countOpsByState (state) {
+    const db = await this.db;
+    return new Promise((resolve, reject) => {
+      const txn = db.transaction(this.opsDbName, 'readonly');
+      const store = txn.objectStore(this.opsDbName);
+      const index = store.index('state');
+      const request = index.count(IDBKeyRange.only(state));
+      request.onsuccess = (event) => resolve(event.target.result || 0);
+      request.onerror = (event) => reject(event.target.error);
+    });
+  }
+
   async deleteOp (opId) {
     const db = await this.db;
     return new Promise((resolve, reject) => {

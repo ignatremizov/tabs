@@ -56,6 +56,10 @@ export class OpsQueue {
     return claimed;
   }
 
+  async countPendingOps () {
+    return this.db.countOpsByState('pending');
+  }
+
   async listFailedOps (limit = 50) {
     return this.db.listOpsByState('failed', limit);
   }

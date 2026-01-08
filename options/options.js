@@ -104,13 +104,21 @@ function initBehaviorForm () {
   const $moveUpIntoExpandedSibling = document.getElementById(
     'moveUpIntoExpandedSibling'
   );
+  const $reconcileIntervalMinutes = document.getElementById(
+    'reconcileIntervalMinutes'
+  );
+  const $opsBacklogWarnThreshold = document.getElementById(
+    'opsBacklogWarnThreshold'
+  );
   api.storage.local.get({
     openWindowOnRootMove: false,
     openWindowOnRootLoadTopmost: false,
     reorderTabsOnCreate: true,
     focusActiveTabOnLoadOrEdit: false,
     moveDownIntoExpandedSibling: true,
-    moveUpIntoExpandedSibling: true
+    moveUpIntoExpandedSibling: true,
+    reconcileIntervalMinutes: 5,
+    opsBacklogWarnThreshold: 50
   }).then((result) => {
     $openWindowOnRootMove.checked = result.openWindowOnRootMove;
     $openWindowOnRootLoadTopmost.checked =
@@ -122,6 +130,8 @@ function initBehaviorForm () {
       result.moveDownIntoExpandedSibling;
     $moveUpIntoExpandedSibling.checked =
       result.moveUpIntoExpandedSibling;
+    $reconcileIntervalMinutes.value = result.reconcileIntervalMinutes;
+    $opsBacklogWarnThreshold.value = result.opsBacklogWarnThreshold;
   });
   $openWindowOnRootMove.addEventListener('click', () => {
     api.storage.local.set({
@@ -152,6 +162,32 @@ function initBehaviorForm () {
     api.storage.local.set({
       moveUpIntoExpandedSibling: $moveUpIntoExpandedSibling.checked
     });
+  });
+
+  let reconcileDebounce;
+  $reconcileIntervalMinutes.addEventListener('input', () => {
+    clearTimeout(reconcileDebounce);
+    reconcileDebounce = setTimeout(() => {
+      const minutes = parseInt($reconcileIntervalMinutes.value, 10);
+      if (isNaN(minutes) || minutes < 0 || minutes > 120) {
+        warn('User entered invalid data into reconcileIntervalMinutes');
+        return;
+      }
+      api.storage.local.set({ reconcileIntervalMinutes: minutes });
+    }, 1000);
+  });
+
+  let backlogDebounce;
+  $opsBacklogWarnThreshold.addEventListener('input', () => {
+    clearTimeout(backlogDebounce);
+    backlogDebounce = setTimeout(() => {
+      const threshold = parseInt($opsBacklogWarnThreshold.value, 10);
+      if (isNaN(threshold) || threshold < 0 || threshold > 10000) {
+        warn('User entered invalid data into opsBacklogWarnThreshold');
+        return;
+      }
+      api.storage.local.set({ opsBacklogWarnThreshold: threshold });
+    }, 1000);
   });
 }
 

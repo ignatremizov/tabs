@@ -236,6 +236,32 @@
     </p>
   </div>
 
+  <div>
+    <p>
+    <label for="reconcileIntervalMinutes">
+    Reconcile interval (minutes)
+    </label>
+    <input type="number" id="reconcileIntervalMinutes" name="reconcileIntervalMinutes"
+      min="0" max="120" step="1">
+    </p>
+    <p>
+    <small>Set to 0 to disable periodic reconcile. Startup reconcile still runs.</small>
+    </p>
+  </div>
+
+  <div>
+    <p>
+    <label for="opsBacklogWarnThreshold">
+    Ops backlog warning threshold
+    </label>
+    <input type="number" id="opsBacklogWarnThreshold" name="opsBacklogWarnThreshold"
+      min="0" max="10000" step="1">
+    </p>
+    <p>
+    <small>Show a status warning when pending ops exceed this number (0 disables).</small>
+    </p>
+  </div>
+
 
   <h2>Appearance</h2>
 

@@ -2250,8 +2250,8 @@ export class TreeView extends Tree {
 
     debug(`TreeView.onMessage(${msg.msg})`, this.windowId);
 
-    // ignore messages for other windows
-    if (msg.windowId !== this.windowId) return;
+    // ignore messages for other windows unless broadcast
+    if (msg.windowId && (msg.windowId !== this.windowId)) return;
 
     debug(`TreeView.onMessage(${msg.msg})`, msg);
     if ('treeview_onCommand' === msg.msg) {
@@ -2270,6 +2270,11 @@ export class TreeView extends Tree {
         await handler.bind(this)({ type: 'command' });
       }
       finally { unlock(); }
+      return;
+    }
+    if ('treeview_status' === msg.msg) {
+      const status = msg.status || '';
+      if (status) this.setStatus(status);
       return;
     }
   }

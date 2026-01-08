@@ -154,6 +154,7 @@ export async function runReconcile ({ reason } = {}) {
     debug('runReconcile: already running, skipping');
     return null;
   }
+  // Conflict policy: browser truth for loaded tabs/windows, tree truth for saved nodes.
   if (! reason) reason = 'reconcile';
 
   bkgd.reconcileInFlight = true;

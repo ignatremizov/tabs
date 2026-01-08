@@ -83,6 +83,7 @@ development yet.
   - Persist window geometry/state/incognito and update bounds changes.
   - Document IndexedDB persistence details for maintainers.
   - Add durable ops queue + reconcile pass to improve background resilience.
+  - Add configurable reconcile interval and ops backlog warning threshold.
   - Fix and enhance Shift+Up/Shift+Down move behavior (prevent sibling skipping, stay at sibling level, handle ancestors, add nesting toggles and inverted shortcuts, move loaded tabs to previous loaded window).
   - Implement Shift+PageDown to move nodes at the same level without nesting.
 - 2026-01-06: 

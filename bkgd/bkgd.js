@@ -60,6 +60,10 @@ export class Bkgd {
 
     // reconcile dirty hint state
     this.reconcileDirtyAt = 0;
+
+    // ops backlog warning
+    this.opsBacklogWarnThreshold = 50;
+    this.opsBacklogWarnedAt = 0;
   }
 
   init () {
@@ -85,7 +89,8 @@ export class Bkgd {
     // tell the browser the sidepanel can be opened via hotkey or icon click
     sidepanel.init();
 
-    this.initConfig().then(() => {
+    this.initConfig().then(async () => {
+      await this.initBackgroundConfig();
       this.idGen = new IdGenerator(this.clientId, 9, 2);
       debug('Bkgd.resolveConfigLoaded()');
       this.resolveConfigLoaded();  // let listeners know the config is ready
@@ -151,6 +156,9 @@ export class Bkgd {
     const batchLimit = Number.isFinite(opts.batchLimit) ? opts.batchLimit : 10;
     const maxRetries = Number.isFinite(opts.maxRetries) ? opts.maxRetries : 3;
     const retryDelayMs = Number.isFinite(opts.retryDelayMs) ? opts.retryDelayMs : 1000;
+    const runningStaleMs = Number.isFinite(opts.runningStaleMs)
+      ? opts.runningStaleMs
+      : 30000;
 
     if (this.opsProcessing) {
       this.opsProcessingRequested = true;
@@ -172,7 +180,7 @@ export class Bkgd {
           });
           const requeuedStale = await this.opsQueue.requeueStaleRunningOps({
             limit: batchLimit,
-            minAgeMs: 30000  // 30 seconds for stale running ops
+            minAgeMs: runningStaleMs
           });
           if (! requeuedFailed && ! requeuedStale) break;
           continue;
@@ -199,6 +207,7 @@ export class Bkgd {
     if (processed > 0) {
       await this.markReconcileDirty('opsBatch');
     }
+    await this.maybeWarnOpsBacklog();
 
     if (this.opsProcessingRequested) {
       this.scheduleOpsProcessing();
@@ -313,6 +322,22 @@ export class Bkgd {
     });
   }
 
+  async maybeWarnOpsBacklog () {
+    if (! this.opsQueue) return;
+    const threshold = this.opsBacklogWarnThreshold;
+    if (! threshold || threshold <= 0) return;
+    const pending = await this.opsQueue.countPendingOps();
+    if (pending < threshold) return;
+    const now = Date.now();
+    const minIntervalMs = 5 * 60 * 1000;
+    if ((now - this.opsBacklogWarnedAt) < minIntervalMs) return;
+    this.opsBacklogWarnedAt = now;
+    emit('treeview_status', {
+      status: `Ops backlog: ${pending} pending tasks (consider keeping one view open)`,
+      severity: 'warn'
+    });
+  }
+
   initConnectListener () {
     api.runtime.onConnect.addListener( this.onConnect.bind(this) );
   }
@@ -391,6 +416,16 @@ export class Bkgd {
     log(`rand clientId: ${this.clientId}`);
   }
 
+  async initBackgroundConfig () {
+    const result = await api.storage.local.get({
+      reconcileIntervalMinutes: this.reconcileIntervalMinutes,
+      opsBacklogWarnThreshold: this.opsBacklogWarnThreshold
+    });
+    this.reconcileIntervalMinutes = result.reconcileIntervalMinutes;
+    this.opsBacklogWarnThreshold = result.opsBacklogWarnThreshold;
+    await this.initReconcileAlarm(true);
+  }
+
   async initLocalBackupAlarm (reset = false) {
     const stored = await api.storage.local.get([
       'localBackupInterval',
@@ -457,12 +492,17 @@ export class Bkgd {
   }
 
   async initReconcileAlarm (reset = false) {
+    const interval = this.reconcileIntervalMinutes;
     const alarm = await api.alarms.get(this.reconcileAlarmName);
+    if (! interval || interval < 1) {
+      if (alarm) await api.alarms.clear(this.reconcileAlarmName);
+      return;
+    }
     if (reset || (! alarm)) {
       await api.alarms.create(this.reconcileAlarmName, {
-        periodInMinutes: this.reconcileIntervalMinutes
+        periodInMinutes: interval
       });
-      log(`${this.reconcileAlarmName} interval set to ${this.reconcileIntervalMinutes} minute(s)`);
+      log(`${this.reconcileAlarmName} interval set to ${interval} minute(s)`);
     }
   }
 
@@ -470,6 +510,13 @@ export class Bkgd {
     if ('local' === areaName) {
       if (undefined !== changes.localBackupInterval) {
         this.initLocalBackupAlarm(true);
+      }
+      if (undefined !== changes.reconcileIntervalMinutes) {
+        this.reconcileIntervalMinutes = changes.reconcileIntervalMinutes.newValue;
+        this.initReconcileAlarm(true);
+      }
+      if (undefined !== changes.opsBacklogWarnThreshold) {
+        this.opsBacklogWarnThreshold = changes.opsBacklogWarnThreshold.newValue;
       }
     }
   }
