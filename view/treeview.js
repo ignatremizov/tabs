@@ -74,6 +74,10 @@ export class TreeView extends Tree {
   }
 
   destroy () {
+    if (this.onEmitFailure && this.window && this.window.removeEventListener) {
+      this.window.removeEventListener('tktsto_emit_failure', this.onEmitFailure);
+      this.onEmitFailure = null;
+    }
   }
 
   initElements () {
@@ -94,6 +98,14 @@ export class TreeView extends Tree {
     // shows info about most recent event
     //this.$statusBar = this.document.getElementById('status-bar');
     this.$statusText = this.document.getElementById('status-text');
+    this.onEmitFailure = (event) => {
+      const detail = event && event.detail ? event.detail : {};
+      const status = detail.status || 'Background not responding.';
+      this.setStatus(status);
+    };
+    if (this.window && this.window.addEventListener) {
+      this.window.addEventListener('tktsto_emit_failure', this.onEmitFailure);
+    }
     this.$detailsBox = this.document.getElementById('details-box');
     this.$detailsBtn = this.document.getElementById('details-btn');
     // TODO: this should load from config

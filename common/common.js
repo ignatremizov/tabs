@@ -78,6 +78,44 @@ const emitSourceId = `${Date.now().toString(36)}-${Math.random().toString(36).sl
 globalThis.__tktstoEmitSourceId = emitSourceId;
 export { emitSourceId };
 
+const emitFailureState = {
+  lastWarnAt: 0
+};
+
+function reportEmitFailure (name, args, tries, maxTries) {
+  const now = Date.now();
+  const cooldownMs = Number.isFinite(emit.failureCooldownMs)
+    ? Math.max(0, emit.failureCooldownMs)
+    : 0;
+  if (cooldownMs &&
+      emitFailureState.lastWarnAt &&
+      (now - emitFailureState.lastWarnAt) < cooldownMs) {
+    return;
+  }
+  emitFailureState.lastWarnAt = now;
+  const detail = {
+    name,
+    args,
+    tries,
+    maxTries,
+    status: 'Background not responding; actions may be delayed.'
+  };
+  if ('function' === typeof emit.onFailure) {
+    try {
+      emit.onFailure(detail);
+    } catch (err) {
+      error('emit.onFailure error', err);
+    }
+  }
+  if (('undefined' !== typeof CustomEvent) && globalThis.dispatchEvent) {
+    try {
+      globalThis.dispatchEvent(new CustomEvent('tktsto_emit_failure', { detail }));
+    } catch (err) {
+      error('emit failure event error', err);
+    }
+  }
+}
+
 export async function emit (name, args, retry = true) {
   // ensure valid args
   if (!((typeof name === 'string') || (name instanceof String)))
@@ -101,7 +139,12 @@ export async function emit (name, args, retry = true) {
   // and needs a few moments to wake up before it can respond
   let response;
   let tryNum = 1;
-  const maxTries = 10;
+  const maxTries = Number.isFinite(emit.maxTries)
+    ? Math.max(1, emit.maxTries)
+    : 10;
+  const retryDelayMs = Number.isFinite(emit.retryDelayMs)
+    ? Math.max(0, emit.retryDelayMs)
+    : 50;
   const startTime = performance.now();
   while (retry && (! response) && (tryNum < maxTries)) {
     try {
@@ -112,20 +155,24 @@ export async function emit (name, args, retry = true) {
     } catch (error) {
       log(`emit(${name}) error, try #${tryNum}`, error, args);
       tryNum ++;
-      await new Promise(r => setTimeout(r, 50));  // wait 50ms
+      await new Promise(r => setTimeout(r, retryDelayMs));
     }
   }
   if (tryNum >= maxTries) {
-    // TODO: this is probably a serious error,
-    // and should be escalated more than just a console log
-    // (like, expose it in the UI somehow)
+    // If message delivery failed repeatedly, surface it in the UI.
     error(`emit(${name}) exceeded maximum retries`, name, args);
+    reportEmitFailure(name, args, Math.max(0, tryNum - 1), maxTries);
   }
   const endTime = performance.now();
   if ('bkgd_ping' !== name)
     debug(`emit(${name}) elapsed: ${endTime - startTime} ms`);
   return response;
 }
+
+emit.maxTries = 10;
+emit.retryDelayMs = 50;
+emit.failureCooldownMs = 30000;
+emit.onFailure = null;
 
 export function sanitizeClientId (clientId) {
   if (! clientId) return '';

@@ -1,0 +1,96 @@
+<!-- docs/dev/dev-events.html: Developer notes on event flow -->
+<!-- Copyright (C) 2025 Ignat Remizov -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html>
+<head>
+<title>Event Flow (Developer Notes)</title>
+<style><!--
+body {
+  font-size: 1.2rem;
+  line-height: 1.5;
+}
+code {
+  background: #f5f5f5;
+  padding: 0 0.2rem;
+}
+--></style>
+</head>
+<body>
+
+  <h1>Event Flow (Developer Notes)</h1>
+
+  <p>
+  TKTSTO uses two main event systems:
+  message passing between the background service worker and views, and
+  UI input events (keyboard/mouse) inside the TreeView.
+  </p>
+
+  <h2>Background &amp; view messages</h2>
+  <p>
+  The <code>emit(name, args)</code> helper in <code>common/common.js</code>
+  wraps <code>api.runtime.sendMessage()</code>. It adds <code>msg</code> and
+  <code>sourceId</code> to the payload and retries on transient MV3 failures.
+  </p>
+
+  <h3>Message naming conventions</h3>
+  <ul>
+    <li><code>bkgd_*</code> — view to background requests (expect responses).</li>
+    <li><code>tree_*</code> — background to view state notifications.</li>
+    <li><code>treeview_*</code> — view-facing UI notices (status text, etc).</li>
+  </ul>
+
+  <h3>Loop prevention</h3>
+  <p>
+  Each <code>emit()</code> call includes a unique <code>sourceId</code>.
+  <code>Tree.onMessage()</code> ignores messages whose <code>sourceId</code>
+  matches its own to prevent feedback loops.
+  </p>
+
+  <h3>MV3 resilience</h3>
+  <p>
+  When no views are open, the service worker can be terminated between events.
+  <code>emit()</code> retries up to <code>emit.maxTries</code> with
+  <code>emit.retryDelayMs</code> backoff. If all retries fail, it reports a
+  warning via a DOM event and optional hook:
+  </p>
+  <ul>
+    <li><code>tktsto_emit_failure</code> — a <code>CustomEvent</code> on
+    <code>window</code> with a <code>detail.status</code> message.</li>
+    <li><code>emit.onFailure</code> — optional callback for tests/telemetry.</li>
+  </ul>
+  <p>
+  The TreeView listens for <code>tktsto_emit_failure</code> and updates the
+  status bar to warn the user that background actions may be delayed.
+  </p>
+
+  <h3>Examples</h3>
+  <pre><code>// View requests full tree from background:
+const tree = await emit('bkgd_getTree');
+
+// Background notifies all views about a change:
+emit('tree_nodeAdded', { parentId, index, node });
+
+// Background sends a UI status update:
+emit('treeview_status', { status: 'Ops backlog detected', severity: 'warn' });
+</code></pre>
+
+  <h2>UI input events</h2>
+  <p>
+  Keyboard and mouse events are normalized by
+  <code>common/events.js</code> into action names like
+  <code>Shift+Ctrl+P</code> or <code>MouseDblClickLeft</code>. TreeView maps
+  those strings to actions via <code>defaultKeyBindings</code> and
+  <code>keyBindingActions</code>.
+  </p>
+
+  <h2>Where to look</h2>
+  <ul>
+    <li><code>common/common.js</code> — <code>emit()</code> transport.</li>
+    <li><code>common/tree.js</code> — <code>Tree.onMessage()</code> handler.</li>
+    <li><code>bkgd/bkgd.js</code> — background listeners &amp; status messages.</li>
+    <li><code>view/treeview.js</code> — view handlers &amp; input bindings.</li>
+    <li><code>common/events.js</code> — event name builder for UI inputs.</li>
+  </ul>
+
+</body>
+</html>

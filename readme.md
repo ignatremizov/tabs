@@ -419,6 +419,7 @@ Client (browser extension):
 Developer notes:
 - `docs/dev/dev-node-ids.html` – Node ID generation flow and future use cases.
 - `docs/dev/dev-indexeddb.html` – IndexedDB storage and persistence flow.
+- `docs/dev/dev-events.html` – Background/view message flow and UI input events.
 
 Server:
 

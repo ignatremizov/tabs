@@ -856,6 +856,7 @@ chore: update manifest version to 0.0.2.0
 5. **Separate subject from body** with a blank line
 6. **Use body to explain what and why** (not how)
 7. **Reference issues** in footer when applicable
+8. **Do not hard-wrap body lines**; keep paragraphs as single lines unless a list item or code block
 
 #### Multi-line Commits
 
@@ -864,8 +865,7 @@ For complex changes, include a body:
 ```
 fix(tree): prevent data loss when moving nodes between windows
 
-The previous implementation could lose child nodes when moving
-a parent node to a different window during high tab activity.
+The previous implementation could lose child nodes when moving a parent node to a different window during high tab activity.
 
 This fix:
 - Adds mutex lock during move operations

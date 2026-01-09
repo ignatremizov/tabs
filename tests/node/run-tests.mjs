@@ -54,6 +54,7 @@ function assertEqual(actual, expected, message) {
 }
 
 let api;
+let emit;
 let Bkgd;
 let Tree;
 let Node;
@@ -121,6 +122,35 @@ class FakeOpsDb {
     this.ops.delete(opId);
   }
 }
+
+test('emit reports failure via hook', async () => {
+  const originalSendMessage = api.runtime.sendMessage;
+  const originalOnFailure = emit.onFailure;
+  const originalMaxTries = emit.maxTries;
+  const originalRetryDelayMs = emit.retryDelayMs;
+  const originalCooldown = emit.failureCooldownMs;
+  const originalConsoleError = console.error;
+  let notice = null;
+  try {
+    console.error = () => {};
+    api.runtime.sendMessage = async () => { throw new Error('nope'); };
+    emit.onFailure = (detail) => { notice = detail; };
+    emit.maxTries = 2;
+    emit.retryDelayMs = 0;
+    emit.failureCooldownMs = 0;
+    await emit('bkgd_test', { foo: 'bar' });
+    assert(notice, 'Should report emit failure');
+    assertEqual(notice.name, 'bkgd_test', 'Should include message name');
+    assertEqual(notice.args.foo, 'bar', 'Should include args payload');
+  } finally {
+    console.error = originalConsoleError;
+    api.runtime.sendMessage = originalSendMessage;
+    emit.onFailure = originalOnFailure;
+    emit.maxTries = originalMaxTries;
+    emit.retryDelayMs = originalRetryDelayMs;
+    emit.failureCooldownMs = originalCooldown;
+  }
+});
 
 test('OpsQueue enqueue stores pending op record', async () => {
   const db = new FakeOpsDb();
@@ -566,7 +596,8 @@ async function runTests() {
     import('/bkgd/ops.js'),
     import('/bkgd/reconcile.js'),
     import('/common/tree.js'),
-    import('/common/node.js')
+    import('/common/node.js'),
+    import('/common/common.js')
   ]);
   api = mods[0].api;
   Bkgd = mods[1].Bkgd;
@@ -574,6 +605,7 @@ async function runTests() {
   runReconcile = mods[3].runReconcile;
   Tree = mods[4].Tree;
   Node = mods[5].Node;
+  emit = mods[6].emit;
   TestNode = class TestNode extends Node {
     newNodeId () {
       this.tree.nextId += 1;
