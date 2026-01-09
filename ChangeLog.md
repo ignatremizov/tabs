@@ -86,6 +86,8 @@ development yet.
   - Add configurable reconcile interval and ops backlog warning threshold.
   - Fix and enhance Shift+Up/Shift+Down move behavior (prevent sibling skipping, stay at sibling level, handle ancestors, add nesting toggles and inverted shortcuts, move loaded tabs to previous loaded window).
   - Implement Shift+PageDown to move nodes at the same level without nesting.
+  - Fix Shift+Up promotion to avoid jumping to the window root when a sibling branch exists.
+  - Paste marked nodes in tree order instead of mark order.
 - 2026-01-06: 
   - Sanitize client IDs in Options/background and note it in the Options UI.
   - Add client ID flow integration coverage and options form tests.

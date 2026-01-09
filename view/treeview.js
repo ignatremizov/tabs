@@ -1636,10 +1636,25 @@ export class TreeView extends Tree {
       destIndex = this.cursor.indexOf() + 1;
     }
 
-    // TODO: sort the markedNodes list by order in tree
-    //   instead of order added to list
+    const orderMap = new Map();
+    let orderIndex = 0;
+    const stack = [this.root];
+    while (stack.length > 0) {
+      const node = stack.pop();
+      orderMap.set(node.id, orderIndex);
+      orderIndex += 1;
+      for (let i = node.nodes.length - 1; i >= 0; i--) {
+        stack.push(node.nodes[i]);
+      }
+    }
+    const orderedMarkedNodes = this.markedNodes.slice().sort((a, b) => {
+      const orderA = orderMap.has(a) ? orderMap.get(a) : Number.MAX_SAFE_INTEGER;
+      const orderB = orderMap.has(b) ? orderMap.get(b) : Number.MAX_SAFE_INTEGER;
+      if (orderA !== orderB) return orderA - orderB;
+      return String(a).localeCompare(String(b));
+    });
     let numMoved = 0;
-    for (const nodeId of this.markedNodes) {
+    for (const nodeId of orderedMarkedNodes) {
       const node = this.nodes[nodeId];
       // special case: moving from/to same parent can get weird
       const pastingToSameParent = (node.parent === destParent);

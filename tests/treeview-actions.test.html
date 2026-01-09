@@ -35,6 +35,7 @@
   <div id="toc">
     <strong>TOC (test group headers):</strong>
     <a href="#move-nodes">Move Nodes</a> |
+    <a href="#marked-nodes">Marked Nodes</a> |
     <a href="#basic-deletes">Basic Deletes</a> |
     <a href="#root-window-deletes">Root Window Deletes</a> |
     <a href="#ancestor-window-deletes">Ancestor Window Deletes</a> |
@@ -1204,6 +1205,35 @@
 
         assertEqual(mover.parent, view.root, 'Node should stay at root', snap);
         assertEqual(view.root.nodes[0].id, 'n2', 'Node should move above sibling', snap);
+        return { before, after };
+      });
+
+      testGroup('Marked Nodes');
+      test('paste marked uses tree order', async () => {
+        const view = createView();
+        const n1 = await addChild(view.root, { id: 'n1', loaded: true });
+        const n2 = await addChild(view.root, { id: 'n2', loaded: true, expanded: true });
+        const n2a = await addChild(n2, { id: 'n2a', loaded: true });
+        const n2b = await addChild(n2, { id: 'n2b', loaded: true });
+        const n3 = await addChild(view.root, { id: 'n3', loaded: true });
+
+        await n3.setMarked(true, { reason: 'userAction' });
+        await n1.setMarked(true, { reason: 'userAction' });
+        await n2b.setMarked(true, { reason: 'userAction' });
+
+        view.cursor = view.root;
+        const before = treeSnapshot(view.root);
+        await view.action_pasteMarked({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(view.root.nodes[0].id, 'n1', 'First marked node should be n1', snap);
+        assertEqual(view.root.nodes[1].id, 'n2b', 'Second marked node should be n2b', snap);
+        assertEqual(view.root.nodes[2].id, 'n3', 'Third marked node should be n3', snap);
+        assertEqual(view.root.nodes[3].id, 'n2', 'Unmoved node should follow marked nodes', snap);
+        assertEqual(n2.nodes.length, 1, 'n2 should keep remaining child', snap);
+        assertEqual(n2.nodes[0].id, 'n2a', 'n2 should keep n2a child', snap);
+        assert(n2a.parent === n2, 'n2a should remain under n2', snap);
         return { before, after };
       });
 
