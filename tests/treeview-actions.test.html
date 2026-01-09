@@ -401,6 +401,182 @@
         return await runMoveUpEscapeTest(true);
       });
 
+      async function runMoveUpDeepPromotionTest(toggleValue) {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = toggleValue;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          toggleValue,
+          'moveUpIntoExpandedSibling should match test toggle'
+        );
+        const windowA = await addChild(view.root, {
+          id: 'wa',
+          type: 'window',
+          windowId: 1,
+          loaded: true,
+          expanded: true
+        });
+        const t1 = await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 1,
+          loaded: true,
+          expanded: true
+        });
+        const t2 = await addChild(t1, {
+          id: 't2',
+          tabId: 2,
+          windowId: 1,
+          loaded: true,
+          expanded: true
+        });
+        const t3 = await addChild(t2, {
+          id: 't3',
+          tabId: 3,
+          windowId: 1,
+          loaded: true,
+          expanded: true
+        });
+        const t4 = await addChild(t3, {
+          id: 't4',
+          tabId: 4,
+          windowId: 1,
+          loaded: true
+        });
+        const t5 = await addChild(windowA, {
+          id: 't5',
+          tabId: 5,
+          windowId: 1,
+          loaded: true,
+          expanded: true
+        });
+        await addChild(t5, {
+          id: 't6',
+          tabId: 6,
+          windowId: 1,
+          loaded: true
+        });
+
+        view.cursor = t4;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeUp({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(t4.parent, t2, 'Node should promote to t2', snap);
+        assertEqual(t2.nodes[0].id, 't4', 'Promoted node should land before ancestor', snap);
+        assertEqual(t2.nodes[1].id, 't3', 'Ancestor should move after promoted node', snap);
+        assertEqual(t3.nodes.length, 0, 'Ancestor should no longer contain promoted node', snap);
+        assertEqual(windowA.nodes[0].id, 't1', 'Root branch should stay first', snap);
+        assertEqual(windowA.nodes[1].id, 't5', 'Sibling branch should stay second', snap);
+        return { before, after };
+      }
+
+      test('move up promotes before ancestor (Toggle off)', async () => {
+        return await runMoveUpDeepPromotionTest(false);
+      });
+
+      test('move up promotes before ancestor (Toggle on)', async () => {
+        return await runMoveUpDeepPromotionTest(true);
+      });
+
+      async function runMoveUpParentSiblingTest(toggleValue, useInvert) {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = toggleValue;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          toggleValue,
+          'moveUpIntoExpandedSibling should match test toggle'
+        );
+        const windowA = await addChild(view.root, {
+          id: 'wa',
+          type: 'window',
+          windowId: 1,
+          loaded: true,
+          expanded: true
+        });
+        const t1 = await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 1,
+          loaded: true,
+          expanded: true
+        });
+        const t2 = await addChild(t1, {
+          id: 't2',
+          tabId: 2,
+          windowId: 1,
+          loaded: true,
+          expanded: true
+        });
+        const t2a = await addChild(t2, {
+          id: 't2a',
+          tabId: 21,
+          windowId: 1,
+          loaded: true,
+          expanded: true
+        });
+        await addChild(t2a, {
+          id: 't2a1',
+          tabId: 22,
+          windowId: 1,
+          loaded: true
+        });
+        const t3 = await addChild(t2, {
+          id: 't3',
+          tabId: 3,
+          windowId: 1,
+          loaded: true,
+          expanded: true
+        });
+        const t4 = await addChild(t3, {
+          id: 't4',
+          tabId: 4,
+          windowId: 1,
+          loaded: true
+        });
+
+        view.cursor = t4;
+        const before = treeSnapshot(view.root);
+        if (useInvert) {
+          await view.action_moveNodeUpInvertNest({ type: 'command' });
+        } else {
+          await view.action_moveNodeUp({ type: 'command' });
+        }
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        const shouldNest = useInvert ? (! toggleValue) : toggleValue;
+        if (shouldNest) {
+          assertEqual(t4.parent, t2a, 'Node should nest into previous sibling', snap);
+          assertEqual(t2a.nodes[t2a.nodes.length - 1].id, 't4', 'Nested node should append', snap);
+        } else {
+          assertEqual(t4.parent, t2, 'Node should promote to parent level', snap);
+          assertEqual(t2.nodes[0].id, 't2a', 'Previous sibling should stay first', snap);
+          assertEqual(t2.nodes[1].id, 't4', 'Promoted node should land before ancestor', snap);
+          assertEqual(t2.nodes[2].id, 't3', 'Ancestor should move after promoted node', snap);
+        }
+        assertEqual(t3.nodes.length, 0, 'Ancestor should no longer contain promoted node', snap);
+        assert(t4.parent !== windowA, 'Node should not move to window root', snap);
+        return { before, after };
+      }
+
+      test('move up avoids window jump when previous sibling exists (Toggle off)', async () => {
+        return await runMoveUpParentSiblingTest(false, false);
+      });
+
+      test('move up nests into previous sibling when enabled (Toggle on)', async () => {
+        return await runMoveUpParentSiblingTest(true, false);
+      });
+
+      test('move up invert nests into previous sibling (Toggle off)', async () => {
+        return await runMoveUpParentSiblingTest(false, true);
+      });
+
+      test('move up invert promotes before ancestor (Toggle on)', async () => {
+        return await runMoveUpParentSiblingTest(true, true);
+      });
+
       test('move up stays at sibling level (Toggle off)', async () => {
         const view = createView();
         view.moveUpIntoExpandedSibling = false;

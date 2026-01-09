@@ -807,6 +807,18 @@ export class TreeView extends Tree {
       }
       return anchor;
     };
+    const resolveAnchorForParent = (row, targetParent) => {
+      if (! row || ! targetParent) return null;
+      let anchor = row;
+      while (anchor.parent &&
+        (anchor.parent !== targetParent) &&
+        (! anchor.parent.isRoot())) {
+        anchor = anchor.parent;
+      }
+      if (anchor.parent !== targetParent) return null;
+      if (anchor.isRoot && anchor.isRoot()) return null;
+      return anchor;
+    };
     const canNestInto = (node) => {
       if (! node.hasKids || (! node.hasKids())) return false;
       if (! node.isExpanded || (! node.isExpanded())) return false;
@@ -815,14 +827,17 @@ export class TreeView extends Tree {
     };
     const anchor = resolveAnchor(prevRow);
     if (prevRow.isParentOf(this.cursor)) {
-      const altPrevRow = this.cursor.parent.prevVisibleNode(this.viewRoot);
+      let altPrevRow = this.cursor.parent.prevVisibleNode(this.viewRoot);
       if (altPrevRow && (altPrevRow !== this.cursor.parent)) {
-        const altAnchor = resolveAnchor(altPrevRow);
+        const targetParent = this.cursor.parent.parent;
+        const altAnchor = resolveAnchorForParent(altPrevRow, targetParent);
         const shouldForceWindowNest = (
           this.cursor.isLoaded && this.cursor.isLoaded() &&
-          (! this.cursor.isWindow || (! this.cursor.isWindow()))
+          (! this.cursor.isWindow || (! this.cursor.isWindow())) &&
+          this.cursor.parent &&
+          this.cursor.parent.isWindow && this.cursor.parent.isWindow()
         );
-        if (canNestInto(altAnchor) &&
+        if (altAnchor && canNestInto(altAnchor) &&
           ((nestIntoExpandedSibling) || (shouldForceWindowNest && altAnchor.isWindow()))) {
           const destParent = altAnchor;
           const destIndex = altAnchor.nodes.length;
