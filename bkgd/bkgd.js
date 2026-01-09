@@ -73,6 +73,7 @@ export class Bkgd {
     emit.isBkgd = true;
     emit.bkgd = this;
     this.ports = [];
+    // TODO: consider config to keep a long-lived port open when no views exist.
 
     // if I understand correctly, this needs to NOT be async,
     // because that means listeners aren't registered immediately at startup,

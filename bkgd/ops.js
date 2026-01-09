@@ -32,6 +32,7 @@ export class OpsQueue {
   }
 
   // Store intent before work begins so operations can be resumed safely.
+  // TODO: add lightweight enqueue/claim/done instrumentation (timestamps or ring buffer) to trace SW kills.
   async enqueue (op) {
     const record = this.buildRecord(op);
     await this.db.enqueueOp(record);
