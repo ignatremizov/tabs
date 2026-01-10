@@ -575,9 +575,8 @@ foo {
 }
 
 .cursor.row {
-  /* TODO: Use a relevant var for the scroll margin */
-  scroll-margin-top: 1em;
-  scroll-margin-bottom: 1em;
+  scroll-margin-top: var(--cursor-scroll-margin);
+  scroll-margin-bottom: var(--cursor-scroll-margin);
   background: linear-gradient(var(--cursor-bg-top), var(--cursor-bg-bot));
   margin: 0px;
   border-radius: var(--cursor-radius-expanded);
@@ -1022,6 +1021,7 @@ foo {
   --cursor-branch-radius: 0.4rem;
   --cursor-radius-collapsed: 0.4rem;
   --cursor-radius-expanded: 0.4rem 0.4rem 0 0;
+  --cursor-scroll-margin: 1em;
   --window-branch-radius: 0.5rem;
   /***** marked nodes *****/
   --marked-node-shadow: 0 0 10px gold;
