@@ -553,6 +553,12 @@ export class Bkgd {
         winNode = await this.tree.onWindowCreated(window,
           { reason: 'mergeOpenWindowsIntoTree' });
       }
+      if (typeof window.focused === 'boolean') {
+        await winNode.setTabFields(
+          { active: window.focused },
+          { reason: 'mergeOpenWindowsIntoTree' }
+        );
+      }
       // mark this winNode as actually attached to a real window
       attached.push({ winNode, window });
       attachedNodeIds.add(winNode.id);

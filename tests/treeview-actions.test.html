@@ -37,6 +37,7 @@
     <a href="#move-nodes">Move Nodes</a> |
     <a href="#marked-nodes">Marked Nodes</a> |
     <a href="#details">Details</a> |
+    <a href="#window-focus">Window Focus</a> |
     <a href="#basic-deletes">Basic Deletes</a> |
     <a href="#root-window-deletes">Root Window Deletes</a> |
     <a href="#ancestor-window-deletes">Ancestor Window Deletes</a> |
@@ -1258,6 +1259,33 @@
         assertEqual(saved.name, 'detailsState', 'Should save detailsState key', { before });
         assertEqual(saved.value, view.detailsState, 'Should save current state', { before });
         return { before, after: treeSnapshot(view.root) };
+      });
+
+      testGroup('Window Focus');
+      test('window highlight follows node.active only', async () => {
+        const view = createView();
+        view.viewRoot = view.root;
+        view.windowId = 1;
+
+        const win1 = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 1,
+          active: false
+        });
+        const win2 = await addChild(view.root, {
+          id: 'w2',
+          type: 'window',
+          windowId: 2,
+          active: true
+        });
+
+        view.$renderWholeTree();
+
+        assert(! win1.$row.classList.contains('active'),
+          'Unfocused window should not be active');
+        assert(win2.$row.classList.contains('active'),
+          'Focused window should be active');
       });
 
       testGroup('Basic Deletes');

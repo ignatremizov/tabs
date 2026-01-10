@@ -480,6 +480,7 @@ test('mergeOpenWindowsIntoTree assigns unique window nodes', async () => {
   api.windows.getAll = async () => ([
     {
       id: 60,
+      focused: true,
       tabs: [
         { id: 1, url: 'https://example.com/a' },
         { id: 2, url: 'https://example.com/b' }
@@ -487,6 +488,7 @@ test('mergeOpenWindowsIntoTree assigns unique window nodes', async () => {
     },
     {
       id: 1098,
+      focused: false,
       tabs: [
         { id: 3, url: 'https://example.com/a' },
         { id: 4, url: 'https://example.com/b' }
@@ -503,6 +505,10 @@ test('mergeOpenWindowsIntoTree assigns unique window nodes', async () => {
   assertEqual(uniqueIds.size, 2, 'Window nodes should be unique');
   assert(uniqueIds.has(60), 'Should attach window 60');
   assert(uniqueIds.has(1098), 'Should attach window 1098');
+  const focusedWindow = windowNodes.find((n) => n.windowId === 60);
+  const unfocusedWindow = windowNodes.find((n) => n.windowId === 1098);
+  assertEqual(focusedWindow.active, true, 'Focused window should be active');
+  assertEqual(unfocusedWindow.active, false, 'Unfocused window should be inactive');
 });
 
 test('runReconcile drops boring closed tabs', async () => {
