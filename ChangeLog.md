@@ -84,6 +84,7 @@ development yet.
   - Fix tab close handling when a fresh service worker spawns (avoid stale wasLoaded pink tabs after manual closes).
   - Improve fsck orphan recovery (self-parent/parent-child mismatch detection, clearer logging, clear loaded/wasLoaded on reattach).
   - Default the first window to Session view scope and subsequent windows to Window scope.
+  - Prefer direct tabId matches over oldTabId when resolving tab nodes.
   - Add make test-node target for running node-based tests without browser tests.
   - Update backup archive regex and backup serialization cleanup (skip oldTabId, ignore root-as-child).
 - 2026-01-07:

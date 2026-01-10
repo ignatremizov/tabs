@@ -416,6 +416,26 @@ test('ensureMoved passes op to applyMoveForIntent', async () => {
   assertEqual(receivedOp.opId, 'op-move', 'Should pass op to applyMoveForIntent');
 });
 
+test('getNodeByTabId prefers tabId over oldTabId', async () => {
+  const tree = createTree(null);
+  const win = await addChild(tree.root, { id: 'w1', type: 'window' });
+  const direct = await addChild(win, {
+    id: 't1',
+    url: 'https://example.com',
+    tabId: 10,
+    loaded: true
+  });
+  const old = await addChild(win, {
+    id: 't2',
+    url: 'https://example.com/old',
+    loaded: false
+  });
+  old.oldTabId = 10;
+
+  const found = tree.getNodeByTabId(10);
+  assertEqual(found.id, direct.id, 'Should prefer direct tabId match');
+});
+
 test('findMatchingWindow honors exclude list', async () => {
   const tree = createTree(null);
   const win1 = await addChild(tree.root, { id: 'w1', type: 'window' });

@@ -339,15 +339,24 @@ export class Tree {
   getNodeByTabId (tabId, root)  {
     // TODO: maybe move this function to Node.getNodeByTabId() ?
     if (! root) root = this.root;
-    const found = root.findNodes((node) =>
-      { return ((node.tabId === tabId) || (node.oldTabId === tabId));}
+    const directMatches = root.findNodes((node) =>
+      { return (node.tabId === tabId); }
     );
-    if (1 === found.length) return found[0];
-    if (1 > found.length) return null;
-    warn(`Tree.getNodeByTabId(${tabId}) found ${found.length} matches, not 1`,
-      found);
-    // FIXME: prefer matching tabId over oldTabId
-    return found[0];
+    if (1 === directMatches.length) return directMatches[0];
+    if (directMatches.length > 1) {
+      warn(`Tree.getNodeByTabId(${tabId}) found ${directMatches.length} tabId matches, not 1`,
+        directMatches);
+      return directMatches[0];
+    }
+
+    const oldMatches = root.findNodes((node) =>
+      { return (node.oldTabId === tabId); }
+    );
+    if (1 === oldMatches.length) return oldMatches[0];
+    if (1 > oldMatches.length) return null;
+    warn(`Tree.getNodeByTabId(${tabId}) found ${oldMatches.length} oldTabId matches, not 1`,
+      oldMatches);
+    return oldMatches[0];
   }
 
   getTabPendingUrl (tab) {
