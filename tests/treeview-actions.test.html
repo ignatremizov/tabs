@@ -21,6 +21,7 @@
     .snap-dot { display: inline-block; width: 0.9em; text-align: center; }
     .snap-loaded { color: #1a7f37; }
     .snap-unloaded { color: #b36b00; }
+    .snap-marked { color: #b42318; font-weight: 600; }
     .snap-window { color: #0b5cad; }
     .snap-label { color: #6f42c1; }
     .snap-node { color: #444; }
@@ -28,6 +29,12 @@
     .legend { margin-top: 6px; font-size: 0.9em; color: #555; }
     .legend span { margin-right: 12px; }
     .hidden-test-ui { display: none; }
+    #tree-view, #tree-root { display: none; }
+    #details-box, #details-btn,
+    #view-scope-btn, #tree-view-in-tab-btn,
+    #backup-btn, #options-btn, #donate-btn, #help-btn {
+      display: none;
+    }
   </style>
 </head>
 <body>
@@ -184,6 +191,7 @@
             node.tabId ? `tab=${node.tabId}` : null,
             (! node.isRoot() && (node.loaded === true)) ? 'loaded' : null,
             (! node.isRoot() && (node.loaded === false)) ? 'unloaded' : null,
+            (! node.isRoot() && node.marked) ? 'marked' : null,
             (! node.isRoot() && node.hasKids && node.hasKids())
               ? (node.isExpanded && node.isExpanded() ? 'expanded' : 'collapsed')
               : null,
@@ -195,6 +203,41 @@
         }
         walk(root, 0);
         return lines.join('\n');
+      }
+
+      function appendTokenizedText($target, content) {
+        const tokens = [
+          { word: 'loaded', className: 'snap-loaded' },
+          { word: 'unloaded', className: 'snap-unloaded' },
+          { word: 'marked', className: 'snap-marked' }
+        ];
+        let remaining = content;
+        while (remaining.length) {
+          let nextToken = null;
+          for (const token of tokens) {
+            const regex = new RegExp(`(^|\\s)${token.word}(?=\\s|$)`);
+            const match = remaining.match(regex);
+            if (!match) continue;
+            const index = match.index + match[1].length;
+            if (!nextToken || index < nextToken.index) {
+              nextToken = { token, index };
+            }
+          }
+          if (!nextToken) {
+            $target.appendChild(document.createTextNode(remaining));
+            break;
+          }
+          if (nextToken.index > 0) {
+            $target.appendChild(document.createTextNode(
+              remaining.slice(0, nextToken.index)
+            ));
+          }
+          const $span = document.createElement('span');
+          $span.className = nextToken.token.className;
+          $span.textContent = nextToken.token.word;
+          $target.appendChild($span);
+          remaining = remaining.slice(nextToken.index + nextToken.token.word.length);
+        }
       }
 
       function renderSnapshot(pre, snapshot) {
@@ -226,21 +269,7 @@
           else if (isWindow) $text.classList.add('snap-window');
           else if (isLabel) $text.classList.add('snap-label');
           else $text.classList.add('snap-node');
-          const statusMatch = content.match(/\s(loaded|unloaded)(?=\s|$)/);
-          if (statusMatch) {
-            const status = statusMatch[1];
-            const index = statusMatch.index;
-            const beforeText = content.slice(0, index);
-            const afterText = content.slice(index + status.length + 1);
-            $text.appendChild(document.createTextNode(beforeText + ' '));
-            const $status = document.createElement('span');
-            $status.className = (status === 'loaded') ? 'snap-loaded' : 'snap-unloaded';
-            $status.textContent = status;
-            $text.appendChild($status);
-            $text.appendChild(document.createTextNode(afterText));
-          } else {
-            $text.textContent = content;
-          }
+          appendTokenizedText($text, content);
 
           $line.append($indent, $dot, document.createTextNode(' '), $text);
           pre.appendChild($line);
@@ -254,6 +283,7 @@
         const legendItems = [
           { text: '● loaded', className: 'snap-loaded' },
           { text: '○ unloaded', className: 'snap-unloaded' },
+          { text: 'marked', className: 'snap-marked' },
           { text: 'window', className: 'snap-window' },
           { text: 'label', className: 'snap-label' },
           { text: 'node', className: 'snap-node' }
@@ -1236,6 +1266,28 @@
         assertEqual(n2.nodes.length, 1, 'n2 should keep remaining child', snap);
         assertEqual(n2.nodes[0].id, 'n2a', 'n2 should keep n2a child', snap);
         assert(n2a.parent === n2, 'n2a should remain under n2', snap);
+        return { before, after };
+      });
+      test('paste marked before inserts before cursor', async () => {
+        const view = createView();
+        const n1 = await addChild(view.root, { id: 'n1', loaded: true });
+        const n2 = await addChild(view.root, { id: 'n2', loaded: true });
+        const n3 = await addChild(view.root, { id: 'n3', loaded: true });
+        const n4 = await addChild(view.root, { id: 'n4', loaded: true });
+
+        await n4.setMarked(true, { reason: 'userAction' });
+        await n2.setMarked(true, { reason: 'userAction' });
+
+        view.cursor = n3;
+        const before = treeSnapshot(view.root);
+        await view.action_pasteMarkedBefore({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(view.root.nodes[0].id, 'n1', 'n1 should stay first', snap);
+        assertEqual(view.root.nodes[1].id, 'n2', 'Marked node should lead block', snap);
+        assertEqual(view.root.nodes[2].id, 'n4', 'Marked node should follow in order', snap);
+        assertEqual(view.root.nodes[3].id, 'n3', 'Cursor should move after marked block', snap);
         return { before, after };
       });
 

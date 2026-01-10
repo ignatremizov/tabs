@@ -1,0 +1,141 @@
+<!-- docs/dev/dev-marking.html: Developer notes on marking and paste -->
+<!-- Copyright (C) 2025 Ignat Remizov -->
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html>
+<head>
+<title>Marking &amp; Paste (Developer Notes)</title>
+<style><!--
+body {
+  font-size: 1.2rem;
+  line-height: 1.5;
+}
+code {
+  background: #f5f5f5;
+  padding: 0 0.2rem;
+}
+--></style>
+</head>
+<body>
+
+  <h1>Marking &amp; Paste (Developer Notes)</h1>
+
+  <p>
+  Marking is the TreeView's batch-selection system. It lets users select a
+  set of nodes and move them as a group (including their descendants).
+  The key goals are: fast batch moves, stable ordering, and no recursion
+  hazards when moving into marked ancestors.
+  </p>
+
+  <h2>Data model</h2>
+  <ul>
+    <li><code>Node.marked</code> — explicit mark flag (boolean).</li>
+    <li><code>Tree.markedNodes</code> — array of explicitly marked node IDs.</li>
+    <li><code>Node.markedBy()</code> — returns the nearest marked ancestor.</li>
+  </ul>
+  <p>
+  Marked state is serialized with normal tree persistence because
+  <code>marked</code> lives in <code>Tree.dictable</code>. However, it is
+  intentionally stripped from export backups via
+  <code>Tree.serializeNodes(forBackup=true)</code>, so backups do not restore
+  marking state.
+  </p>
+
+  <h2>Rules for marking</h2>
+  <ul>
+    <li>Root and window nodes cannot be marked.</li>
+    <li>If an ancestor is already marked, a mark request is ignored.</li>
+    <li>Marking a node unmarks all of its descendants.</li>
+    <li>
+      Moving a marked node under a marked parent unmarks it
+      to avoid nested marks.
+    </li>
+  </ul>
+  <p>
+  These rules keep the set of marked nodes flat and prevent infinite
+  recursion when pasting into marked subtrees.
+  </p>
+
+  <h2>UI behavior</h2>
+  <ul>
+    <li>
+      <code>view/nodeview.js</code> adds a <code>.marked</code> class to rows
+      when <code>node.marked</code> is true.
+    </li>
+    <li>
+      The marked count widget (<code>#marked-count</code>) shows how many
+      nodes are explicitly marked. It appends <code>+</code> if any marked
+      node has children (meaning more nodes will move by association).
+    </li>
+    <li>
+      Clicking the marked count triggers <code>action_pasteMarked()</code>.
+    </li>
+  </ul>
+
+  <h2>Default shortcuts</h2>
+  <ul>
+    <li><code>M</code>: toggle mark on cursor node.</li>
+    <li><code>Shift+M</code>: unmark all.</li>
+    <li><code>P</code>: paste marked after cursor.</li>
+    <li><code>Shift+P</code>: paste marked before cursor.</li>
+  </ul>
+  <p>
+  These bindings are configurable in Options and live in
+  <code>common/keybindings.js</code>.
+  </p>
+
+  <h2>Paste behavior</h2>
+  <p>
+  Marked nodes are moved as a block in pre-order tree order. This makes
+  paste stable and deterministic even if the user marked items in a
+  different order. The block is moved (not copied), and marked state
+  remains unless a mark rule clears it.
+  </p>
+  <ul>
+    <li>
+      <code>action_pasteMarked()</code> moves the block after the cursor,
+      or into the cursor as the first child if the cursor is expanded.
+    </li>
+    <li>
+      <code>action_pasteMarkedBefore()</code> moves the block before the
+      cursor, at the same parent level.
+    </li>
+    <li>
+      If the cursor is root, both paste actions insert at the top of root.
+    </li>
+    <li>
+      If the cursor is inside a marked ancestor,
+      the destination is forced above that marked ancestor to avoid recursion.
+    </li>
+  </ul>
+
+  <h2>Persistence and messaging</h2>
+  <ul>
+    <li>
+      <code>Node.setMarked()</code> emits
+      <code>tree_nodeChanged</code> with <code>type: 'setMarked'</code>
+      on user action.
+    </li>
+    <li>
+      <code>Tree.onMessage()</code> applies mark changes to keep views in sync.
+    </li>
+    <li>
+      <code>NodeStore.setMarked()</code> persists mark changes to IndexedDB.
+    </li>
+  </ul>
+
+  <h2>Tests</h2>
+  <ul>
+    <li>
+      <code>tests/treeview-actions.test.html</code> &mdash;
+      Marked Nodes group (ordering and paste behaviors).
+    </li>
+  </ul>
+
+  <h2>Debugging tips</h2>
+  <pre><code>// in the sidepanel console
+const tree = document.querySelector('#tree-view').__tree;
+tree.markedNodes;  // list of explicitly marked IDs
+</code></pre>
+
+</body>
+</html>

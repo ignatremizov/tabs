@@ -1682,8 +1682,63 @@ export class TreeView extends Tree {
     this.setStatus(`Moved ${numMoved} nodes`);
   }
 
-  // TODO
   async action_pasteMarkedBefore (event) {
+    if (! this.cursor) return;
+    debug('action_pasteMarkedBefore()');
+
+    let destParent;
+    let destIndex;
+    const markedParent = this.cursor.markedBy();
+    if (this.cursor.isRoot()) {
+      destParent = this.cursor;
+      destIndex = 0;
+    }
+    else if (markedParent) {
+      destParent = markedParent.parent;
+      destIndex = markedParent.indexOf();
+    }
+    else {
+      destParent = this.cursor.parent;
+      destIndex = this.cursor.indexOf();
+    }
+    if (! destParent) return;
+
+    const orderMap = new Map();
+    let orderIndex = 0;
+    const stack = [this.root];
+    while (stack.length > 0) {
+      const node = stack.pop();
+      orderMap.set(node.id, orderIndex);
+      orderIndex += 1;
+      for (let i = node.nodes.length - 1; i >= 0; i--) {
+        stack.push(node.nodes[i]);
+      }
+    }
+    const orderedMarkedNodes = this.markedNodes.slice().sort((a, b) => {
+      const orderA = orderMap.has(a) ? orderMap.get(a) : Number.MAX_SAFE_INTEGER;
+      const orderB = orderMap.has(b) ? orderMap.get(b) : Number.MAX_SAFE_INTEGER;
+      if (orderA !== orderB) return orderA - orderB;
+      return String(a).localeCompare(String(b));
+    });
+
+    let insertIndex = destIndex;
+    for (const nodeId of orderedMarkedNodes) {
+      const node = this.nodes[nodeId];
+      if (! node) continue;
+      if (node.parent === destParent && node.indexOf() < destIndex) {
+        insertIndex -= 1;
+      }
+    }
+
+    let numMoved = 0;
+    for (const nodeId of orderedMarkedNodes) {
+      const node = this.nodes[nodeId];
+      if (! node) continue;
+      await node.moveTo(destParent, insertIndex, { reason: 'userAction' });
+      numMoved += 1;
+      insertIndex += 1;
+    }
+    this.setStatus(`Moved ${numMoved} nodes`);
   }
 
   async action_backupSession (event) {
