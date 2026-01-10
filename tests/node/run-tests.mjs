@@ -57,6 +57,7 @@ let api;
 let emit;
 let Bkgd;
 let Tree;
+let TreeStore;
 let Node;
 let OpsQueue;
 let runReconcile;
@@ -322,6 +323,68 @@ test('processOpsQueue executes ensureUnloaded intents', async () => {
 
   assertEqual(tab.loaded, false, 'Should unload tab');
   assertEqual(db.ops.get('op-1').state, 'done', 'Op should be marked done');
+});
+
+test('TreeStore onTabRemoved honors tabClosedReason for manual unload', async () => {
+  const originalIndexedDb = globalThis.indexedDB;
+  const calls = [];
+  try {
+    globalThis.indexedDB = {
+      open: () => {
+        const request = {};
+        setTimeout(() => {
+          if (request.onsuccess) {
+            request.onsuccess({
+              target: {
+                result: {
+                  objectStoreNames: { contains: () => true }
+                }
+              }
+            });
+          }
+        }, 0);
+        return request;
+      }
+    };
+
+    const bkgd = {
+      enqueueIntent: async (name, payload, source) => {
+        calls.push({ name, payload, source });
+      }
+    };
+    const tree = new TreeStore(bkgd);
+    tree.db = {
+      saveNode: async () => {},
+      deleteNode: async () => {}
+    };
+    bkgd.tree = tree;
+
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      loaded: true,
+      windowId: 1
+    });
+    const tab = await addChild(win, {
+      id: 't1',
+      url: 'https://example.com',
+      loaded: false,
+      tabId: undefined,
+      windowId: undefined
+    });
+    tab.oldTabId = 12;
+    tab.tabClosedReason = 'unload';
+
+    await tree.onTabRemoved(12, { windowId: 1, isWindowClosing: false });
+
+    assertEqual(calls.length, 1, 'Should enqueue one intent');
+    assertEqual(calls[0].name, 'ensureUnloaded', 'Should finalize unload');
+    assertEqual(calls[0].payload.nodeId, tab.id, 'Should target tab node');
+    assertEqual(calls[0].payload.detail, 'manualUnload', 'Should tag manual unload');
+    assertEqual(tab.tabClosedReason, undefined, 'Should clear tabClosedReason');
+  } finally {
+    globalThis.indexedDB = originalIndexedDb;
+  }
 });
 
 test('ensureMoved passes op to applyMoveForIntent', async () => {
@@ -595,6 +658,7 @@ async function runTests() {
     import('/bkgd/bkgd.js'),
     import('/bkgd/ops.js'),
     import('/bkgd/reconcile.js'),
+    import('/bkgd/treestore.js'),
     import('/common/tree.js'),
     import('/common/node.js'),
     import('/common/common.js')
@@ -603,9 +667,10 @@ async function runTests() {
   Bkgd = mods[1].Bkgd;
   OpsQueue = mods[2].OpsQueue;
   runReconcile = mods[3].runReconcile;
-  Tree = mods[4].Tree;
-  Node = mods[5].Node;
-  emit = mods[6].emit;
+  TreeStore = mods[4].TreeStore;
+  Tree = mods[5].Tree;
+  Node = mods[6].Node;
+  emit = mods[7].emit;
   TestNode = class TestNode extends Node {
     newNodeId () {
       this.tree.nextId += 1;
