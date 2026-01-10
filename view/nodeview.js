@@ -15,9 +15,7 @@ export class NodeView extends Node {
   constructor (tree, parent, window) {
     super(tree, parent);
 
-    // FIXME: should be a window Node, not browser window?
-    this.window = window;
-    if (undefined === window) { }  // TODO
+    this.window = (undefined !== window) ? window : tree.window;
     // DOM objects
     this.$ = null;  // outermost element is a <li>
     this.$row = null;  // <div> for label, title+url, favicon, etc
@@ -653,4 +651,3 @@ export class NodeView extends Node {
   }
 
 }  // end class NodeView
-
