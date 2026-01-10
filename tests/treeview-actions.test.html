@@ -1247,18 +1247,21 @@
         view.setWindowConfig = (name, value) => {
           saved = { name, value };
         };
-        const before = view.detailsState;
+        const beforeState = view.detailsState;
+        const before = treeSnapshot(view.root);
         view.onDetailsBtnClick();
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
         assertEqual(
           view.detailsState,
-          (before + 1) % 3,
+          (beforeState + 1) % 3,
           'Details state should advance',
-          { before }
+          snap
         );
-        assert(saved, 'Should save details state', { before });
-        assertEqual(saved.name, 'detailsState', 'Should save detailsState key', { before });
-        assertEqual(saved.value, view.detailsState, 'Should save current state', { before });
-        return { before, after: treeSnapshot(view.root) };
+        assert(saved, 'Should save details state', snap);
+        assertEqual(saved.name, 'detailsState', 'Should save detailsState key', snap);
+        assertEqual(saved.value, view.detailsState, 'Should save current state', snap);
+        return snap;
       });
 
       testGroup('Window Focus');
