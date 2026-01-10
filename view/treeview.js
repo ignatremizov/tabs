@@ -192,6 +192,11 @@ export class TreeView extends Tree {
     this.windowNode = this.root.getWindowId(this.windowId);
     this.viewScope = await this.getWindowConfig('viewScope', 'session');
     if (! this.viewScope) this.viewScope = 'session';
+    const savedDetailsState = await this.getWindowConfig(
+      'detailsState',
+      this.detailsState
+    );
+    if (undefined !== savedDetailsState) this.detailsState = savedDetailsState;
     this.$renderViewScopeBtn();
 
     this.$renderWholeTree();
@@ -2194,10 +2199,7 @@ export class TreeView extends Tree {
     // it's a 3-state button: off, short, full (none, notes, details)
     this.detailsState = (this.detailsState + 1) % 3;
     // save button state to config storage
-    // TODO: should this be per-view or global?
-    //api.storage.local.set({ 'TreeView.detailsState': this.detailsState });
-    //api.storage.local.set({
-    //  'TreeView(${this.windowId}).detailsState': this.detailsState });
+    this.setWindowConfig('detailsState', this.detailsState);
     this.$renderDetailsBtn();
   }
 

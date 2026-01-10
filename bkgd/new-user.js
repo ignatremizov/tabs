@@ -30,6 +30,8 @@ export async function createNewUserTutorialNodes (tree, parentNode) {
     ]},
     { label: 'Longer notes can be seen below',
       note: 'Right here.  Be sure to check this area any time you see an "attachment" icon on the cursor row.' },
+    { label: 'Details button cycles Notes / Details / Off',
+      note: 'Use the "Details" button at the bottom of the panel to switch modes (the label changes as you click).  Each browser window remembers its last mode, so it comes back after reloads.' },
     { label: "Here are the other key bindings", expanded: false,
       note: "Don't worry about the details yet, these are here for later reference.",
       nodes: [ ...keymapInfo ]},

@@ -36,6 +36,7 @@
     <strong>TOC (test group headers):</strong>
     <a href="#move-nodes">Move Nodes</a> |
     <a href="#marked-nodes">Marked Nodes</a> |
+    <a href="#details">Details</a> |
     <a href="#basic-deletes">Basic Deletes</a> |
     <a href="#root-window-deletes">Root Window Deletes</a> |
     <a href="#ancestor-window-deletes">Ancestor Window Deletes</a> |
@@ -1235,6 +1236,28 @@
         assertEqual(n2.nodes[0].id, 'n2a', 'n2 should keep n2a child', snap);
         assert(n2a.parent === n2, 'n2a should remain under n2', snap);
         return { before, after };
+      });
+
+      testGroup('Details');
+      test('details button persists state to window config', async () => {
+        const view = createView();
+        view.detailsState = 1;
+        let saved = null;
+        view.setWindowConfig = (name, value) => {
+          saved = { name, value };
+        };
+        const before = view.detailsState;
+        view.onDetailsBtnClick();
+        assertEqual(
+          view.detailsState,
+          (before + 1) % 3,
+          'Details state should advance',
+          { before }
+        );
+        assert(saved, 'Should save details state', { before });
+        assertEqual(saved.name, 'detailsState', 'Should save detailsState key', { before });
+        assertEqual(saved.value, view.detailsState, 'Should save current state', { before });
+        return { before, after: treeSnapshot(view.root) };
       });
 
       testGroup('Basic Deletes');

@@ -389,7 +389,7 @@ Client (browser extension):
     - [x] Window-only view scope
     - [x] Remember view scope per window
     - [ ] Remember panel size per window
-    - [ ] Remember details/notes/plain mode per window
+    - [x] Remember details/notes/plain mode per browser window
     - [ ] Zoom buttons (can at least zoom using browser built-in controls)
     - [ ] Remember zoom per window
     - [ ] Tab count on extension badge
