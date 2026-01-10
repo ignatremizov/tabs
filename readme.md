@@ -1,6 +1,6 @@
 # Ignat's copy of TK's Tree Style Tab Outliner
 
-![Coverage](https://img.shields.io/badge/coverage-25%25-yellow.svg)
+![Coverage](https://img.shields.io/badge/coverage-26%25-yellow.svg)
 
 Windows, tabs, bookmarks, notes, and more... all mixed together in one place,
 a highly structured living document that you and your browsers build together

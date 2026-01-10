@@ -79,6 +79,13 @@ development yet.
 # History (by month)
 
 ## 2026-01
+- 2026-01-10:
+  - Remember details/notes/plain mode per browser window.
+  - Fix tab close handling when a fresh service worker spawns (avoid stale wasLoaded pink tabs after manual closes).
+  - Improve fsck orphan recovery (self-parent/parent-child mismatch detection, clearer logging, clear loaded/wasLoaded on reattach).
+  - Default the first window to Session view scope and subsequent windows to Window scope.
+  - Add make test-node target for running node-based tests without browser tests.
+  - Update backup archive regex and backup serialization cleanup (skip oldTabId, ignore root-as-child).
 - 2026-01-07:
   - Persist window geometry/state/incognito and update bounds changes.
   - Document IndexedDB persistence details for maintainers.
