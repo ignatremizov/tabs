@@ -2,7 +2,7 @@
 # Copyright (C) 2025 Selene ToyKeeper & Ignat Remizov
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-.PHONY: all help firefox-zip chrome-zip chrome-dir firefox-sign tag test todo coverage v
+.PHONY: all help firefox-zip chrome-zip chrome-dir firefox-sign tag test test-node todo coverage v
 
 ifneq ($(filter v,$(MAKECMDGOALS)),)
 VERBOSE=1
@@ -23,6 +23,7 @@ help:
 	@echo "  firefox-sign - Sign Firefox extension via AMO (requires .env JWT_ISSUER/JWT_SECRET)"
 	@echo "  tag          - Bump version tag (default: patch) or set a tag"
 	@echo "  test         - Open unit tests in browser"
+	@echo "  test-node    - Run node-based tests only"
 	@echo "  todo         - List TODO/FIXME comments in source files"
 	@echo "  coverage     - Run node-based tests with V8 coverage"
 	@echo "  help         - Show this help message"
@@ -55,9 +56,15 @@ ifeq (tag,$(firstword $(MAKECMDGOALS)))
 endif
 
 # Open unit tests in browser
+NODE_TEST_CMD = TKTSTO_TEST_VERBOSE=$(if $(filter 1 true yes,$(VERBOSE) $(V)),1,) node --import 'data:text/javascript,import { register } from "node:module"; import { pathToFileURL } from "node:url"; register("./tests/node/loader.mjs", pathToFileURL("./"));' ./tests/node/run-tests.mjs
+
+test-node:
+	@echo "Running node-based tests..."
+	@$(NODE_TEST_CMD)
+
 test:
 	@echo "Running node-based tests..."
-	@TKTSTO_TEST_VERBOSE=$(if $(filter 1 true yes,$(VERBOSE) $(V)),1,) node --import 'data:text/javascript,import { register } from "node:module"; import { pathToFileURL } from "node:url"; register("./tests/node/loader.mjs", pathToFileURL("./"));' ./tests/node/run-tests.mjs
+	@$(NODE_TEST_CMD)
 	@echo "Starting local test server at http://127.0.0.1:8765 ..."
 	@python3 -m http.server 8765 --directory . >/dev/null 2>&1 & echo $$! > /tmp/tktsto-test-server.pid
 	@sleep 0.5
