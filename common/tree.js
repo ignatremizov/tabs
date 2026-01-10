@@ -295,7 +295,6 @@ export class Tree {
     const clientId = backup.metadata.clientId;
     const date = dateTupleStrings(when);
     const filename = `tktsto.${date[0]}-${date[1]}-${date[2]}_${date[3]}-${date[4]}-${date[5]}.${clientId}.json`;
-    // TODO: Some browsers ignore extensions or replace names; capture details in logs.
 
     // save the file
     log(`Tree.downloadBackupNow(): saving to "${filename}"`);
@@ -316,6 +315,16 @@ export class Tree {
       {
         //log(`Download succeeded: ${filename}`);
         api.downloads.onChanged.removeListener(progress);
+        if (downloadId && api.downloads && api.downloads.search) {
+          api.downloads.search({ id: downloadId }).then((items) => {
+            const info = items && items[0];
+            if (info && info.filename && info.filename !== filename) {
+              log(`Tree.downloadBackupNow(): saved as "${info.filename}" (requested "${filename}")`);
+            }
+          }).catch((err) => {
+            warn(`Tree.downloadBackupNow(): download search failed: ${err}`);
+          });
+        }
         if (this.setStatus) {
           this.setStatus(`Saved ${blob.size} bytes to "${filename}"`);
         }
