@@ -88,6 +88,7 @@ development yet.
   - Add make test-node target for running node-based tests without browser tests.
   - Update backup archive regex and backup serialization cleanup (skip oldTabId, ignore root-as-child).
   - Add documentation links to the Options page.
+  - Highlight the focused browser window in the tree by tracking window focus state.
 - 2026-01-07:
   - Persist window geometry/state/incognito and update bounds changes.
   - Document IndexedDB persistence details for maintainers.

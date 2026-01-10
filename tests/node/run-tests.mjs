@@ -611,6 +611,45 @@ test('onWindowBoundsChanged updates window geometry', async () => {
   assertEqual(win.incognito, false, 'Should update incognito');
 });
 
+test('onWindowFocusChanged marks the focused window active', async () => {
+  const originalGet = api.windows.get;
+  try {
+    api.windows.get = async () => ({
+      width: 800,
+      height: 600,
+      left: 10,
+      top: 20,
+      state: 'normal',
+      incognito: false
+    });
+
+    const bkgd = new Bkgd();
+    const tree = createTree(bkgd);
+    bkgd.tree = tree;
+    bkgd.resolveTreeLoaded();
+
+    const win1 = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      active: true
+    });
+    const win2 = await addChild(tree.root, {
+      id: 'w2',
+      type: 'window',
+      windowId: 2,
+      active: false
+    });
+
+    await bkgd.onWindowFocusChanged(2);
+
+    assertEqual(win1.active, false, 'Should clear active on unfocused window');
+    assertEqual(win2.active, true, 'Should mark focused window active');
+  } finally {
+    api.windows.get = originalGet;
+  }
+});
+
 test('initLocalBackupAlarm triggers overdue backup', async () => {
   const originalGet = api.storage.local.get;
   const originalSet = api.storage.local.set;

@@ -662,22 +662,35 @@ export class Bkgd {
   async onWindowFocusChanged (windowId) {
     debug(`bkgd.onWindowFocusChanged(${windowId})`);
     await this.treeLoaded;
-    // TODO: set window node as 'active' and set others as just 'loaded'?
-    //   (so the focused window can have a brighter row in the tree view)
-    const node = this.tree.root.getWindowId(windowId);
-    if (node) {
+    let focusedNode = null;
+    if (windowId >= 0) {
+      focusedNode = this.tree.root.getWindowId(windowId);
+    }
+    if (focusedNode) {
       // update the window geometry and stuff
       // (because Firefox has no onWindowBoundsChanged event, apparently)
       // (so this is a workaround for that)
       const win = await api.windows.get(windowId);
       if (win) {
         const geom = [ win.width, win.height, win.left, win.top ];
-        await node.setTabFields(
+        await focusedNode.setTabFields(
           { geometry: geom,
             windowState: win.state,
             incognito: win.incognito
           },
           { reason: 'onWindowFocusChanged' });
+      }
+    }
+    const windowNodes = this.tree.root.findNodes(
+      (n) => n.isWindow() && (undefined !== n.windowId)
+    );
+    for (const node of windowNodes) {
+      const shouldBeActive = focusedNode && (node === focusedNode);
+      if (node.active !== shouldBeActive) {
+        await node.setTabFields(
+          { active: shouldBeActive },
+          { reason: 'onWindowFocusChanged' }
+        );
       }
     }
     // no node = no problem, because a non-browser window may be focused
