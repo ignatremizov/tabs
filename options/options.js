@@ -90,6 +90,7 @@ function initThemeForm () {
 }
 
 function initBehaviorForm () {
+  const $defaultViewScope = document.getElementById('defaultViewScope');
   const $openWindowOnRootMove = document.getElementById('openWindowOnRootMove');
   const $openWindowOnRootLoadTopmost = document.getElementById(
     'openWindowOnRootLoadTopmost'
@@ -111,6 +112,7 @@ function initBehaviorForm () {
     'opsBacklogWarnThreshold'
   );
   api.storage.local.get({
+    defaultViewScope: 'auto',
     openWindowOnRootMove: false,
     openWindowOnRootLoadTopmost: false,
     reorderTabsOnCreate: true,
@@ -120,6 +122,7 @@ function initBehaviorForm () {
     reconcileIntervalMinutes: 5,
     opsBacklogWarnThreshold: 50
   }).then((result) => {
+    $defaultViewScope.value = result.defaultViewScope;
     $openWindowOnRootMove.checked = result.openWindowOnRootMove;
     $openWindowOnRootLoadTopmost.checked =
       result.openWindowOnRootLoadTopmost;
@@ -132,6 +135,11 @@ function initBehaviorForm () {
       result.moveUpIntoExpandedSibling;
     $reconcileIntervalMinutes.value = result.reconcileIntervalMinutes;
     $opsBacklogWarnThreshold.value = result.opsBacklogWarnThreshold;
+  });
+  $defaultViewScope.addEventListener('change', () => {
+    api.storage.local.set({
+      defaultViewScope: $defaultViewScope.value
+    });
   });
   $openWindowOnRootMove.addEventListener('click', () => {
     api.storage.local.set({

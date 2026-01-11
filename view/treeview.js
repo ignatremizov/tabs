@@ -190,10 +190,17 @@ export class TreeView extends Tree {
 
     // figure out which window we are and whether to view the whole tree
     this.windowNode = this.root.getWindowId(this.windowId);
-    let defaultViewScope = 'window';
-    // 1st window defaults to Session mode, others use Window mode
-    if (this.windowNode.parent.isRoot() && (0 === this.windowNode.indexOf()))
-    { defaultViewScope = 'session'; }
+    const defaultScopeResult = await api.storage.local.get({
+      defaultViewScope: 'auto'
+    });
+    let defaultViewScope = defaultScopeResult.defaultViewScope;
+    if (! ['session', 'window'].includes(defaultViewScope)) {
+      defaultViewScope = 'window';
+      // 1st window defaults to Session mode, others use Window mode
+      if (this.windowNode && this.windowNode.parent.isRoot()
+        && (0 === this.windowNode.indexOf()))
+      { defaultViewScope = 'session'; }
+    }
     this.viewScope = await this.getWindowConfig('viewScope', defaultViewScope);
     if (! this.viewScope) this.viewScope = defaultViewScope;
     const savedDetailsState = await this.getWindowConfig(

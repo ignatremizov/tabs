@@ -162,6 +162,22 @@
 
   <div>
     <p>
+    <label for="defaultViewScope">
+    Default view scope for new windows
+    </label>
+    <select id="defaultViewScope" name="defaultViewScope">
+      <option value="auto">Auto (first window: Session, others: Window)</option>
+      <option value="session">Session</option>
+      <option value="window">Window</option>
+    </select>
+    </p>
+    <p>
+    <small>Applies when a window has no saved view scope yet.</small>
+    </p>
+  </div>
+
+  <div>
+    <p>
     <label>
     <input type="checkbox" id="openWindowOnRootMove" name="openWindowOnRootMove">
     Open a new window when moving a subtree to the top level
