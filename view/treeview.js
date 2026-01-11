@@ -159,7 +159,8 @@ export class TreeView extends Tree {
       openWindowOnRootLoadTopmost: false,
       focusActiveTabOnLoadOrEdit: false,
       moveDownIntoExpandedSibling: true,
-      moveUpIntoExpandedSibling: true
+      moveUpIntoExpandedSibling: true,
+      nodesPerPage: 20
     });
     this.openWindowOnRootMove = behaviorOptions.openWindowOnRootMove;
     this.openWindowOnRootLoadTopmost =
@@ -170,11 +171,13 @@ export class TreeView extends Tree {
       behaviorOptions.moveDownIntoExpandedSibling;
     this.moveUpIntoExpandedSibling =
       behaviorOptions.moveUpIntoExpandedSibling;
+    this.nodesPerPage = behaviorOptions.nodesPerPage;
+    if (! Number.isFinite(this.nodesPerPage) || this.nodesPerPage < 1) {
+      this.nodesPerPage = 20;
+    }
     // get the window this view is attached to
     this.windowObj = await api.windows.getCurrent();
     this.windowId = this.windowObj.id;
-    // TODO: load config...
-    this.nodesPerPage = 20;
     // init stylesheets
     this.updateTheme();
     this.updateStyleOptions();

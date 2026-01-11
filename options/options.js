@@ -105,6 +105,7 @@ function initBehaviorForm () {
   const $moveUpIntoExpandedSibling = document.getElementById(
     'moveUpIntoExpandedSibling'
   );
+  const $nodesPerPage = document.getElementById('nodesPerPage');
   const $reconcileIntervalMinutes = document.getElementById(
     'reconcileIntervalMinutes'
   );
@@ -119,6 +120,7 @@ function initBehaviorForm () {
     focusActiveTabOnLoadOrEdit: false,
     moveDownIntoExpandedSibling: true,
     moveUpIntoExpandedSibling: true,
+    nodesPerPage: 20,
     reconcileIntervalMinutes: 5,
     opsBacklogWarnThreshold: 50
   }).then((result) => {
@@ -133,6 +135,7 @@ function initBehaviorForm () {
       result.moveDownIntoExpandedSibling;
     $moveUpIntoExpandedSibling.checked =
       result.moveUpIntoExpandedSibling;
+    $nodesPerPage.value = result.nodesPerPage;
     $reconcileIntervalMinutes.value = result.reconcileIntervalMinutes;
     $opsBacklogWarnThreshold.value = result.opsBacklogWarnThreshold;
   });
@@ -170,6 +173,19 @@ function initBehaviorForm () {
     api.storage.local.set({
       moveUpIntoExpandedSibling: $moveUpIntoExpandedSibling.checked
     });
+  });
+
+  let nodesPerPageDebounce;
+  $nodesPerPage.addEventListener('input', () => {
+    clearTimeout(nodesPerPageDebounce);
+    nodesPerPageDebounce = setTimeout(() => {
+      const count = parseInt($nodesPerPage.value, 10);
+      if (isNaN(count) || count < 1 || count > 200) {
+        warn('User entered invalid data into nodesPerPage');
+        return;
+      }
+      api.storage.local.set({ nodesPerPage: count });
+    }, 1000);
   });
 
   let reconcileDebounce;

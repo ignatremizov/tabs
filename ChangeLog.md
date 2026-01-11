@@ -81,6 +81,7 @@ development yet.
 ## 2026-01
 - 2026-01-11:
   - Add a default view scope option for new windows (Session / Window / Auto).
+  - Add a PageUp/PageDown jump size option for cursor navigation.
 - 2026-01-10:
   - Remember details/notes/plain mode per browser window.
   - Fix tab close handling when a fresh service worker spawns (avoid stale wasLoaded pink tabs after manual closes).
