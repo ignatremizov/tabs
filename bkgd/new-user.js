@@ -30,6 +30,12 @@ export async function createNewUserTutorialNodes (tree, parentNode) {
     ]},
     { label: 'Longer notes can be seen below',
       note: 'Right here.  Be sure to check this area any time you see an "attachment" icon on the cursor row.' },
+    { label: 'Drag text into the tree',
+      note: 'Drop plain text onto a row to attach it.  Drop on the right edge to create a child node (first line = label, rest = note).\n\nDrop on the left side to add to the target node (single line fills an empty label; otherwise it prepends/appends to the note).  You can choose prepend vs append in Options > Behavior.',
+      nodes: [
+        { label: 'Drop text here',
+          note: 'Try dragging a snippet from another tab or app onto this row.' },
+      ]},
     { label: 'Details button cycles Notes / Details / Off',
       note: 'Use the "Details" button at the bottom of the panel to switch modes (the label changes as you click).  Each browser window remembers its last mode, so it comes back after reloads.' },
     { label: "Here are the other key bindings", expanded: false,

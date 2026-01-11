@@ -71,6 +71,7 @@ export class TreeView extends Tree {
     this.focusActiveTabOnLoadOrEdit = false;
     this.moveDownIntoExpandedSibling = true;
     this.moveUpIntoExpandedSibling = true;
+    this.dropTextNoteMode = 'prepend';
   }
 
   destroy () {
@@ -160,7 +161,8 @@ export class TreeView extends Tree {
       focusActiveTabOnLoadOrEdit: false,
       moveDownIntoExpandedSibling: true,
       moveUpIntoExpandedSibling: true,
-      nodesPerPage: 20
+      nodesPerPage: 20,
+      dropTextNoteMode: 'prepend'
     });
     this.openWindowOnRootMove = behaviorOptions.openWindowOnRootMove;
     this.openWindowOnRootLoadTopmost =
@@ -174,6 +176,10 @@ export class TreeView extends Tree {
     this.nodesPerPage = behaviorOptions.nodesPerPage;
     if (! Number.isFinite(this.nodesPerPage) || this.nodesPerPage < 1) {
       this.nodesPerPage = 20;
+    }
+    this.dropTextNoteMode = behaviorOptions.dropTextNoteMode;
+    if (! ['prepend', 'append'].includes(this.dropTextNoteMode)) {
+      this.dropTextNoteMode = 'prepend';
     }
     // get the window this view is attached to
     this.windowObj = await api.windows.getCurrent();
@@ -311,6 +317,12 @@ export class TreeView extends Tree {
     if (changes.moveUpIntoExpandedSibling) {
       this.moveUpIntoExpandedSibling =
         changes.moveUpIntoExpandedSibling.newValue;
+    }
+    if (changes.dropTextNoteMode) {
+      const mode = changes.dropTextNoteMode.newValue;
+      this.dropTextNoteMode = ['prepend', 'append'].includes(mode)
+        ? mode
+        : 'prepend';
     }
   }
 
@@ -1974,9 +1986,8 @@ export class TreeView extends Tree {
         if (! attached) {
           let note = drop.targetNode.note;
           if (! note) note = '';
-          // TODO: user pref for append / prepend
           let sep, newNote;
-          const mode = 'prepend';
+          const mode = this.dropTextNoteMode || 'prepend';
           if ('append' === mode) {
             sep = ((!note) || note.endsWith('\n')) ? '' : '\n';
             newNote = note + sep + drop.text;

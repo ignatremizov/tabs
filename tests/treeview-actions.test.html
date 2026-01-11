@@ -43,6 +43,7 @@
     <strong>TOC (test group headers):</strong>
     <a href="#move-nodes">Move Nodes</a> |
     <a href="#marked-nodes">Marked Nodes</a> |
+    <a href="#text-drops">Text Drops</a> |
     <a href="#details">Details</a> |
     <a href="#window-focus">Window Focus</a> |
     <a href="#basic-deletes">Basic Deletes</a> |
@@ -205,6 +206,24 @@
         return lines.join('\n');
       }
 
+      function setDropTarget(view, node, right = false) {
+        view.mouseDragStartNode = null;
+        view.mouseNode = node;
+        view.$mouseRow = {};
+        view.$mouseRowWid = 100;
+        view.$mouseRowX = right ? 100 : 0;
+      }
+
+      function makeTextDropEvent(text) {
+        return {
+          preventDefault: () => {},
+          dataTransfer: {
+            types: ['text/plain'],
+            getData: (type) => (type === 'text/plain' ? text : '')
+          }
+        };
+      }
+
       function appendTokenizedText($target, content) {
         const tokens = [
           { word: 'loaded', className: 'snap-loaded' },
@@ -242,7 +261,10 @@
 
       function renderSnapshot(pre, snapshot) {
         pre.classList.add('snapshot');
-        const lines = snapshot.split('\n');
+        let text = '';
+        if (Array.isArray(snapshot)) text = snapshot.join('\n');
+        else if (null != snapshot) text = String(snapshot);
+        const lines = text.split('\n');
         for (const line of lines) {
           const $line = document.createElement('span');
           $line.className = 'snap-line';
@@ -1288,6 +1310,45 @@
         assertEqual(view.root.nodes[1].id, 'n2', 'Marked node should lead block', snap);
         assertEqual(view.root.nodes[2].id, 'n4', 'Marked node should follow in order', snap);
         assertEqual(view.root.nodes[3].id, 'n3', 'Cursor should move after marked block', snap);
+        return { before, after };
+      });
+
+      testGroup('Text Drops');
+      test('drop text prepends note when configured', async () => {
+        const view = createView();
+        const target = await addChild(view.root, {
+          id: 'n1',
+          label: 'Target',
+          note: 'old'
+        });
+        view.cursor = target;
+        view.dropTextNoteMode = 'prepend';
+        setDropTarget(view, target, false);
+        const before = treeSnapshot(view.root);
+        await view.action_mouseDrop(makeTextDropEvent('new'));
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(target.note, 'new\nold', 'Prepend should place text before note', snap);
+        return { before, after };
+      });
+
+      test('drop text appends note when configured', async () => {
+        const view = createView();
+        const target = await addChild(view.root, {
+          id: 'n1',
+          label: 'Target',
+          note: 'old'
+        });
+        view.cursor = target;
+        view.dropTextNoteMode = 'append';
+        setDropTarget(view, target, false);
+        const before = treeSnapshot(view.root);
+        await view.action_mouseDrop(makeTextDropEvent('new'));
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(target.note, 'old\nnew', 'Append should place text after note', snap);
         return { before, after };
       });
 

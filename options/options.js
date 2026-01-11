@@ -105,6 +105,7 @@ function initBehaviorForm () {
   const $moveUpIntoExpandedSibling = document.getElementById(
     'moveUpIntoExpandedSibling'
   );
+  const $dropTextNoteMode = document.getElementById('dropTextNoteMode');
   const $nodesPerPage = document.getElementById('nodesPerPage');
   const $reconcileIntervalMinutes = document.getElementById(
     'reconcileIntervalMinutes'
@@ -120,6 +121,7 @@ function initBehaviorForm () {
     focusActiveTabOnLoadOrEdit: false,
     moveDownIntoExpandedSibling: true,
     moveUpIntoExpandedSibling: true,
+    dropTextNoteMode: 'prepend',
     nodesPerPage: 20,
     reconcileIntervalMinutes: 5,
     opsBacklogWarnThreshold: 50
@@ -135,6 +137,7 @@ function initBehaviorForm () {
       result.moveDownIntoExpandedSibling;
     $moveUpIntoExpandedSibling.checked =
       result.moveUpIntoExpandedSibling;
+    $dropTextNoteMode.value = result.dropTextNoteMode;
     $nodesPerPage.value = result.nodesPerPage;
     $reconcileIntervalMinutes.value = result.reconcileIntervalMinutes;
     $opsBacklogWarnThreshold.value = result.opsBacklogWarnThreshold;
@@ -172,6 +175,11 @@ function initBehaviorForm () {
   $moveUpIntoExpandedSibling.addEventListener('click', () => {
     api.storage.local.set({
       moveUpIntoExpandedSibling: $moveUpIntoExpandedSibling.checked
+    });
+  });
+  $dropTextNoteMode.addEventListener('change', () => {
+    api.storage.local.set({
+      dropTextNoteMode: $dropTextNoteMode.value
     });
   });
 

@@ -305,6 +305,7 @@ Stored in `chrome.storage.local`:
 | `opsBacklogWarnThreshold` | number | Pending ops threshold for backlog warning (0 disables) |
 | `moveDownIntoExpandedSibling` | boolean | Shift+Down nests into expanded sibling when enabled |
 | `moveUpIntoExpandedSibling` | boolean | Shift+Up nests into expanded sibling when enabled |
+| `dropTextNoteMode` | string | Drop text into notes by prepending or appending (`prepend`/`append`) |
 
 ---
 
