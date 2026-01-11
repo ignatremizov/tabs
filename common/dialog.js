@@ -241,9 +241,9 @@ class Dialog {
       const $newLabel = doc.createElement('span');
       $newLabel.id = 'newValue';
       $newLabel.append('New value: ');
-      const $small = doc.createElement('small');
-      $small.textContent = '(click or type letter)';
-      $newLabel.append($small);
+      const $newLabelSmall = doc.createElement('small');
+      $newLabelSmall.textContent = '(click or type letter)';
+      $newLabel.append($newLabelSmall);
       $form.appendChild($newLabel);
 
       // checkbox classes available
@@ -369,4 +369,3 @@ export async function checkboxDialog(...args) {
   const dia = new Dialog();
   return dia.checkboxDialog(...args);
 }
-

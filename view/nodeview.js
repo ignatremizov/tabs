@@ -113,6 +113,10 @@ export class NodeView extends Node {
   }
 
   $renderTitle () {
+    // Build DOM safely without innerHTML
+    const doc = this.tree.document;
+    this.$row.textContent = '';  // start empty
+
     // reset classes
     //this.$row.className = 'row';
     this.$row.classList.add('row');
@@ -142,14 +146,12 @@ export class NodeView extends Node {
     else this.$row.classList.remove('frozen');
     if (this.hidden) this.$row.classList.add('tab-hidden');
     else this.$row.classList.remove('tab-hidden');
-    // title row text
-    // full row: [3/14] @ Label Text ~ <a href="link">Link Title</a>
-    // ... where "[3/14]" is num children open/total, and "@" is a favicon
-    let urlTitle = this.title ? this.title : this.url;  // handle blank title
 
-    // Build DOM safely without innerHTML
-    const doc = this.tree.document;
-    this.$row.textContent = '';  // clear existing content
+    // title row text
+    // full row: [3/14] [X] @ Label Text ~ <a href="link">Link Title</a>
+    // ... where "[3/14]" is num children open/total, "[X]" is a checkbox,
+    // and "@" is a favicon
+    let urlTitle = this.title ? this.title : this.url;  // handle blank title
 
     // node stats
     if (this.hasKids() && this.isCollapsed()) {
@@ -311,19 +313,18 @@ export class NodeView extends Node {
       $elem.classList.add('hidden');
     }
 
-    function setOrHide ($elem, val, text) {
-      if (val) {
+    function setOrHide ($elem, value, text) {
+      if (value) {
         $elem.classList.remove('hidden');
-        if (text) $elem.textContent = text;
+        $elem.textContent = text || value;
         hasContent = true;
       } else {
-        $elem.textContent = '';
-        $elem.classList.add('hidden');
+        hide($elem);
       }
     }
 
     // Helper to create a labeled detail row: "<b>Label:</b>&nbsp;<span>value</span>"
-    function setLabeledDetail($elem, label, value) {
+    function setLabeledDetail ($elem, label, value) {
       if (value !== null && value !== undefined && value !== '') {
         $elem.classList.remove('hidden');
         $elem.textContent = '';  // clear
@@ -334,16 +335,13 @@ export class NodeView extends Node {
         $elem.append($b, '\u00A0', $span);
         hasContent = true;
       } else {
-        $elem.textContent = '';
-        $elem.classList.add('hidden');
+        hide($elem);
       }
     }
 
     // label / short note
     let $label = getOrCreate('detail-label', 'div');
-    //if (mode <= 1) hide($label);
-    //else
-    setOrHide($label, this.label, this.label);
+    setOrHide($label, this.label);
 
     // wasLoaded
     const wasLoaded = (!!this.wasLoaded) && (! this.loaded);
@@ -364,7 +362,7 @@ export class NodeView extends Node {
 
     // long note
     let $note = getOrCreate('detail-note', 'div');
-    setOrHide($note, this.note, this.note);
+    setOrHide($note, this.note);
 
     // link title
     let $title = getOrCreate('detail-title', 'div');
@@ -387,19 +385,20 @@ export class NodeView extends Node {
     else setLabeledDetail($tabId, 'Tab', this.tabId);
 
     // ctime, mtime, atime, ...
-    for (const tstamp of ['ctime', 'mtime', 'atime']) {
-      const $tstampDiv = getOrCreate(`detail-${tstamp}`, 'div');
+    for (const tName of ['ctime', 'mtime', 'atime']) {
+      const $tstampDiv = getOrCreate(`detail-${tName}`, 'div');
       if (mode <= 1) { hide($tstampDiv); continue; }
-      const fmt = fmtDate(this[tstamp]);
+      const dateText = fmtDate(this[tName]);
       // always show ctime, show others only if they're different
-      const toShow = (tstamp === 'ctime') || (this[tstamp] !== this.ctime);
+      const toShow = (tName === 'ctime') || (this[tName] !== this.ctime);
       if (toShow) {
-        setLabeledDetail($tstampDiv, tstamp, fmt);
+        setLabeledDetail($tstampDiv, tName, dateText);
       } else {
         hide($tstampDiv);
       }
     }
 
+    // hide if empty
     if (! hasContent) $detailsBox.classList.add('hidden');
   }
 
@@ -411,6 +410,8 @@ export class NodeView extends Node {
 
   $renderChildren () {
     this.$render();
+    // FIXME: if ('window' === viewScope),
+    // render and behave as if all child windows are collapsed
     if (this.isExpanded()) {
       for (const node of this.nodes) {
         this.$insertChild(node, node.indexOf());

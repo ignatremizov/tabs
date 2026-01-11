@@ -541,36 +541,53 @@ export class Tree {
         destParent = prevNode.parent;
         destIndex = prevNode.indexOf() + 1;
       }
-    }
+    } else {
+      // find the active tab so we can compare to the new tab
+      // (some browsers (Maxthon) set tab.index *instead of* tab.openerTabId,
+      //  so detecting parent must be done by index in those browsers)
+      const activeTabs = await api.tabs.query({
+        active: true, windowId: tab.windowId });
+      const activeTab = activeTabs[0];
+      const activeTabNode = winNode.getActiveTab();
 
-    // if the tab is a blank created by the user with C-t...
-    // ... make it the 1st child of the active tab
-    if ((this.reorderTabsOnCreate !== false) && isNewTabPage(tabPendingUrl)) {
-      destParent = winNode.getActiveTab();
-      if (! destParent) destParent = winNode;
-      destIndex = 0;
-      debug(`Tree.onTabCreated() moving new tab to the right of: "${destParent.toLine()}"`);
-    }
-    // find the right place to put this tab in the tree
-    else if ((this.reorderTabsOnCreate !== false) && tab.openerTabId) {
-      const found = this.getNodeByTabId(tab.openerTabId, winNode);
-      if (found) {
-        destParent = found;
-        // find the correct destIndex
-        // TODO: decide this based on a user config option:
-        //   - open tabs as [first / last] child of current,
-        //     or open as next sibling
-        //destIndex = destParent.nodes.length;
-        destIndex = 0;  // always insert as 1st child of current tab
-        //debug(`Tree.onTabCreated: destParent(${destIndex})`, destParent);
+      // if the tab is a blank created by the user with C-t...
+      // ... make it the 1st child of the active tab
+      if (isNewTabPage(tabPendingUrl)) {
+        destParent = activeTabNode;
+        if (! destParent) destParent = winNode;
+        destIndex = 0;
+        debug(`Tree.onTabCreated(newTabPage) moving new tab to the right of: "${destParent.toLine()}"`);
       }
-      else {
-        // if parent not found, open tab as 1st child of current/active tab
-        const activeTabNode = winNode.getActiveTab();
-        if (activeTabNode) {
-          destParent = activeTabNode;
-          destIndex = 0;
+      // find the right place to put this tab in the tree
+      else if (tab.openerTabId) {
+        const found = this.getNodeByTabId(tab.openerTabId, winNode);
+        if (found) {
+          destParent = found;
+          // find the correct destIndex
+          // TODO: decide this based on a user config option:
+          //   - open tabs as [first / last] child of current,
+          //     or open as next sibling
+          //destIndex = destParent.nodes.length;
+          destIndex = 0;  // always insert as 1st child of current tab
+          debug(`Tree.onTabCreated(openerTabId): destParent:`, destParent);
         }
+        else {
+          // if parent not found, open tab as 1st child of current/active tab
+          if (activeTabNode) {
+            destParent = activeTabNode;
+            destIndex = 0;
+            debug(`Tree.onTabCreated(openerTabId not found): destParent:`, destParent);
+          }
+        }
+      }
+      // Maxthon doesn't set openerTabId, so detect it by index
+      else if (activeTab && ((activeTab.index + 1) === tab.index)) {
+        // first child of current tab
+        // (assume user clicked a link on the current page, to open a new tab)
+        destParent = activeTabNode;
+        if (! destParent) destParent = winNode;
+        destIndex = 0;
+        debug(`Tree.onTabCreated(parentByIndex) moving new tab to the right of: "${destParent.toLine()}"`);
       }
     }
     // create the tree node
