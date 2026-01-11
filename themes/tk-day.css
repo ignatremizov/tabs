@@ -85,6 +85,8 @@ foo {
   --tree-line-dragging: #44f;
   /***** window nodes *****/
   --window-row-bg: linear-gradient(150deg, #5b70d5, #9ab9fb);
+  --window-active-row-bg: linear-gradient(150deg, #2f4fcf, #c3d8ff);
+  --window-active-row-shadow: inset 0.1em 1px 3px #2149c7;
   --window-active-fg: #fff;
   --window-loaded-fg: #eee;
   --window-unloaded-fg: #afbdcb;
@@ -223,4 +225,3 @@ foo {
   /***** scrollbar *****/
   --scrollbar-thumb-bg-unfocused: linear-gradient(#bbf, #aaf);
 }
-

@@ -532,6 +532,13 @@ foo {
   font-weight: normal;
   color: var(--window-unloaded-fg);
 }
+.window.row.active:not(.cursor) {
+  background: var(--window-active-row-bg, var(--window-row-bg));
+  box-shadow: var(--window-active-row-shadow,
+    inset 0.1em 1px 3px #49d);
+  margin-left: 0;
+  padding-left: 0;
+}
 .window.row .row-title {
   text-shadow: var(--window-title-text-shadow);
 }
