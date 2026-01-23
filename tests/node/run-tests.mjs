@@ -914,6 +914,75 @@ test('applyMoveForIntent wraps unloaded branch with loaded descendant', async ()
   }
 });
 
+test('applyMoveForIntent avoids wrapping unloaded root move without open tabs', async () => {
+  const originalIndexedDb = globalThis.indexedDB;
+  try {
+    globalThis.indexedDB = {
+      open: () => {
+        const request = {};
+        setTimeout(() => {
+          if (request.onsuccess) {
+            request.onsuccess({
+              target: {
+                result: {
+                  objectStoreNames: { contains: () => true }
+                }
+              }
+            });
+          }
+        }, 0);
+        return request;
+      }
+    };
+
+    const loadCalls = [];
+    const bkgd = {
+      bkgd_loadSavedWindow: async (payload) => {
+        loadCalls.push(payload);
+      },
+      opsQueue: null,
+      idGen: { newId: () => 'test-win-3' }
+    };
+    const tree = new TreeStore(bkgd);
+    tree.db = {
+      saveNode: async () => {},
+      deleteNode: async () => {}
+    };
+    bkgd.tree = tree;
+
+    const windowNode = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: false
+    });
+    const mover = await addChild(windowNode, {
+      id: 't1',
+      loaded: false,
+      url: 'https://example.com'
+    });
+
+    await tree.applyMoveForIntent(
+      mover,
+      tree.root,
+      1,
+      {
+        openWindowOnRootMove: true,
+        reason: 'userAction',
+        prevParentId: windowNode.id,
+        when: Date.now()
+      }
+    );
+
+    const windowCount = tree.root.nodes.filter((node) => node.isWindow()).length;
+    assertEqual(loadCalls.length, 0, 'Should not load a new window');
+    assert(windowCount <= 1, 'Should not create an extra window node');
+    assertEqual(mover.parent, tree.root, 'Should move node directly to root');
+  } finally {
+    globalThis.indexedDB = originalIndexedDb;
+  }
+});
+
 test('bkgd_loadSavedNode creates window when windowId is missing', async () => {
   const originalWindowsCreate = api.windows.create;
   const originalTabsCreate = api.tabs.create;

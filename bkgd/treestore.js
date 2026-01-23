@@ -242,9 +242,10 @@ export class TreeStore extends Tree {
         || (node.isLoaded && node.isLoaded())
         || (node.hasLoadedTabsDeep && node.hasLoadedTabsDeep())
       );
-      const forceWrap = (msg.openWindowOnRootMove === true);
-      const wantsWindow = (openTabs || forceWrap);
-      if (wantsWindow) shouldOpenWindow = true;
+      if ((msg.openWindowOnRootMove === true) && openTabs) {
+        shouldOpenWindow = true;
+      }
+      const wantsWindow = openTabs;
       let isWholeWindowContent = false;
       const windowNode = node.getWindowNode(false);
       if (windowNode && windowNode.nodes.length === 1
