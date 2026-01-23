@@ -194,6 +194,7 @@ export class IDB {
 
   async listOpsByState (state, limit = 50) {
     const db = await this.db;
+    const enforceLimit = Number.isFinite(limit) && (limit > 0);
     return new Promise((resolve, reject) => {
       const txn = db.transaction(this.opsDbName, 'readonly');
       const store = txn.objectStore(this.opsDbName);
@@ -207,7 +208,7 @@ export class IDB {
           return;
         }
         ops.push(cursor.value);
-        if (ops.length >= limit) {
+        if (enforceLimit && (ops.length >= limit)) {
           resolve(ops);
           return;
         }

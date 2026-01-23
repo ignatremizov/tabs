@@ -112,7 +112,10 @@ class FakeOpsDb {
     const filtered = [...this.ops.values()]
       .filter((op) => op.state === state)
       .sort((a, b) => a.createdAt - b.createdAt);
-    return filtered.slice(0, limit).map((op) => ({ ...op }));
+    if (Number.isFinite(limit) && (limit > 0)) {
+      return filtered.slice(0, limit).map((op) => ({ ...op }));
+    }
+    return filtered.map((op) => ({ ...op }));
   }
 
   async countOpsByState (state) {
@@ -241,6 +244,34 @@ test('OpsQueue requeueFailedOps moves eligible failures back to pending', async 
   }
 });
 
+test('OpsQueue requeueFailedOps skips ineligible ops without starvation', async () => {
+  const db = new FakeOpsDb();
+  const queue = new OpsQueue(db, { idGen: { newId: () => 'op-x' } });
+  const now = Date.now();
+  db.ops.set('op-skip', {
+    opId: 'op-skip',
+    state: 'failed',
+    createdAt: 1,
+    updatedAt: now,
+    retryCount: 5
+  });
+  db.ops.set('op-eligible', {
+    opId: 'op-eligible',
+    state: 'failed',
+    createdAt: 2,
+    updatedAt: now - 5000,
+    retryCount: 0
+  });
+  const requeued = await queue.requeueFailedOps({
+    limit: 1,
+    maxRetries: 3,
+    minAgeMs: 0
+  });
+  assertEqual(requeued, 1, 'Should requeue eligible op even if earlier ops skipped');
+  assertEqual(db.ops.get('op-eligible').state, 'pending', 'Should requeue later eligible op');
+  assertEqual(db.ops.get('op-skip').state, 'failed', 'Should keep ineligible op failed');
+});
+
 test('OpsQueue requeueStaleRunningOps moves old running ops to pending', async () => {
   const db = new FakeOpsDb();
   const queue = new OpsQueue(db, { idGen: { newId: () => 'op-x' } });
@@ -263,6 +294,33 @@ test('OpsQueue requeueStaleRunningOps moves old running ops to pending', async (
   } finally {
     Date.now = originalNow;
   }
+});
+
+test('OpsQueue requeueStaleRunningOps skips fresh ops without starvation', async () => {
+  const db = new FakeOpsDb();
+  const queue = new OpsQueue(db, { idGen: { newId: () => 'op-x' } });
+  const now = Date.now();
+  db.ops.set('op-fresh', {
+    opId: 'op-fresh',
+    state: 'running',
+    createdAt: 1,
+    updatedAt: now,
+    retryCount: 0
+  });
+  db.ops.set('op-old', {
+    opId: 'op-old',
+    state: 'running',
+    createdAt: 2,
+    updatedAt: now - 60000,
+    retryCount: 0
+  });
+  const requeued = await queue.requeueStaleRunningOps({
+    limit: 1,
+    minAgeMs: 1000
+  });
+  assertEqual(requeued, 1, 'Should requeue eligible running op even if earlier ops skipped');
+  assertEqual(db.ops.get('op-old').state, 'pending', 'Should requeue stale running op');
+  assertEqual(db.ops.get('op-fresh').state, 'running', 'Should keep fresh op running');
 });
 
 test('OpsQueue countPendingOps returns pending count', async () => {
@@ -350,7 +408,8 @@ test('TreeStore onTabRemoved honors tabClosedReason for manual unload', async ()
     const bkgd = {
       enqueueIntent: async (name, payload, source) => {
         calls.push({ name, payload, source });
-      }
+      },
+      ensureUnloaded: async () => {}
     };
     const tree = new TreeStore(bkgd);
     tree.db = {
@@ -387,6 +446,207 @@ test('TreeStore onTabRemoved honors tabClosedReason for manual unload', async ()
   }
 });
 
+test('TreeStore userAction load bypasses ops queue', async () => {
+  const originalIndexedDb = globalThis.indexedDB;
+  const calls = [];
+  try {
+    globalThis.indexedDB = {
+      open: () => {
+        const request = {};
+        setTimeout(() => {
+          if (request.onsuccess) {
+            request.onsuccess({
+              target: {
+                result: {
+                  objectStoreNames: { contains: () => true }
+                }
+              }
+            });
+          }
+        }, 0);
+        return request;
+      }
+    };
+
+    const bkgd = {
+      enqueueIntent: async (...args) => { calls.push(args); },
+      ensureLoaded: async () => { calls.push(['ensureLoaded']); }
+    };
+    const tree = new TreeStore(bkgd);
+    tree.db = {
+      saveNode: async () => {},
+      deleteNode: async () => {}
+    };
+    bkgd.tree = tree;
+    tree.resolveTreeLoaded();
+    await addChild(tree.root, { id: 'n1', url: 'https://example.com', loaded: false });
+
+    await tree.tree_nodeChanged({
+      type: 'load',
+      nodeId: 'n1',
+      actionReason: 'userAction'
+    });
+
+    assertEqual(calls.length, 1, 'Should only call ensureLoaded');
+    assertEqual(calls[0][0], 'ensureLoaded', 'Should bypass enqueue for userAction');
+  } finally {
+    globalThis.indexedDB = originalIndexedDb;
+  }
+});
+
+test('TreeStore userAction unload bypasses ops queue', async () => {
+  const originalIndexedDb = globalThis.indexedDB;
+  const calls = [];
+  try {
+    globalThis.indexedDB = {
+      open: () => {
+        const request = {};
+        setTimeout(() => {
+          if (request.onsuccess) {
+            request.onsuccess({
+              target: {
+                result: {
+                  objectStoreNames: { contains: () => true }
+                }
+              }
+            });
+          }
+        }, 0);
+        return request;
+      }
+    };
+
+    const bkgd = {
+      enqueueIntent: async (...args) => { calls.push(args); },
+      ensureUnloaded: async () => { calls.push(['ensureUnloaded']); }
+    };
+    const tree = new TreeStore(bkgd);
+    tree.db = {
+      saveNode: async () => {},
+      deleteNode: async () => {}
+    };
+    bkgd.tree = tree;
+    tree.resolveTreeLoaded();
+    await addChild(tree.root, {
+      id: 'n1',
+      url: 'https://example.com',
+      loaded: true,
+      tabId: 1,
+      windowId: 1
+    });
+
+    await tree.tree_nodeChanged({
+      type: 'unload',
+      nodeId: 'n1',
+      actionReason: 'userAction',
+      wasLoaded: true
+    });
+
+    assertEqual(calls.length, 1, 'Should only call ensureUnloaded');
+    assertEqual(calls[0][0], 'ensureUnloaded', 'Should bypass enqueue for userAction');
+  } finally {
+    globalThis.indexedDB = originalIndexedDb;
+  }
+});
+
+test('TreeStore userAction move bypasses ops queue', async () => {
+  const originalIndexedDb = globalThis.indexedDB;
+  const calls = [];
+  try {
+    globalThis.indexedDB = {
+      open: () => {
+        const request = {};
+        setTimeout(() => {
+          if (request.onsuccess) {
+            request.onsuccess({
+              target: {
+                result: {
+                  objectStoreNames: { contains: () => true }
+                }
+              }
+            });
+          }
+        }, 0);
+        return request;
+      }
+    };
+
+    const bkgd = {
+      enqueueIntent: async (...args) => { calls.push(args); },
+      ensureMoved: async () => { calls.push(['ensureMoved']); }
+    };
+    const tree = new TreeStore(bkgd);
+    tree.db = {
+      saveNode: async () => {},
+      deleteNode: async () => {}
+    };
+    bkgd.tree = tree;
+    tree.resolveTreeLoaded();
+    const parent = await addChild(tree.root, { id: 'p1' });
+    const dest = await addChild(tree.root, { id: 'p2' });
+    await addChild(parent, { id: 'c1' });
+
+    await tree.tree_nodeMoved({
+      nodeId: 'c1',
+      destParentId: 'p2',
+      destIndex: 0,
+      actionReason: 'userAction'
+    });
+
+    assertEqual(calls.length, 1, 'Should only call ensureMoved');
+    assertEqual(calls[0][0], 'ensureMoved', 'Should bypass enqueue for userAction');
+  } finally {
+    globalThis.indexedDB = originalIndexedDb;
+  }
+});
+
+test('TreeStore userAction delete bypasses ops queue', async () => {
+  const originalIndexedDb = globalThis.indexedDB;
+  const calls = [];
+  try {
+    globalThis.indexedDB = {
+      open: () => {
+        const request = {};
+        setTimeout(() => {
+          if (request.onsuccess) {
+            request.onsuccess({
+              target: {
+                result: {
+                  objectStoreNames: { contains: () => true }
+                }
+              }
+            });
+          }
+        }, 0);
+        return request;
+      }
+    };
+
+    const bkgd = {
+      enqueueIntent: async (...args) => { calls.push(args); },
+      ensureDeleted: async () => { calls.push(['ensureDeleted']); }
+    };
+    const tree = new TreeStore(bkgd);
+    tree.db = {
+      saveNode: async () => {},
+      deleteNode: async () => {}
+    };
+    bkgd.tree = tree;
+    tree.resolveTreeLoaded();
+    await addChild(tree.root, { id: 'n1' });
+
+    await tree.tree_nodeDeleted({
+      nodeId: 'n1',
+      actionReason: 'userAction'
+    });
+
+    assertEqual(calls.length, 1, 'Should only call ensureDeleted');
+    assertEqual(calls[0][0], 'ensureDeleted', 'Should bypass enqueue for userAction');
+  } finally {
+    globalThis.indexedDB = originalIndexedDb;
+  }
+});
+
 test('ensureMoved passes op to applyMoveForIntent', async () => {
   const bkgd = new Bkgd();
   const tree = createTree(bkgd);
@@ -414,6 +674,337 @@ test('ensureMoved passes op to applyMoveForIntent', async () => {
 
   await bkgd.ensureMoved(op.payload, op);
   assertEqual(receivedOp.opId, 'op-move', 'Should pass op to applyMoveForIntent');
+});
+
+test('applyMoveForIntent keeps only-child loaded window content under window', async () => {
+  const originalIndexedDb = globalThis.indexedDB;
+  try {
+    globalThis.indexedDB = {
+      open: () => {
+        const request = {};
+        setTimeout(() => {
+          if (request.onsuccess) {
+            request.onsuccess({
+              target: {
+                result: {
+                  objectStoreNames: { contains: () => true }
+                }
+              }
+            });
+          }
+        }, 0);
+        return request;
+      }
+    };
+
+    const bkgd = {
+      bkgd_loadSavedWindow: async () => {},
+      opsQueue: null
+    };
+    const tree = new TreeStore(bkgd);
+    tree.db = {
+      saveNode: async () => {},
+      deleteNode: async () => {}
+    };
+    bkgd.tree = tree;
+
+    const windowNode = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const mover = await addChild(windowNode, {
+      id: 't1',
+      tabId: 1,
+      windowId: 1,
+      loaded: true,
+      url: 'https://example.com'
+    });
+
+    await tree.applyMoveForIntent(
+      mover,
+      tree.root,
+      1,
+      {
+        openWindowOnRootMove: true,
+        reason: 'userAction',
+        prevParentId: windowNode.id,
+        when: Date.now()
+      }
+    );
+
+    assertEqual(mover.parent, windowNode, 'Loaded only-child should stay under window');
+    assertEqual(windowNode.parent, tree.root, 'Window should remain at root');
+    assertEqual(tree.root.nodes[0], windowNode, 'Window should stay at root index');
+  } finally {
+    globalThis.indexedDB = originalIndexedDb;
+  }
+});
+
+test('applyMoveForIntent wraps loaded branch into new window', async () => {
+  const originalIndexedDb = globalThis.indexedDB;
+  try {
+    globalThis.indexedDB = {
+      open: () => {
+        const request = {};
+        setTimeout(() => {
+          if (request.onsuccess) {
+            request.onsuccess({
+              target: {
+                result: {
+                  objectStoreNames: { contains: () => true }
+                }
+              }
+            });
+          }
+        }, 0);
+        return request;
+      }
+    };
+
+    const loadCalls = [];
+    const bkgd = {
+      bkgd_loadSavedWindow: async (payload) => {
+        loadCalls.push(payload);
+      },
+      opsQueue: null,
+      idGen: { newId: () => 'test-win' }
+    };
+    const tree = new TreeStore(bkgd);
+    tree.db = {
+      saveNode: async () => {},
+      deleteNode: async () => {}
+    };
+    bkgd.tree = tree;
+
+    const windowNode = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    await addChild(windowNode, {
+      id: 't1',
+      tabId: 1,
+      windowId: 1,
+      loaded: true,
+      url: 'https://example.com'
+    });
+    const mover = await addChild(windowNode, {
+      id: 't2',
+      tabId: 2,
+      windowId: 1,
+      loaded: true,
+      url: 'https://example.com/two'
+    });
+
+    await tree.applyMoveForIntent(
+      mover,
+      tree.root,
+      1,
+      {
+        openWindowOnRootMove: true,
+        reason: 'userAction',
+        prevParentId: windowNode.id,
+        when: Date.now()
+      }
+    );
+
+    assertEqual(tree.root.nodes.length, 2, 'Root should have two windows');
+    assertEqual(windowNode.nodes.length, 1, 'Original window should keep one child');
+    assertEqual(windowNode.nodes[0].id, 't1', 'Original child should remain in window');
+    const newWindow = tree.root.nodes[1];
+    assert(newWindow.isWindow(), 'New window should be a window node');
+    assertEqual(mover.parent, newWindow, 'Moved node should be under new window');
+    assertEqual(loadCalls.length, 1, 'Should load new window');
+    assertEqual(loadCalls[0].windowNodeId, newWindow.id, 'Should load new window ID');
+    assertEqual(loadCalls[0].nodeId, mover.id, 'Should load moved node');
+  } finally {
+    globalThis.indexedDB = originalIndexedDb;
+  }
+});
+
+test('applyMoveForIntent wraps unloaded branch with loaded descendant', async () => {
+  const originalIndexedDb = globalThis.indexedDB;
+  try {
+    globalThis.indexedDB = {
+      open: () => {
+        const request = {};
+        setTimeout(() => {
+          if (request.onsuccess) {
+            request.onsuccess({
+              target: {
+                result: {
+                  objectStoreNames: { contains: () => true }
+                }
+              }
+            });
+          }
+        }, 0);
+        return request;
+      }
+    };
+
+    const loadCalls = [];
+    const bkgd = {
+      bkgd_loadSavedWindow: async (payload) => {
+        loadCalls.push(payload);
+      },
+      opsQueue: null,
+      idGen: { newId: () => 'test-win-2' }
+    };
+    const tree = new TreeStore(bkgd);
+    tree.db = {
+      saveNode: async () => {},
+      deleteNode: async () => {}
+    };
+    bkgd.tree = tree;
+
+    const windowNode = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    await addChild(windowNode, {
+      id: 't1',
+      tabId: 1,
+      windowId: 1,
+      loaded: true,
+      url: 'https://example.com/one'
+    });
+    const mover = await addChild(windowNode, {
+      id: 't2',
+      tabId: 2,
+      windowId: 1,
+      loaded: false,
+      url: 'https://example.com/two'
+    });
+    await addChild(mover, {
+      id: 't3',
+      tabId: 3,
+      windowId: 1,
+      loaded: true,
+      url: 'https://example.com/three'
+    });
+
+    await tree.applyMoveForIntent(
+      mover,
+      tree.root,
+      1,
+      {
+        openWindowOnRootMove: false,
+        reason: 'userAction',
+        prevParentId: windowNode.id,
+        when: Date.now()
+      }
+    );
+
+    assertEqual(tree.root.nodes.length, 2, 'Root should have two windows');
+    assertEqual(windowNode.nodes.length, 1, 'Original window should keep one child');
+    assertEqual(windowNode.nodes[0].id, 't1', 'Original child should remain in window');
+    const newWindow = tree.root.nodes[1];
+    assert(newWindow.isWindow(), 'New window should be a window node');
+    assertEqual(mover.parent, newWindow, 'Moved node should be under new window');
+    assertEqual(loadCalls.length, 1, 'Should load new window');
+    assertEqual(loadCalls[0].windowNodeId, newWindow.id, 'Should load new window ID');
+  } finally {
+    globalThis.indexedDB = originalIndexedDb;
+  }
+});
+
+test('bkgd_loadSavedNode creates window when windowId is missing', async () => {
+  const originalWindowsCreate = api.windows.create;
+  const originalTabsCreate = api.tabs.create;
+  try {
+    let windowCalls = 0;
+    let tabCalls = 0;
+    api.windows.create = async () => {
+      windowCalls += 1;
+      return { id: 99 };
+    };
+    api.tabs.create = async () => {
+      tabCalls += 1;
+      return {};
+    };
+
+    const bkgd = new Bkgd();
+    const tree = createTree(bkgd);
+    tree.createRootNode();
+    bkgd.tree = tree;
+    bkgd.resolveTreeLoaded();
+
+    const windowNode = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      loaded: true,
+      windowId: undefined
+    });
+    const tab = await addChild(windowNode, {
+      id: 't1',
+      url: 'https://example.com',
+      loaded: false
+    });
+
+    await bkgd.bkgd_loadSavedNode({ nodeId: tab.id, reason: 'userAction' });
+
+    assertEqual(windowCalls, 1, 'Should create window when windowId is missing');
+    assertEqual(tabCalls, 0, 'Should not create tab in missing window');
+  } finally {
+    api.windows.create = originalWindowsCreate;
+    api.tabs.create = originalTabsCreate;
+  }
+});
+
+test('bkgd_loadSavedWindow uses nested loaded tabs when windowId missing', async () => {
+  const originalWindowsCreate = api.windows.create;
+  const originalTabsGet = api.tabs.get;
+  try {
+    const created = [];
+    api.windows.create = async (props) => {
+      created.push(props);
+      return { id: 101 };
+    };
+    api.tabs.get = async (tabId) => ({ id: tabId, windowId: 101 });
+
+    const bkgd = new Bkgd();
+    const tree = createTree(bkgd);
+    tree.createRootNode();
+    bkgd.tree = tree;
+    bkgd.resolveTreeLoaded();
+
+    const windowNode = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      loaded: true,
+      windowId: undefined
+    });
+    const nestedWindow = await addChild(windowNode, {
+      id: 'w2',
+      type: 'window',
+      loaded: true,
+      windowId: 55
+    });
+    await addChild(nestedWindow, {
+      id: 't1',
+      tabId: 42,
+      windowId: 55,
+      loaded: true,
+      url: 'https://example.com'
+    });
+
+    await bkgd.bkgd_loadSavedWindow({
+      windowNodeId: windowNode.id,
+      nodeId: windowNode.id
+    });
+
+    assertEqual(created.length, 1, 'Should create a window for nested tabs');
+    assertEqual(created[0].tabId, 42, 'Should use nested tabId as opener');
+  } finally {
+    api.windows.create = originalWindowsCreate;
+    api.tabs.get = originalTabsGet;
+  }
 });
 
 test('getNodeByTabId prefers tabId over oldTabId', async () => {

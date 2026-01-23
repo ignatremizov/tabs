@@ -233,6 +233,15 @@ export class Node {
     return false;
   }
 
+  hasLoadedTabsDeep () {
+    // check descendants for loaded tabs, including nested windows
+    for (const node of this.nodes)
+      if ((! node.isWindow()) && node.isLoaded()) return true;
+    for (const node of this.nodes)
+      if (node.hasLoadedTabsDeep && node.hasLoadedTabsDeep()) return true;
+    return false;
+  }
+
   //countLoadedTabs () {
   //  const numOpenTabs = this.countNodes(
   //    function (node) { return (node.isLoaded() && (! node.isWindow())); },
@@ -530,7 +539,10 @@ export class Node {
     if (! this.isWindow()) return;
     if (this.keepTabsOnClose) {
       this.keepTabsOnClose = false;
-      if (! this.hasLoadedTabs()) {
+      const hasLoadedDesc = this.hasLoadedTabsDeep
+        ? this.hasLoadedTabsDeep()
+        : this.hasLoadedTabs();
+      if (! hasLoadedDesc) {
         await this.unload(args);
       }
       return;
@@ -541,7 +553,9 @@ export class Node {
       await this.deleteSelf({ reason: 'emptyWindowClosed' });
     }
     // if window has no open tabs, mark it as unloaded
-    else if (! this.hasLoadedTabs()) {
+    else if (! (this.hasLoadedTabsDeep
+      ? this.hasLoadedTabsDeep()
+      : this.hasLoadedTabs())) {
       //args.reason = 'windowClosed';
       // args.reason should already exist: tree_windowClosed or onWindowRemoved
       debug('Node.windowClosed(): unload');
@@ -785,15 +799,24 @@ export class Node {
     // then it's finally safe to open the tab itself
     // if not already opened by browser, opened the tab
     if ((this.tree && this.tree.bkgd) && ('userAction' === args.reason)) {
+      const bkgd = this.tree.bkgd;
       // there's some jank involved, so it's much easier to
       // only let the bkgd script open the actual tab
       // (so it can keep some internal state for its onTabCreated handler
       //  and also open a saved window if necessary)
-      if (! this.isWindow())  // load a saved tab
-        await emit('bkgd_loadSavedNode',
-          { nodeId: this.id, reason: args.reason,
-            discarded: args.discarded,
-            when: this.atime });
+      if (! this.isWindow()) {  // load a saved tab
+        const loadMsg = {
+          nodeId: this.id,
+          reason: args.reason,
+          discarded: args.discarded,
+          when: this.atime
+        };
+        if (bkgd && bkgd.bkgd_loadSavedNode) {
+          await bkgd.bkgd_loadSavedNode(loadMsg);
+        } else {
+          await emit('bkgd_loadSavedNode', loadMsg);
+        }
+      }
       // if window, load the window
       else {
         debug(`loading saved window: ${this.id}`);
@@ -864,6 +887,8 @@ export class Node {
       await emit('tree_nodeChanged',
         { nodeId: this.id, type: 'unload',
           wasLoaded: this.wasLoaded,
+          tabId: tabId,
+          windowId: windowId,
           when: this.mtime,
           actionReason: args.reason,
           keepTabsOnClose: args.keepTabsOnClose });
@@ -1018,20 +1043,50 @@ export class Node {
     // abort on no-op
     if ((destParent === this.parent) && (destIndex === this.indexOf()))
       return;
-    // view-only: if moving the only child of a window to root,
-    // move the window container instead (when root-move opens windows)
+    const prevParent = this.parent;
+    const prevWindow = this.getWindowNode(false);
+    const movingToRoot = (
+      destParent.isRoot()
+      && prevParent
+      && (! prevParent.isRoot())
+    );
+    const hasLoadedDescendants = (
+      this.hasLoadedTabsDeep ? this.hasLoadedTabsDeep() : this.hasLoadedTabs()
+    );
+    const openTabs = (
+      (! this.isWindow())
+      && (this.isLoaded() || hasLoadedDescendants)
+    );
+    const shouldOpenWindowOnRootMove = (
+      args.reason === 'userAction'
+      && (! this.tree.bkgd)
+      && movingToRoot
+      && (this.tree.openWindowOnRootMove || openTabs)
+    );
+    const destWindow = destParent.getWindowNode
+      ? destParent.getWindowNode(false)
+      : null;
+    // view-only: if moving the only child of a window into a
+    // windowless parent, move the window container instead
     if (args.reason === 'userAction'
       && (! this.tree.bkgd)
-      && this.tree.openWindowOnRootMove
-      && destParent.isRoot()
-      && (! this.isWindow())) {
+      && (! this.isWindow())
+      && openTabs
+      && (! destWindow)) {
       const windowNode = this.getWindowNode(false);
       if (windowNode && windowNode.nodes.length === 1
         && windowNode.nodes[0] === this) {
+        const windowHasId = (
+          (undefined !== windowNode.windowId)
+          && (null !== windowNode.windowId)
+        );
+        const hasLoadedDesc = windowNode.hasLoadedTabsDeep
+          ? windowNode.hasLoadedTabsDeep()
+          : windowNode.hasLoadedTabs();
         const keepWindow = (
           windowNode.shouldUnloadNotDelete()
-          || windowNode.isLoaded()
-          || windowNode.hasLoadedTabs()
+          || (windowNode.isLoaded() && windowHasId)
+          || hasLoadedDesc
         );
         if (keepWindow) {
           return windowNode.moveTo(destParent, destIndex, args);
@@ -1064,7 +1119,6 @@ export class Node {
       await this.promoteKids({ reason: 'moveTo' });
     }
     // remove
-    const prevParent = this.parent;
     let newIndex = destIndex;
     if (prevParent) {
       const oldIndex = this.indexOf();
@@ -1086,6 +1140,7 @@ export class Node {
     }
     // ... and add
     destParent.insertChild(this, newIndex);
+    const nextWindow = this.getWindowNode(false);
 
     // bump new parent timestamp
     destParent.bump('mtime', args);
@@ -1115,8 +1170,8 @@ export class Node {
     ].includes(args.reason)) {
       if (args.reason === 'userAction'
         && (! this.tree.bkgd)
-        && this.tree.openWindowOnRootMove
-        && movedToRoot) {
+        && movedToRoot
+        && (this.tree.openWindowOnRootMove || openTabs)) {
         args.openWindowOnRootMove = true;
       }
       const moveMsg = {
@@ -1133,17 +1188,33 @@ export class Node {
       emit('tree_nodeMoved', moveMsg);
 
       // loaded tabs need extra care when they move
+      const hasLoadedDesc = this.hasLoadedTabsDeep
+        ? this.hasLoadedTabsDeep()
+        : this.hasLoadedTabs();
       if (('moveTo' !== args.reason)
-        && (this.isLoaded() || this.hasLoadedTabs())
+        && (this.isLoaded() || hasLoadedDesc)
         && (! this.isWindow())
       ) {
         // if loaded tab moved to unloaded window, load the window
         const newWindow = this.getWindowNode();
-        if (newWindow && (! newWindow.isLoaded())) {
-          await emit('bkgd_loadSavedWindow', {
+        const newWindowLoaded = (
+          newWindow
+          && newWindow.isLoaded()
+          && (undefined !== newWindow.windowId)
+          && (null !== newWindow.windowId)
+        );
+        if (newWindow && (! newWindowLoaded)) {
+          const loadMsg = {
             reason: 'moveTo.loadedTabToUnloadedWindow',
             windowNodeId: newWindow.id,
-            nodeId: this.id });
+            nodeId: this.id
+          };
+          const bkgd = this.tree && this.tree.bkgd;
+          if (bkgd && bkgd.bkgd_loadSavedWindow) {
+            await bkgd.bkgd_loadSavedWindow(loadMsg);
+          } else {
+            await emit('bkgd_loadSavedWindow', loadMsg);
+          }
         }
         // TODO: if loaded tab moved so it's not in a window,
         //   create a new window to hold it
@@ -1152,7 +1223,12 @@ export class Node {
         //}
 
         // ensure tabs are in the correct order
-        await destParent.reorderAllTabsInThisWindow();
+        const windowChanged = (
+          prevWindow
+          && nextWindow
+          && (prevWindow !== nextWindow)
+        );
+        await destParent.reorderAllTabsInThisWindow({ force: windowChanged });
       }
 
       // update the tab's openerTabId if possible
@@ -1360,13 +1436,14 @@ export class Node {
     return result;
   }
 
-  async reorderAllTabsInThisWindow () {
+  async reorderAllTabsInThisWindow (opts = {}) {
+    const force = opts && opts.force;
     debug(`Node.reorderAllTabsInThisWindow(${this.tabReorderInProgress}):`, this);
     // drop reorder requests when one is already pending
     // TODO? figure out correct place to attach this flag
     // (on the node being dragged, or on the window node?  or both?)
     // (using the dragged node because the window changes mid-drag)
-    if (this.tabReorderInProgress) return;
+    if (this.tabReorderInProgress && (! force)) return;
     // abort on no-op
     if ((! this.isLoaded()) && (! this.hasLoadedTabs())) return;
     // find this tab's window
@@ -1381,7 +1458,7 @@ export class Node {
     if (! this.tree.bkgd) {
       // tell the bkgd to reorder the tabs
       await emit('bkgd_reorderAllTabsInThisWindow',
-        { nodeId: this.id });
+        { nodeId: this.id, force });
       return;
     }
 

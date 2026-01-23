@@ -250,6 +250,12 @@ export class Bkgd {
   async ensureUnloaded (payload, op) {
     const node = this.tree.nodes[payload.nodeId];
     if (! node) return;
+    if ((undefined === node.tabId) && (undefined !== payload.tabId)) {
+      node.tabId = payload.tabId;
+    }
+    if ((undefined === node.windowId) && (undefined !== payload.windowId)) {
+      node.windowId = payload.windowId;
+    }
     const alreadyUnloaded = (
       (! node.isLoaded())
       && (! node.tabId)
@@ -573,7 +579,10 @@ export class Bkgd {
       for (const obj of attached) {
         if (node.id === obj.winNode.id) found = true;
       }
-      if ((! found) && (node.isLoaded() || node.hasLoadedTabs())) {
+      const hasLoadedDesc = node.hasLoadedTabsDeep
+        ? node.hasLoadedTabsDeep()
+        : node.hasLoadedTabs();
+      if ((! found) && (node.isLoaded() || hasLoadedDesc)) {
         node.unload({ reason: 'mergeOpenWindowsIntoTree' });
       }
     }
@@ -983,7 +992,12 @@ export class Bkgd {
     }
     // - if window not loaded, push window node to be loaded
     let needsWindow = false;
-    if (! windowNode.isLoaded()) {
+    const windowHasId = (
+      (undefined !== windowNode.windowId)
+      && (null !== windowNode.windowId)
+    );
+    const windowLoaded = windowNode.isLoaded() && windowHasId;
+    if (! windowLoaded) {
       debug(`bkgd_loadSavedNode(): needsWindow`, windowNode);
       needsWindow = true;
       // TODO
@@ -1109,7 +1123,10 @@ export class Bkgd {
     const isLabelNode = (! node.isWindow()) && (! node.url) && (! node.title);
 
     if (node.isWindow()) {
-      const hasLoaded = node.isLoaded() || node.hasLoadedTabs();
+      const hasLoadedDesc = node.hasLoadedTabsDeep
+        ? node.hasLoadedTabsDeep()
+        : node.hasLoadedTabs();
+      const hasLoaded = node.isLoaded() || hasLoadedDesc;
       if (hasLoaded) {
         const parent = node.parent;
         if (! parent) return { error: 'bkgd_wrapNodeInWindow(): no parent' };
@@ -1158,11 +1175,10 @@ export class Bkgd {
     if (isLabelNode) {
       await node.setTabFields({ type: 'window' }, { reason: 'userAction' });
       const openTabs = (
-        node.tabId
-        || node.findNodes(
-          (n) => (n.tabId && (! n.isWindow())),
-          (n) => (! n.isWindow())
-        ).length > 0
+        node.isLoaded()
+        || (node.hasLoadedTabsDeep
+          ? node.hasLoadedTabsDeep()
+          : node.hasLoadedTabs())
       );
       if (openTabs) {
         await this.bkgd_loadSavedWindow({
@@ -1188,11 +1204,10 @@ export class Bkgd {
       prevParentId: parent.id
     }, 'bkgd');
     const openTabs = (
-      node.tabId
-      || node.findNodes(
-        (n) => (n.tabId && (! n.isWindow())),
-        (n) => (! n.isWindow())
-      ).length > 0
+      node.isLoaded()
+      || (node.hasLoadedTabsDeep
+        ? node.hasLoadedTabsDeep()
+        : node.hasLoadedTabs())
     );
     if (prevWindowLoaded && openTabs) {
       await this.bkgd_loadSavedWindow({
@@ -1217,11 +1232,14 @@ export class Bkgd {
       return { error: err };
     }
     // if already loaded, do nothing
-    if (windowNode.isLoaded()) { return response; }
+    const windowHasId = (
+      (undefined !== windowNode.windowId)
+      && (null !== windowNode.windowId)
+    );
+    if (windowNode.isLoaded() && windowHasId) { return response; }
     // list of open tabs in the new window
     const loadedKids = node.findNodes(
-      (n) => (n.tabId && (! n.isWindow())),
-      (n) => (! n.isWindow())
+      (n) => (n.tabId && (! n.isWindow()))
     );
     if (node.tabId) loadedKids.unshift(node);
     const tabIds = loadedKids.map((n) => n.tabId);
@@ -1328,7 +1346,7 @@ export class Bkgd {
     // actually handle the event, but delayed, and only once per batch
     this.tabReorderTimeout = setTimeout(async () => {
       try {
-        await node.reorderAllTabsInThisWindow();
+        await node.reorderAllTabsInThisWindow({ force: msg.force });
       }
       //catch (err) {
       //  error(`bkgd_reorderAllTabsInThisWindow error:`, err);

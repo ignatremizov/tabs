@@ -70,9 +70,10 @@ export class OpsQueue {
   }
 
   async requeueFailedOps ({ limit = 10, maxRetries = 3, minAgeMs = 1000 } = {}) {
-    const failed = await this.listFailedOps(limit);
+    const failed = await this.listFailedOps(0);
     const now = Date.now();
     let requeued = 0;
+    const enforceLimit = Number.isFinite(limit) && (limit > 0);
     for (const op of failed) {
       const retryCount = op.retryCount || 0;
       const updatedAt = op.updatedAt || 0;
@@ -83,14 +84,16 @@ export class OpsQueue {
         updatedAt: now,
       });
       if (updated) requeued += 1;
+      if (enforceLimit && (requeued >= limit)) break;
     }
     return requeued;
   }
 
   async requeueStaleRunningOps ({ limit = 10, minAgeMs = 30000 } = {}) {
-    const running = await this.listRunningOps(limit);
+    const running = await this.listRunningOps(0);
     const now = Date.now();
     let requeued = 0;
+    const enforceLimit = Number.isFinite(limit) && (limit > 0);
     for (const op of running) {
       const updatedAt = op.updatedAt || 0;
       if ((now - updatedAt) < minAgeMs) continue;
@@ -99,6 +102,7 @@ export class OpsQueue {
         updatedAt: now,
       });
       if (updated) requeued += 1;
+      if (enforceLimit && (requeued >= limit)) break;
     }
     return requeued;
   }

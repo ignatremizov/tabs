@@ -24,6 +24,8 @@ export class Tree {
     this.onTabReplacedMutex = new Mutex();
 
     this.markedNodes = [];
+    this.pendingMoves = new Map();
+    this.pendingMoveTimeoutMs = 2000;
 
     // holds tabIds of "tabs" we need to ignore,
     // like Vivaldi panels
@@ -492,6 +494,7 @@ export class Tree {
       // re-attach this tab to the found Node
       await savedTabNode.setTabFields({
         tabId: tab.id,
+        windowId: tab.windowId,
         loaded: true,
         discarded: tab.discarded,
         frozen: tab.frozen,
@@ -796,6 +799,9 @@ export class Tree {
     const tabNode = this.getNodeByTabId(tabId);
     // if tab doesn't exist, do nothing
     if (! tabNode) return warn(`Tree.onTabAttached(${tabId}): no tab found`);
+    if (tabNode.windowId !== windowId) {
+      await tabNode.setTabFields({ windowId }, { reason: 'onTabAttached' });
+    }
 
     // find or create the window node
     let windowNode;
@@ -987,6 +993,33 @@ export class Tree {
     return error(`Tree fn not found: ${msg.msg}`);
   }
 
+  queuePendingMove (msg) {
+    if (! msg || ! msg.nodeId) return;
+    this.pendingMoves.set(msg.nodeId, {
+      msg: { ...msg },
+      receivedAt: Date.now()
+    });
+  }
+
+  async flushPendingMoves () {
+    if (! this.pendingMoves.size) return;
+    const now = Date.now();
+    for (const [nodeId, entry] of this.pendingMoves.entries()) {
+      const pendingMsg = entry.msg;
+      if ((now - entry.receivedAt) > this.pendingMoveTimeoutMs) {
+        error('tree_nodeMoved(): pending move timed out', pendingMsg);
+        this.pendingMoves.delete(nodeId);
+        continue;
+      }
+      const node = this.nodes[pendingMsg.nodeId];
+      const destParent = this.nodes[pendingMsg.destParentId];
+      if (! node || ! destParent) continue;
+      pendingMsg.reason = 'tree_nodeMoved';
+      await node.moveTo(destParent, pendingMsg.destIndex, pendingMsg);
+      this.pendingMoves.delete(nodeId);
+    }
+  }
+
   async tree_nodeAdded (msg, sender, sendResponse) {
     await this.treeLoaded;  // wait until tree is ready
 
@@ -1007,6 +1040,7 @@ export class Tree {
     }
     this.nodes[newNode.id] = newNode;
     debug(`tree_nodeAdded() added "${newNode.id}" to "${parent.id}"`);
+    if (! this.bkgd) await this.flushPendingMoves();
     //debug('Tree root:', this.root);
   }
 
@@ -1044,12 +1078,18 @@ export class Tree {
     const destIndex = msg.destIndex;
 
     // find nodes
-    const node = this.nodes[nodeId];
-    const destParent = this.nodes[destParentId];
-    if (! node)
-      return error(`tree_nodeMoved(): couldn't find node "${nodeId}"`);
-    if (! destParent)
-      return error(`tree_nodeMoved(): couldn't find parent "${destParentId}"`);
+    let node = this.nodes[nodeId];
+    let destParent = this.nodes[destParentId];
+    if (! node || ! destParent) {
+      if (! this.bkgd) {
+        this.queuePendingMove(msg);
+        return;
+      }
+      if (! node)
+        return error(`tree_nodeMoved(): couldn't find node "${nodeId}"`);
+      if (! destParent)
+        return error(`tree_nodeMoved(): couldn't find parent "${destParentId}"`);
+    }
 
     // move the node
     msg.reason = 'tree_nodeMoved';

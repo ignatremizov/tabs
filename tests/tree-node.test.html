@@ -25,6 +25,7 @@
     .snap-label { color: #6f42c1; }
     .snap-node { color: #444; }
     .snap-root { color: #222; font-weight: 600; }
+    .snap-cursor { color: #d22; font-weight: 600; }
     .legend { margin-top: 6px; font-size: 0.9em; color: #555; }
     .legend span { margin-right: 12px; }
   </style>
@@ -50,6 +51,10 @@
       if (!api.runtime.onMessage.addListener) {
         api.runtime.onMessage.addListener = () => {};
       }
+      if (!api.runtime.onConnect) api.runtime.onConnect = {};
+      if (!api.runtime.onConnect.addListener) {
+        api.runtime.onConnect.addListener = () => {};
+      }
 
       if (!api.tabs) api.tabs = {};
       if (!api.tabs.remove) api.tabs.remove = async () => {};
@@ -57,10 +62,61 @@
       if (!api.tabs.move) api.tabs.move = async () => {};
       if (!api.tabs.update) api.tabs.update = async () => ({});
       if (!api.tabs.query) api.tabs.query = async () => ([]);
+      if (!api.tabs.create) api.tabs.create = async () => ({});
+      if (!api.tabs.onCreated) api.tabs.onCreated = {};
+      if (!api.tabs.onCreated.addListener) {
+        api.tabs.onCreated.addListener = () => {};
+      }
+      if (!api.tabs.onRemoved) api.tabs.onRemoved = {};
+      if (!api.tabs.onRemoved.addListener) {
+        api.tabs.onRemoved.addListener = () => {};
+      }
+      if (!api.tabs.onActivated) api.tabs.onActivated = {};
+      if (!api.tabs.onActivated.addListener) {
+        api.tabs.onActivated.addListener = () => {};
+      }
+      if (!api.tabs.onMoved) api.tabs.onMoved = {};
+      if (!api.tabs.onMoved.addListener) {
+        api.tabs.onMoved.addListener = () => {};
+      }
+      if (!api.tabs.onAttached) api.tabs.onAttached = {};
+      if (!api.tabs.onAttached.addListener) {
+        api.tabs.onAttached.addListener = () => {};
+      }
+      if (!api.tabs.onDetached) api.tabs.onDetached = {};
+      if (!api.tabs.onDetached.addListener) {
+        api.tabs.onDetached.addListener = () => {};
+      }
+      if (!api.tabs.onUpdated) api.tabs.onUpdated = {};
+      if (!api.tabs.onUpdated.addListener) {
+        api.tabs.onUpdated.addListener = () => {};
+      }
+      if (!api.tabs.onReplaced) api.tabs.onReplaced = {};
+      if (!api.tabs.onReplaced.addListener) {
+        api.tabs.onReplaced.addListener = () => {};
+      }
 
       if (!api.windows) api.windows = {};
       if (!api.windows.remove) api.windows.remove = async () => {};
       if (!api.windows.get) api.windows.get = async () => ({});
+      if (!api.windows.onCreated) api.windows.onCreated = {};
+      if (!api.windows.onCreated.addListener) {
+        api.windows.onCreated.addListener = () => {};
+      }
+      if (!api.windows.onRemoved) api.windows.onRemoved = {};
+      if (!api.windows.onRemoved.addListener) {
+        api.windows.onRemoved.addListener = () => {};
+      }
+      if (!api.windows.onFocusChanged) api.windows.onFocusChanged = {};
+      if (!api.windows.onFocusChanged.addListener) {
+        api.windows.onFocusChanged.addListener = () => {};
+      }
+      if (!api.windows.getAll) api.windows.getAll = async () => ([]);
+      if (!api.windows.create) api.windows.create = async () => ({});
+      if (!api.windows.onBoundsChanged) api.windows.onBoundsChanged = {};
+      if (!api.windows.onBoundsChanged.addListener) {
+        api.windows.onBoundsChanged.addListener = () => {};
+      }
 
       if (!api.downloads) api.downloads = {};
       if (!api.downloads.download) api.downloads.download = async () => (1);
@@ -102,6 +158,26 @@
       if (!api.storage.onChanged.addListener) {
         api.storage.onChanged.addListener = () => {};
       }
+
+      if (!api.commands) api.commands = {};
+      if (!api.commands.onCommand) api.commands.onCommand = {};
+      if (!api.commands.onCommand.addListener) {
+        api.commands.onCommand.addListener = () => {};
+      }
+
+      if (!api.alarms) api.alarms = {};
+      if (!api.alarms.onAlarm) api.alarms.onAlarm = {};
+      if (!api.alarms.onAlarm.addListener) {
+        api.alarms.onAlarm.addListener = () => {};
+      }
+      if (!api.alarms.get) api.alarms.get = async () => null;
+      if (!api.alarms.clear) api.alarms.clear = async () => {};
+      if (!api.alarms.create) api.alarms.create = async () => {};
+
+      if (!api.sidePanel) api.sidePanel = {};
+      if (!api.sidePanel.setPanelBehavior) {
+        api.sidePanel.setPanelBehavior = async () => {};
+      }
     }
 
     if ('firefox' === env) {
@@ -138,15 +214,17 @@
       let base32decode;
       let base32encode;
       let IdGenerator;
+      let Bkgd;
       try {
         const cacheBust = `?v=${Date.now()}`;
-        const [treeMod, nodeMod, commonMod, optionsMod, base32Mod, idGenMod] = await Promise.all([
+        const [treeMod, nodeMod, commonMod, optionsMod, base32Mod, idGenMod, bkgdMod] = await Promise.all([
           import('../common/tree.js' + cacheBust),
           import('../common/node.js' + cacheBust),
           import('../common/common.js' + cacheBust),
           import('../options/client-id-form.js' + cacheBust),
           import('../common/base32.js' + cacheBust),
-          import('../common/id-generator.js' + cacheBust)
+          import('../common/id-generator.js' + cacheBust),
+          import('../bkgd/bkgd.js' + cacheBust)
         ]);
         Tree = treeMod.Tree;
         Node = nodeMod.Node;
@@ -156,6 +234,7 @@
         base32decode = base32Mod.base32decode;
         base32encode = base32Mod.base32encode;
         IdGenerator = idGenMod.IdGenerator;
+        Bkgd = bkgdMod.Bkgd;
       } catch (err) {
         $summary.textContent = `Failed to load modules: ${err}`;
         $summary.className = 'has-fail';
@@ -339,9 +418,35 @@
             $status.className = (status === 'loaded') ? 'snap-loaded' : 'snap-unloaded';
             $status.textContent = status;
             $text.appendChild($status);
-            $text.appendChild(document.createTextNode(afterText));
+            const cursorTag = ' < cursor';
+            const cursorIndex = afterText.indexOf(cursorTag);
+            if (cursorIndex === -1) {
+              $text.appendChild(document.createTextNode(afterText));
+            } else {
+              $text.appendChild(document.createTextNode(afterText.slice(0, cursorIndex)));
+              const $cursor = document.createElement('span');
+              $cursor.className = 'snap-cursor';
+              $cursor.textContent = cursorTag;
+              $text.appendChild($cursor);
+              $text.appendChild(document.createTextNode(
+                afterText.slice(cursorIndex + cursorTag.length)
+              ));
+            }
           } else {
-            $text.textContent = content;
+            const cursorTag = ' < cursor';
+            const cursorIndex = content.indexOf(cursorTag);
+            if (cursorIndex === -1) {
+              $text.textContent = content;
+            } else {
+              $text.appendChild(document.createTextNode(content.slice(0, cursorIndex)));
+              const $cursor = document.createElement('span');
+              $cursor.className = 'snap-cursor';
+              $cursor.textContent = cursorTag;
+              $text.appendChild($cursor);
+              $text.appendChild(document.createTextNode(
+                content.slice(cursorIndex + cursorTag.length)
+              ));
+            }
           }
 
           $line.appendChild($indent);
@@ -378,6 +483,7 @@
           { text: '● loaded', className: 'snap-loaded' },
           { text: '○ unloaded', className: 'snap-unloaded' },
           { text: '• neutral', className: '' },
+          { text: '< cursor', className: 'snap-cursor' },
           { text: 'window', className: 'snap-window' },
           { text: 'label', className: 'snap-label' },
           { text: 'node', className: 'snap-node' }
@@ -756,6 +862,144 @@
         assert(!('openWindowOnRootMove' in msg), 'Should not include openWindowOnRootMove');
       });
 
+      test('hasLoadedTabsDeep sees loaded tabs under windows', async () => {
+        const tree = createTree();
+        const parent = await addChild(tree.root, { id: 'p1' });
+        const windowNode = await addChild(parent, {
+          id: 'w1',
+          type: 'window',
+          windowId: 1,
+          loaded: true
+        });
+        await addChild(windowNode, {
+          id: 't1',
+          tabId: 1,
+          windowId: 1,
+          loaded: true,
+          url: 'https://example.com'
+        });
+
+        assertEqual(
+          parent.hasLoadedTabsDeep(),
+          true,
+          'Should detect loaded tabs under nested windows'
+        );
+        assertEqual(
+          parent.hasLoadedTabs(),
+          false,
+          'Legacy hasLoadedTabs should ignore nested windows'
+        );
+      });
+
+      test('moveTo forces openWindowOnRootMove for loaded root moves', async () => {
+        const tree = createTree();
+        tree.bkgd = null;
+        tree.openWindowOnRootMove = false;
+
+        const api = getApi();
+        const sent = [];
+        api.runtime.sendMessage = async (args) => {
+          sent.push(args);
+          return {};
+        };
+
+        const windowNode = await addChild(tree.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 1,
+          loaded: true
+        });
+        await addChild(windowNode, {
+          id: 't1',
+          tabId: 1,
+          windowId: 1,
+          loaded: true,
+          url: 'https://example.com'
+        });
+        const mover = await addChild(windowNode, {
+          id: 't2',
+          tabId: 2,
+          windowId: 1,
+          loaded: true,
+          url: 'https://example.com/two'
+        });
+
+        await mover.moveTo(tree.root, 1, { reason: 'userAction' });
+
+        const msg = sent.find((entry) => entry.msg === 'tree_nodeMoved');
+        assert(msg, 'Should emit tree_nodeMoved');
+        assertEqual(
+          msg.openWindowOnRootMove,
+          true,
+          'Should include openWindowOnRootMove for loaded root move'
+        );
+      });
+
+      test('moveTo forces openWindowOnRootMove for loaded descendants', async () => {
+        const tree = createTree();
+        tree.bkgd = null;
+        tree.openWindowOnRootMove = false;
+
+        const api = getApi();
+        const sent = [];
+        api.runtime.sendMessage = async (args) => {
+          sent.push(args);
+          return {};
+        };
+
+        const windowNode = await addChild(tree.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 1,
+          loaded: true
+        });
+        const mover = await addChild(windowNode, {
+          id: 'p1',
+          loaded: false
+        });
+        await addChild(mover, {
+          id: 'c1',
+          tabId: 1,
+          windowId: 1,
+          loaded: true,
+          url: 'https://example.com'
+        });
+
+        await mover.moveTo(tree.root, 1, { reason: 'userAction' });
+
+        const msg = sent.find((entry) => entry.msg === 'tree_nodeMoved');
+        assert(msg, 'Should emit tree_nodeMoved');
+        assertEqual(
+          msg.openWindowOnRootMove,
+          true,
+          'Should include openWindowOnRootMove for loaded descendants'
+        );
+      });
+
+      test('tree_nodeMoved defers until parent arrives', async () => {
+        const tree = createTree();
+        tree.bkgd = null;
+        const node = await addChild(tree.root, { id: 'n1' });
+
+        await tree.tree_nodeMoved({
+          msg: 'tree_nodeMoved',
+          nodeId: 'n1',
+          destParentId: 'w1',
+          destIndex: 0
+        });
+
+        assertEqual(node.parent, tree.root, 'Node should stay put until parent exists');
+
+        await tree.tree_nodeAdded({
+          msg: 'tree_nodeAdded',
+          parentId: 'root',
+          index: 0,
+          node: { id: 'w1', type: 'window' }
+        });
+
+        assertEqual(node.parent.id, 'w1', 'Node should move after parent appears');
+      });
+
       test('addChild respects reorderTabsOnCreate toggle', async () => {
         const tree = createTree();
         tree.reorderCalled = false;
@@ -962,6 +1206,135 @@
 
         const autoLoad = sent.find((msg) => msg.msg === 'bkgd_loadSavedWindow');
         assert(autoLoad, 'Should open saved window when moving loaded tab');
+      });
+
+      test('bkgd_loadSavedNode opens new window when windowId missing', async () => {
+        const api = getApi();
+        const originalWindowsCreate = api.windows.create;
+        const originalTabsCreate = api.tabs.create;
+        try {
+          const bkgd = new Bkgd();
+          const tree = new Tree(TestNode);
+          tree.nextId = 0;
+          tree.bkgd = bkgd;
+          bkgd.tree = tree;
+          bkgd.enqueueIntent = async () => {};
+          bkgd.resolveTreeLoaded();
+          tree.resolveTreeLoaded();
+
+          let windowCalls = 0;
+          let tabCalls = 0;
+          api.windows.create = async () => {
+            windowCalls += 1;
+            return { id: 99 };
+          };
+          api.tabs.create = async () => {
+            tabCalls += 1;
+            return { id: 123 };
+          };
+
+          const windowNode = await addChild(tree.root, {
+            id: 'w1',
+            type: 'window',
+            loaded: true
+          });
+          const tab = await addChild(windowNode, {
+            id: 't1',
+            url: 'https://example.com',
+            loaded: false
+          });
+
+          const before = treeSnapshot(tree.root);
+          await bkgd.bkgd_loadSavedNode({ nodeId: tab.id, reason: 'userAction' });
+          const after = treeSnapshot(tree.root);
+          const snap = { before, after };
+
+          assertEqualWithSnapshot(
+            windowCalls,
+            1,
+            'Should create window when windowId is missing',
+            snap
+          );
+          assertEqualWithSnapshot(
+            tabCalls,
+            0,
+            'Should not create tab in missing window',
+            snap
+          );
+
+          return snap;
+        } finally {
+          api.windows.create = originalWindowsCreate;
+          api.tabs.create = originalTabsCreate;
+        }
+      });
+
+      test('bkgd_loadSavedWindow loads nested tabs through window nodes', async () => {
+        const api = getApi();
+        const originalWindowsCreate = api.windows.create;
+        const originalTabsGet = api.tabs.get;
+        try {
+          const bkgd = new Bkgd();
+          const tree = new Tree(TestNode);
+          tree.nextId = 0;
+          tree.bkgd = bkgd;
+          bkgd.tree = tree;
+          bkgd.enqueueIntent = async () => {};
+          bkgd.resolveTreeLoaded();
+          tree.resolveTreeLoaded();
+
+          const created = [];
+          api.windows.create = async (props) => {
+            created.push(props);
+            return { id: 101 };
+          };
+          api.tabs.get = async (tabId) => ({ id: tabId, windowId: 101 });
+
+          const windowNode = await addChild(tree.root, {
+            id: 'w1',
+            type: 'window',
+            loaded: true
+          });
+          const nestedWindow = await addChild(windowNode, {
+            id: 'w2',
+            type: 'window',
+            windowId: 55,
+            loaded: true
+          });
+          await addChild(nestedWindow, {
+            id: 't1',
+            tabId: 42,
+            windowId: 55,
+            loaded: true,
+            url: 'https://example.com'
+          });
+
+          const before = treeSnapshot(tree.root);
+          await bkgd.bkgd_loadSavedWindow({
+            windowNodeId: windowNode.id,
+            nodeId: windowNode.id
+          });
+          const after = treeSnapshot(tree.root);
+          const snap = { before, after };
+
+          assertEqualWithSnapshot(
+            created.length,
+            1,
+            'Should create window for nested loaded tabs',
+            snap
+          );
+          assertEqualWithSnapshot(
+            created[0].tabId,
+            42,
+            'Should use nested tabId for window creation',
+            snap
+          );
+
+          return snap;
+        } finally {
+          api.windows.create = originalWindowsCreate;
+          api.tabs.get = originalTabsGet;
+        }
       });
 
       testGroup('Tree Utilities');

@@ -26,6 +26,7 @@
     .snap-label { color: #6f42c1; }
     .snap-node { color: #444; }
     .snap-root { color: #222; font-weight: 600; }
+    .snap-cursor { color: #d22; font-weight: 600; }
     .legend { margin-top: 6px; font-size: 0.9em; color: #555; }
     .legend span { margin-right: 12px; }
     .hidden-test-ui { display: none; }
@@ -74,17 +75,133 @@
       if (!api.runtime.onMessage.addListener) {
         api.runtime.onMessage.addListener = () => {};
       }
+      if (!api.runtime.onConnect) api.runtime.onConnect = {};
+      if (!api.runtime.onConnect.addListener) {
+        api.runtime.onConnect.addListener = () => {};
+      }
 
       if (!api.tabs) api.tabs = {};
       if (!api.tabs.remove) api.tabs.remove = async () => {};
       if (!api.tabs.get) api.tabs.get = async () => ({});
-      if (!api.tabs.move) api.tabs.move = async () => {};
+      if (!api.tabs.move) api.tabs.move = async () => ({});
       if (!api.tabs.update) api.tabs.update = async () => ({});
       if (!api.tabs.query) api.tabs.query = async () => ([]);
+      if (!api.tabs.create) api.tabs.create = async () => ({});
+      if (!api.tabs.onCreated) api.tabs.onCreated = {};
+      if (!api.tabs.onCreated.addListener) {
+        api.tabs.onCreated.addListener = () => {};
+      }
+      if (!api.tabs.onRemoved) api.tabs.onRemoved = {};
+      if (!api.tabs.onRemoved.addListener) {
+        api.tabs.onRemoved.addListener = () => {};
+      }
+      if (!api.tabs.onActivated) api.tabs.onActivated = {};
+      if (!api.tabs.onActivated.addListener) {
+        api.tabs.onActivated.addListener = () => {};
+      }
+      if (!api.tabs.onMoved) api.tabs.onMoved = {};
+      if (!api.tabs.onMoved.addListener) {
+        api.tabs.onMoved.addListener = () => {};
+      }
+      if (!api.tabs.onAttached) api.tabs.onAttached = {};
+      if (!api.tabs.onAttached.addListener) {
+        api.tabs.onAttached.addListener = () => {};
+      }
+      if (!api.tabs.onDetached) api.tabs.onDetached = {};
+      if (!api.tabs.onDetached.addListener) {
+        api.tabs.onDetached.addListener = () => {};
+      }
+      if (!api.tabs.onUpdated) api.tabs.onUpdated = {};
+      if (!api.tabs.onUpdated.addListener) {
+        api.tabs.onUpdated.addListener = () => {};
+      }
+      if (!api.tabs.onReplaced) api.tabs.onReplaced = {};
+      if (!api.tabs.onReplaced.addListener) {
+        api.tabs.onReplaced.addListener = () => {};
+      }
 
       if (!api.windows) api.windows = {};
       if (!api.windows.remove) api.windows.remove = async () => {};
       if (!api.windows.get) api.windows.get = async () => ({});
+      if (!api.windows.getAll) api.windows.getAll = async () => ([]);
+      if (!api.windows.create) api.windows.create = async () => ({});
+      if (!api.windows.onCreated) api.windows.onCreated = {};
+      if (!api.windows.onCreated.addListener) {
+        api.windows.onCreated.addListener = () => {};
+      }
+      if (!api.windows.onRemoved) api.windows.onRemoved = {};
+      if (!api.windows.onRemoved.addListener) {
+        api.windows.onRemoved.addListener = () => {};
+      }
+      if (!api.windows.onFocusChanged) api.windows.onFocusChanged = {};
+      if (!api.windows.onFocusChanged.addListener) {
+        api.windows.onFocusChanged.addListener = () => {};
+      }
+      if (!api.windows.onBoundsChanged) api.windows.onBoundsChanged = {};
+      if (!api.windows.onBoundsChanged.addListener) {
+        api.windows.onBoundsChanged.addListener = () => {};
+      }
+
+      if (!api.downloads) api.downloads = {};
+      if (!api.downloads.download) api.downloads.download = async () => (1);
+      if (!api.downloads.onChanged) {
+        api.downloads.onChanged = {
+          addListener: () => {},
+          removeListener: () => {}
+        };
+      }
+
+      if (!api.storage) api.storage = {};
+      if (!api.storage.local) {
+        const localStore = {};
+        api.storage.local = {
+          _store: localStore,
+          get: async (keys) => {
+            if (! keys) return { ...localStore };
+            if ('string' === typeof keys) return { [keys]: localStore[keys] };
+            if (Array.isArray(keys)) {
+              const result = {};
+              for (const key of keys) result[key] = localStore[key];
+              return result;
+            }
+            if (keys && ('object' === typeof keys)) {
+              const result = {};
+              for (const key of Object.keys(keys)) {
+                result[key] = (key in localStore) ? localStore[key] : keys[key];
+              }
+              return result;
+            }
+            return {};
+          },
+          set: async (items) => {
+            Object.assign(localStore, items);
+          }
+        };
+      }
+      if (!api.storage.onChanged) api.storage.onChanged = {};
+      if (!api.storage.onChanged.addListener) {
+        api.storage.onChanged.addListener = () => {};
+      }
+
+      if (!api.commands) api.commands = {};
+      if (!api.commands.onCommand) api.commands.onCommand = {};
+      if (!api.commands.onCommand.addListener) {
+        api.commands.onCommand.addListener = () => {};
+      }
+
+      if (!api.alarms) api.alarms = {};
+      if (!api.alarms.onAlarm) api.alarms.onAlarm = {};
+      if (!api.alarms.onAlarm.addListener) {
+        api.alarms.onAlarm.addListener = () => {};
+      }
+      if (!api.alarms.get) api.alarms.get = async () => null;
+      if (!api.alarms.clear) api.alarms.clear = async () => {};
+      if (!api.alarms.create) api.alarms.create = async () => {};
+
+      if (!api.sidePanel) api.sidePanel = {};
+      if (!api.sidePanel.setPanelBehavior) {
+        api.sidePanel.setPanelBehavior = async () => {};
+      }
     }
 
     if ('firefox' === env) {
@@ -291,7 +408,18 @@
           else if (isWindow) $text.classList.add('snap-window');
           else if (isLabel) $text.classList.add('snap-label');
           else $text.classList.add('snap-node');
-          appendTokenizedText($text, content);
+          const cursorTag = ' < cursor';
+          const cursorIndex = content.indexOf(cursorTag);
+          const mainContent = cursorIndex === -1
+            ? content
+            : content.slice(0, cursorIndex);
+          appendTokenizedText($text, mainContent);
+          if (cursorIndex !== -1) {
+            const $cursor = document.createElement('span');
+            $cursor.className = 'snap-cursor';
+            $cursor.textContent = cursorTag;
+            $text.appendChild($cursor);
+          }
 
           $line.append($indent, $dot, document.createTextNode(' '), $text);
           pre.appendChild($line);
@@ -306,6 +434,7 @@
           { text: '● loaded', className: 'snap-loaded' },
           { text: '○ unloaded', className: 'snap-unloaded' },
           { text: 'marked', className: 'snap-marked' },
+          { text: '< cursor', className: 'snap-cursor' },
           { text: 'window', className: 'snap-window' },
           { text: 'label', className: 'snap-label' },
           { text: 'node', className: 'snap-node' }
@@ -352,13 +481,14 @@
         const windowA = await addChild(view.root, {
           id: 'wa',
           type: 'window',
-          loaded: false,
+          windowId: 1,
+          loaded: true,
           expanded: true
         });
         const parent = await addChild(windowA, {
           id: 'p1',
           tabId: 1,
-          windowId: 'wa',
+          windowId: 1,
           loaded: true,
           expanded: true
         });
@@ -405,13 +535,14 @@
         const windowA = await addChild(view.root, {
           id: 'wa',
           type: 'window',
-          loaded: false,
+          windowId: 1,
+          loaded: true,
           expanded: true
         });
         const parent = await addChild(windowA, {
           id: 't1',
           tabId: 1,
-          windowId: 'wa',
+          windowId: 1,
           loaded: true,
           expanded: true
         });
@@ -431,7 +562,7 @@
         await addChild(parent, {
           id: 't2',
           tabId: 2,
-          windowId: 'wa',
+          windowId: 1,
           loaded: true,
           expanded: true
         });
@@ -643,13 +774,14 @@
         const windowA = await addChild(view.root, {
           id: 'wa',
           type: 'window',
-          loaded: false,
+          windowId: 1,
+          loaded: true,
           expanded: true
         });
         await addChild(windowA, {
           id: 't1',
           tabId: 1,
-          windowId: 'wa',
+          windowId: 1,
           loaded: true,
           expanded: true
         });
@@ -690,20 +822,21 @@
         const windowA = await addChild(view.root, {
           id: 'wa',
           type: 'window',
-          loaded: false,
+          windowId: 1,
+          loaded: true,
           expanded: true
         });
         const parent = await addChild(windowA, {
           id: 't1',
           tabId: 1,
-          windowId: 'wa',
+          windowId: 1,
           loaded: true,
           expanded: true
         });
         await addChild(parent, {
           id: 't2',
           tabId: 2,
-          windowId: 'wa',
+          windowId: 1,
           loaded: true,
           expanded: true
         });
@@ -741,16 +874,27 @@
           true,
           'moveDownIntoExpandedSibling should be enabled'
         );
-        const mover = await addChild(view.root, {
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const mover = await addChild(windowA, {
           id: 'n1',
+          tabId: 1,
+          windowId: 10,
           loaded: true
         });
-        const sibling = await addChild(view.root, {
+        const sibling = await addChild(windowA, {
           id: 'n2',
           expanded: true
         });
         await addChild(sibling, {
           id: 'n2c1',
+          tabId: 2,
+          windowId: 10,
           loaded: true
         });
 
@@ -762,6 +906,7 @@
 
         assertEqual(mover.parent, sibling, 'Node should move into sibling', snap);
         assertEqual(sibling.nodes[0].id, 'n1', 'Node should become first child', snap);
+        assertEqual(windowA.nodes[0].id, 'n2', 'Sibling should remain at window root', snap);
         return { before, after };
       });
 
@@ -773,17 +918,28 @@
           false,
           'moveDownIntoExpandedSibling should be disabled'
         );
-        const first = await addChild(view.root, {
-          id: 'n1',
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
           loaded: true,
           expanded: true
         });
-        const sibling = await addChild(view.root, {
+        const first = await addChild(windowA, {
+          id: 'n1',
+          tabId: 1,
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const sibling = await addChild(windowA, {
           id: 'n2',
           expanded: true
         });
         await addChild(sibling, {
           id: 'n2c1',
+          tabId: 2,
+          windowId: 10,
           loaded: true
         });
 
@@ -793,8 +949,9 @@
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
-        assertEqual(first.parent, view.root, 'Node should stay at root', snap);
-        assertEqual(view.root.nodes[1].id, 'n1', 'Node should move below sibling', snap);
+        assertEqual(first.parent, windowA, 'Node should stay under window', snap);
+        assertEqual(windowA.nodes[0].id, 'n2', 'Sibling should stay first', snap);
+        assertEqual(windowA.nodes[1].id, 'n1', 'Node should move below sibling', snap);
         return { before, after };
       });
 
@@ -806,16 +963,27 @@
           true,
           'moveUpIntoExpandedSibling should be enabled'
         );
-        const sibling = await addChild(view.root, {
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const sibling = await addChild(windowA, {
           id: 'n1',
           expanded: true
         });
         await addChild(sibling, {
           id: 'n1c1',
+          tabId: 1,
+          windowId: 10,
           loaded: true
         });
-        const mover = await addChild(view.root, {
+        const mover = await addChild(windowA, {
           id: 'n2',
+          tabId: 2,
+          windowId: 10,
           loaded: true
         });
 
@@ -827,6 +995,7 @@
 
         assertEqual(mover.parent, sibling, 'Node should move into sibling', snap);
         assertEqual(sibling.nodes[1].id, 'n2', 'Node should move to end of sibling', snap);
+        assertEqual(windowA.nodes[0].id, 'n1', 'Sibling should remain at window root', snap);
         return { before, after };
       });
 
@@ -838,16 +1007,27 @@
           false,
           'moveUpIntoExpandedSibling should be disabled'
         );
-        const sibling = await addChild(view.root, {
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const sibling = await addChild(windowA, {
           id: 'n1',
           expanded: true
         });
         await addChild(sibling, {
           id: 'n1c1',
+          tabId: 1,
+          windowId: 10,
           loaded: true
         });
-        const mover = await addChild(view.root, {
+        const mover = await addChild(windowA, {
           id: 'n2',
+          tabId: 2,
+          windowId: 10,
           loaded: true
         });
 
@@ -857,8 +1037,9 @@
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
-        assertEqual(mover.parent, view.root, 'Node should stay at root', snap);
-        assertEqual(view.root.nodes[0].id, 'n2', 'Node should move above sibling', snap);
+        assertEqual(mover.parent, windowA, 'Node should stay under window', snap);
+        assertEqual(windowA.nodes[0].id, 'n2', 'Node should move above sibling', snap);
+        assertEqual(windowA.nodes[1].id, 'n1', 'Sibling should move after node', snap);
         return { before, after };
       });
 
@@ -900,11 +1081,15 @@
         view.cursor = mover;
         const before = treeSnapshot(view.root);
         await view.action_moveNodeUp({ type: 'command' });
+        if (windowB.nodes.length === 0) {
+          await windowB.windowClosed({ reason: 'onWindowRemoved' });
+        }
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
         assertEqual(mover.parent, windowA, 'Tab should move into previous window', snap);
         assertEqual(windowA.nodes[1].id, 't2', 'Tab should move to end of window', snap);
+        assert(!view.root.nodes.includes(windowB), 'Empty window should be removed', snap);
         return { before, after };
       });
 
@@ -946,11 +1131,15 @@
         view.cursor = mover;
         const before = treeSnapshot(view.root);
         await view.action_moveNodeUp({ type: 'command' });
+        if (windowB.nodes.length === 0) {
+          await windowB.windowClosed({ reason: 'onWindowRemoved' });
+        }
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
         assertEqual(mover.parent, windowA, 'Tab should move into previous window', snap);
         assertEqual(windowA.nodes[1].id, 't2', 'Tab should move to end of window', snap);
+        assert(!view.root.nodes.includes(windowB), 'Empty window should be removed', snap);
         return { before, after };
       });
 
@@ -999,6 +1188,310 @@
         return { before, after };
       });
 
+      test('move up only-child loaded branch moves window (Toggle off)', async () => {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = false;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          false,
+          'moveUpIntoExpandedSibling should be disabled'
+        );
+        const label = await addChild(view.root, {
+          id: 'l1',
+          label: 'Label',
+          expanded: true
+        });
+        await addChild(label, {
+          id: 'l1c',
+          label: 'Label child'
+        });
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const mover = await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        await addChild(mover, {
+          id: 't1c',
+          tabId: 2,
+          windowId: 10,
+          loaded: true
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeUp({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(windowA.parent, view.root, 'Window should stay at root', snap);
+        assertEqual(view.root.nodes[0].id, 'w1', 'Window should move above label', snap);
+        assertEqual(mover.parent, windowA, 'Tab should stay under window', snap);
+        return { before, after };
+      });
+
+      test('move up only-child loaded branch nests window (Toggle on)', async () => {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = true;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          true,
+          'moveUpIntoExpandedSibling should be enabled'
+        );
+        const label = await addChild(view.root, {
+          id: 'l1',
+          label: 'Label',
+          expanded: true
+        });
+        await addChild(label, {
+          id: 'l1c',
+          label: 'Label child'
+        });
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const mover = await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        await addChild(mover, {
+          id: 't1c',
+          tabId: 2,
+          windowId: 10,
+          loaded: true
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeUp({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(windowA.parent, label, 'Window should move into label', snap);
+        assertEqual(label.nodes[0].id, 'l1c', 'Label child should remain first', snap);
+        assertEqual(label.nodes[1].id, 'w1', 'Window should move after label child', snap);
+        assertEqual(mover.parent, windowA, 'Tab should stay under window', snap);
+        return { before, after };
+      });
+
+      test('move up only-child unloaded branch with loaded kids moves window (Toggle off)', async () => {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = false;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          false,
+          'moveUpIntoExpandedSibling should be disabled'
+        );
+        const label = await addChild(view.root, {
+          id: 'l1',
+          label: 'Label',
+          expanded: true
+        });
+        await addChild(label, {
+          id: 'l1c',
+          label: 'Label child'
+        });
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const mover = await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 10,
+          loaded: false,
+          expanded: true
+        });
+        await addChild(mover, {
+          id: 't1c',
+          tabId: 2,
+          windowId: 10,
+          loaded: true
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeUp({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(windowA.parent, view.root, 'Window should stay at root', snap);
+        assertEqual(view.root.nodes[0].id, 'w1', 'Window should move above label', snap);
+        assertEqual(mover.parent, windowA, 'Tab should stay under window', snap);
+        return { before, after };
+      });
+
+      test('move up only-child unloaded branch with loaded kids nests window (Toggle on)', async () => {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = true;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          true,
+          'moveUpIntoExpandedSibling should be enabled'
+        );
+        const label = await addChild(view.root, {
+          id: 'l1',
+          label: 'Label',
+          expanded: true
+        });
+        await addChild(label, {
+          id: 'l1c',
+          label: 'Label child'
+        });
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const mover = await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 10,
+          loaded: false,
+          expanded: true
+        });
+        await addChild(mover, {
+          id: 't1c',
+          tabId: 2,
+          windowId: 10,
+          loaded: true
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeUp({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(windowA.parent, label, 'Window should move into label', snap);
+        assertEqual(label.nodes[0].id, 'l1c', 'Label child should remain first', snap);
+        assertEqual(label.nodes[1].id, 'w1', 'Window should move after label child', snap);
+        assertEqual(mover.parent, windowA, 'Tab should stay under window', snap);
+        return { before, after };
+      });
+
+      test('move up only-child unloaded branch with loaded kids ignores expanded sibling (Toggle on invert)', async () => {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = true;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          true,
+          'moveUpIntoExpandedSibling should be enabled'
+        );
+        const label = await addChild(view.root, {
+          id: 'l1',
+          label: 'Label',
+          expanded: true
+        });
+        await addChild(label, {
+          id: 'l1c',
+          label: 'Label child'
+        });
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const mover = await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 10,
+          loaded: false,
+          expanded: true
+        });
+        await addChild(mover, {
+          id: 't1c',
+          tabId: 2,
+          windowId: 10,
+          loaded: true
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeUpInvertNest({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(windowA.parent, view.root, 'Window should stay at root', snap);
+        assertEqual(view.root.nodes[0].id, 'w1', 'Window should move above label', snap);
+        assertEqual(view.root.nodes[1].id, 'l1', 'Label should move after window', snap);
+        assertEqual(mover.parent, windowA, 'Tab should stay under window', snap);
+        return { before, after };
+      });
+
+      test('move up only-child unloaded branch moves node (Toggle off)', async () => {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = false;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          false,
+          'moveUpIntoExpandedSibling should be disabled'
+        );
+        const label = await addChild(view.root, {
+          id: 'l1',
+          label: 'Label',
+          expanded: true
+        });
+        await addChild(label, {
+          id: 'l1c',
+          label: 'Label child'
+        });
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          loaded: false,
+          expanded: true
+        });
+        const mover = await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 'w1',
+          loaded: false,
+          expanded: true
+        });
+        await addChild(mover, {
+          id: 't1c',
+          tabId: 2,
+          windowId: 'w1',
+          loaded: false
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeUp({ type: 'command' });
+        await windowA.deleteSelf({ reason: 'onTabRemoved' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(mover.parent, view.root, 'Tab should move to root', snap);
+        assertEqual(view.root.nodes[0].id, 'l1', 'Label should stay first', snap);
+        assertEqual(view.root.nodes[1].id, 't1', 'Tab should move after label', snap);
+        assert(!view.root.nodes.includes(windowA), 'Empty window should be removed', snap);
+        return { before, after };
+      });
+
       test('move up moves unloaded tab to root (Toggle on)', async () => {
         const view = createView();
         view.moveUpIntoExpandedSibling = true;
@@ -1042,6 +1535,391 @@
         assertEqual(mover.parent, view.root, 'Tab should move to root', snap);
         assertEqual(view.root.nodes[1].id, 't2', 'Tab should move before window', snap);
         assert(!view.root.nodes.includes(windowB), 'Window should be removed', snap);
+        return { before, after };
+      });
+
+      test('move left keeps only-child loaded branch under window', async () => {
+        const view = createView();
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const mover = await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        await addChild(mover, {
+          id: 't1c',
+          tabId: 2,
+          windowId: 10,
+          loaded: true
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeLeft({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(mover.parent, windowA, 'Tab should stay under window', snap);
+        assertEqual(view.root.nodes[0].id, 'w1', 'Window should stay at root', snap);
+        return { before, after };
+      });
+
+      test('move left promotes unloaded only-child branch', async () => {
+        const view = createView();
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          loaded: false,
+          expanded: true
+        });
+        const mover = await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 'w1',
+          loaded: false,
+          expanded: true
+        });
+        await addChild(mover, {
+          id: 't1c',
+          tabId: 2,
+          windowId: 'w1',
+          loaded: false
+        });
+        const label = await addChild(view.root, {
+          id: 'l1',
+          label: 'Label',
+          expanded: true
+        });
+        await addChild(label, {
+          id: 'l1c',
+          label: 'Label child'
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeLeft({ type: 'command' });
+        await windowA.deleteSelf({ reason: 'onTabRemoved' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(mover.parent, view.root, 'Tab should move to root', snap);
+        assertEqual(view.root.nodes[0].id, 't1', 'Tab should move above label', snap);
+        assertEqual(view.root.nodes[1].id, 'l1', 'Label should stay after tab', snap);
+        assert(!view.root.nodes.includes(windowA), 'Empty window should be removed', snap);
+        return { before, after };
+      });
+
+      test('move down only-child loaded branch moves window (Toggle off)', async () => {
+        const view = createView();
+        view.moveDownIntoExpandedSibling = false;
+        assertEqual(
+          view.moveDownIntoExpandedSibling,
+          false,
+          'moveDownIntoExpandedSibling should be disabled'
+        );
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const mover = await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        await addChild(mover, {
+          id: 't1c',
+          tabId: 2,
+          windowId: 10,
+          loaded: true
+        });
+        const label = await addChild(view.root, {
+          id: 'l1',
+          label: 'Label',
+          expanded: true
+        });
+        await addChild(label, {
+          id: 'l1c',
+          label: 'Label child'
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeDown({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(windowA.parent, view.root, 'Window should stay at root', snap);
+        assertEqual(view.root.nodes[0].id, 'l1', 'Label should stay first', snap);
+        assertEqual(view.root.nodes[1].id, 'w1', 'Window should move below label', snap);
+        assertEqual(mover.parent, windowA, 'Tab should stay under window', snap);
+        return { before, after };
+      });
+
+      test('move down only-child loaded branch nests window (Toggle on)', async () => {
+        const view = createView();
+        view.moveDownIntoExpandedSibling = true;
+        assertEqual(
+          view.moveDownIntoExpandedSibling,
+          true,
+          'moveDownIntoExpandedSibling should be enabled'
+        );
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const mover = await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        await addChild(mover, {
+          id: 't1c',
+          tabId: 2,
+          windowId: 10,
+          loaded: true
+        });
+        const label = await addChild(view.root, {
+          id: 'l1',
+          label: 'Label',
+          expanded: true
+        });
+        await addChild(label, {
+          id: 'l1c',
+          label: 'Label child'
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeDown({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(windowA.parent, label, 'Window should move into label', snap);
+        assertEqual(label.nodes[0].id, 'w1', 'Window should become first label child', snap);
+        assertEqual(label.nodes[1].id, 'l1c', 'Label child should move after window', snap);
+        assertEqual(mover.parent, windowA, 'Tab should stay under window', snap);
+        return { before, after };
+      });
+
+      test('move down only-child unloaded branch with loaded kids moves window (Toggle off)', async () => {
+        const view = createView();
+        view.moveDownIntoExpandedSibling = false;
+        assertEqual(
+          view.moveDownIntoExpandedSibling,
+          false,
+          'moveDownIntoExpandedSibling should be disabled'
+        );
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const mover = await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 10,
+          loaded: false,
+          expanded: true
+        });
+        await addChild(mover, {
+          id: 't1c',
+          tabId: 2,
+          windowId: 10,
+          loaded: true
+        });
+        const label = await addChild(view.root, {
+          id: 'l1',
+          label: 'Label',
+          expanded: true
+        });
+        await addChild(label, {
+          id: 'l1c',
+          label: 'Label child'
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeDown({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(windowA.parent, view.root, 'Window should stay at root', snap);
+        assertEqual(view.root.nodes[0].id, 'l1', 'Label should stay first', snap);
+        assertEqual(view.root.nodes[1].id, 'w1', 'Window should move below label', snap);
+        assertEqual(mover.parent, windowA, 'Tab should stay under window', snap);
+        return { before, after };
+      });
+
+      test('move down only-child unloaded branch with loaded kids nests window (Toggle on)', async () => {
+        const view = createView();
+        view.moveDownIntoExpandedSibling = true;
+        assertEqual(
+          view.moveDownIntoExpandedSibling,
+          true,
+          'moveDownIntoExpandedSibling should be enabled'
+        );
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const mover = await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 10,
+          loaded: false,
+          expanded: true
+        });
+        await addChild(mover, {
+          id: 't1c',
+          tabId: 2,
+          windowId: 10,
+          loaded: true
+        });
+        const label = await addChild(view.root, {
+          id: 'l1',
+          label: 'Label',
+          expanded: true
+        });
+        await addChild(label, {
+          id: 'l1c',
+          label: 'Label child'
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeDown({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(windowA.parent, label, 'Window should move into label', snap);
+        assertEqual(label.nodes[0].id, 'w1', 'Window should become first label child', snap);
+        assertEqual(label.nodes[1].id, 'l1c', 'Label child should move after window', snap);
+        assertEqual(mover.parent, windowA, 'Tab should stay under window', snap);
+        return { before, after };
+      });
+
+      test('move down only-child unloaded branch with loaded kids ignores expanded sibling (Toggle on invert)', async () => {
+        const view = createView();
+        view.moveDownIntoExpandedSibling = true;
+        assertEqual(
+          view.moveDownIntoExpandedSibling,
+          true,
+          'moveDownIntoExpandedSibling should be enabled'
+        );
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const mover = await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 10,
+          loaded: false,
+          expanded: true
+        });
+        await addChild(mover, {
+          id: 't1c',
+          tabId: 2,
+          windowId: 10,
+          loaded: true
+        });
+        const label = await addChild(view.root, {
+          id: 'l1',
+          label: 'Label',
+          expanded: true
+        });
+        await addChild(label, {
+          id: 'l1c',
+          label: 'Label child'
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeDownInvertNest({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(windowA.parent, view.root, 'Window should stay at root', snap);
+        assertEqual(view.root.nodes[0].id, 'l1', 'Label should stay first', snap);
+        assertEqual(view.root.nodes[1].id, 'w1', 'Window should move below label', snap);
+        assertEqual(mover.parent, windowA, 'Tab should stay under window', snap);
+        return { before, after };
+      });
+
+      test('move down only-child unloaded branch moves node (Toggle off)', async () => {
+        const view = createView();
+        view.moveDownIntoExpandedSibling = false;
+        assertEqual(
+          view.moveDownIntoExpandedSibling,
+          false,
+          'moveDownIntoExpandedSibling should be disabled'
+        );
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          loaded: false,
+          expanded: true
+        });
+        const mover = await addChild(windowA, {
+          id: 't1',
+          tabId: 1,
+          windowId: 'w1',
+          loaded: false,
+          expanded: true
+        });
+        await addChild(mover, {
+          id: 't1c',
+          tabId: 2,
+          windowId: 'w1',
+          loaded: false
+        });
+        const label = await addChild(view.root, {
+          id: 'l1',
+          label: 'Label',
+          expanded: true
+        });
+        await addChild(label, {
+          id: 'l1c',
+          label: 'Label child'
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeDown({ type: 'command' });
+        await windowA.deleteSelf({ reason: 'onTabRemoved' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(mover.parent, view.root, 'Tab should move to root', snap);
+        assertEqual(view.root.nodes[0].id, 't1', 'Tab should move above label', snap);
+        assertEqual(view.root.nodes[1].id, 'l1', 'Label should stay after tab', snap);
+        assert(!view.root.nodes.includes(windowA), 'Empty window should be removed', snap);
         return { before, after };
       });
 
@@ -1093,9 +1971,31 @@
 
       test('move down no descend stays at sibling level', async () => {
         const view = createView();
-        const first = await addChild(view.root, { id: 'n1' });
-        const mover = await addChild(view.root, { id: 'n2', loaded: true });
-        const third = await addChild(view.root, { id: 'n3' });
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const first = await addChild(windowA, {
+          id: 'n1',
+          tabId: 1,
+          windowId: 10,
+          loaded: true
+        });
+        const mover = await addChild(windowA, {
+          id: 'n2',
+          tabId: 2,
+          windowId: 10,
+          loaded: true
+        });
+        const third = await addChild(windowA, {
+          id: 'n3',
+          tabId: 3,
+          windowId: 10,
+          loaded: false
+        });
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
@@ -1103,23 +2003,45 @@
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
-        assertEqual(mover.parent, view.root, 'Node should stay at root', snap);
-        assertEqual(view.root.nodes[1].id, 'n3', 'Next sibling should move up', snap);
-        assertEqual(view.root.nodes[2].id, 'n2', 'Node should move after sibling', snap);
-        assertEqual(first.parent, view.root, 'First node should remain at root', snap);
-        assertEqual(third.parent, view.root, 'Third node should remain at root', snap);
+        assertEqual(mover.parent, windowA, 'Node should stay under window', snap);
+        assertEqual(windowA.nodes[1].id, 'n3', 'Next sibling should move up', snap);
+        assertEqual(windowA.nodes[2].id, 'n2', 'Node should move after sibling', snap);
+        assertEqual(first.parent, windowA, 'First node should remain under window', snap);
+        assertEqual(third.parent, windowA, 'Third node should remain under window', snap);
         return { before, after };
       });
 
       test('move down no descend escapes to parent level', async () => {
         const view = createView();
-        const parent = await addChild(view.root, {
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const parent = await addChild(windowA, {
           id: 'p1',
           expanded: true
         });
-        await addChild(parent, { id: 'c1', loaded: true });
-        const mover = await addChild(parent, { id: 'c2', loaded: true });
-        await addChild(view.root, { id: 'n2', loaded: true });
+        await addChild(parent, {
+          id: 'c1',
+          tabId: 1,
+          windowId: 10,
+          loaded: true
+        });
+        const mover = await addChild(parent, {
+          id: 'c2',
+          tabId: 2,
+          windowId: 10,
+          loaded: true
+        });
+        const sibling = await addChild(windowA, {
+          id: 'n2',
+          tabId: 3,
+          windowId: 10,
+          loaded: false
+        });
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
@@ -1127,9 +2049,12 @@
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
-        assertEqual(mover.parent, view.root, 'Node should move to root', snap);
-        assertEqual(view.root.nodes[1].id, 'c2', 'Node should move after parent', snap);
+        assertEqual(mover.parent, windowA, 'Node should move to window', snap);
+        assertEqual(windowA.nodes[0].id, 'p1', 'Parent should stay first in window', snap);
+        assertEqual(windowA.nodes[1].id, 'c2', 'Node should move after parent', snap);
+        assertEqual(windowA.nodes[2].id, 'n2', 'Sibling should remain after moved node', snap);
         assertEqual(parent.nodes.length, 1, 'Parent should retain first child', snap);
+        assertEqual(sibling.parent, windowA, 'Sibling should stay under window', snap);
         return { before, after };
       });
 
@@ -1141,16 +2066,27 @@
           false,
           'moveDownIntoExpandedSibling should be disabled'
         );
-        const mover = await addChild(view.root, {
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const mover = await addChild(windowA, {
           id: 'n1',
+          tabId: 1,
+          windowId: 10,
           loaded: true
         });
-        const sibling = await addChild(view.root, {
+        const sibling = await addChild(windowA, {
           id: 'n2',
           expanded: true
         });
         await addChild(sibling, {
           id: 'n2c1',
+          tabId: 2,
+          windowId: 10,
           loaded: true
         });
 
@@ -1162,6 +2098,7 @@
 
         assertEqual(mover.parent, sibling, 'Node should move into sibling', snap);
         assertEqual(sibling.nodes[0].id, 'n1', 'Node should become first child', snap);
+        assertEqual(windowA.nodes[0].id, 'n2', 'Sibling should remain at window root', snap);
         return { before, after };
       });
 
@@ -1173,17 +2110,28 @@
           true,
           'moveDownIntoExpandedSibling should be enabled'
         );
-        const mover = await addChild(view.root, {
-          id: 'n1',
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
           loaded: true,
           expanded: true
         });
-        const sibling = await addChild(view.root, {
+        const mover = await addChild(windowA, {
+          id: 'n1',
+          tabId: 1,
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const sibling = await addChild(windowA, {
           id: 'n2',
           expanded: true
         });
         await addChild(sibling, {
           id: 'n2c1',
+          tabId: 2,
+          windowId: 10,
           loaded: true
         });
 
@@ -1193,8 +2141,8 @@
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
-        assertEqual(mover.parent, view.root, 'Node should stay at root', snap);
-        assertEqual(view.root.nodes[1].id, 'n1', 'Node should move below sibling', snap);
+        assertEqual(mover.parent, windowA, 'Node should stay under window', snap);
+        assertEqual(windowA.nodes[1].id, 'n1', 'Node should move below sibling', snap);
         return { before, after };
       });
 
@@ -1206,16 +2154,27 @@
           false,
           'moveUpIntoExpandedSibling should be disabled'
         );
-        const sibling = await addChild(view.root, {
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const sibling = await addChild(windowA, {
           id: 'n1',
           expanded: true
         });
         await addChild(sibling, {
           id: 'n1c1',
+          tabId: 1,
+          windowId: 10,
           loaded: true
         });
-        const mover = await addChild(view.root, {
+        const mover = await addChild(windowA, {
           id: 'n2',
+          tabId: 2,
+          windowId: 10,
           loaded: true
         });
 
@@ -1227,6 +2186,7 @@
 
         assertEqual(mover.parent, sibling, 'Node should move into sibling', snap);
         assertEqual(sibling.nodes[1].id, 'n2', 'Node should move to end of sibling', snap);
+        assertEqual(windowA.nodes[0].id, 'n1', 'Sibling should remain at window root', snap);
         return { before, after };
       });
 
@@ -1238,16 +2198,27 @@
           true,
           'moveUpIntoExpandedSibling should be enabled'
         );
-        const sibling = await addChild(view.root, {
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const sibling = await addChild(windowA, {
           id: 'n1',
           expanded: true
         });
         await addChild(sibling, {
           id: 'n1c1',
+          tabId: 1,
+          windowId: 10,
           loaded: true
         });
-        const mover = await addChild(view.root, {
+        const mover = await addChild(windowA, {
           id: 'n2',
+          tabId: 2,
+          windowId: 10,
           loaded: true
         });
 
@@ -1257,34 +2228,67 @@
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
-        assertEqual(mover.parent, view.root, 'Node should stay at root', snap);
-        assertEqual(view.root.nodes[0].id, 'n2', 'Node should move above sibling', snap);
+        assertEqual(mover.parent, windowA, 'Node should stay under window', snap);
+        assertEqual(windowA.nodes[0].id, 'n2', 'Node should move above sibling', snap);
         return { before, after };
       });
 
       testGroup('Marked Nodes');
       test('paste marked uses tree order', async () => {
         const view = createView();
-        const n1 = await addChild(view.root, { id: 'n1', loaded: true });
-        const n2 = await addChild(view.root, { id: 'n2', loaded: true, expanded: true });
-        const n2a = await addChild(n2, { id: 'n2a', loaded: true });
-        const n2b = await addChild(n2, { id: 'n2b', loaded: true });
-        const n3 = await addChild(view.root, { id: 'n3', loaded: true });
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const n1 = await addChild(windowA, {
+          id: 'n1',
+          tabId: 1,
+          windowId: 10,
+          loaded: true
+        });
+        const n2 = await addChild(windowA, {
+          id: 'n2',
+          tabId: 2,
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const n2a = await addChild(n2, {
+          id: 'n2a',
+          tabId: 3,
+          windowId: 10,
+          loaded: true
+        });
+        const n2b = await addChild(n2, {
+          id: 'n2b',
+          tabId: 4,
+          windowId: 10,
+          loaded: true
+        });
+        const n3 = await addChild(windowA, {
+          id: 'n3',
+          tabId: 5,
+          windowId: 10,
+          loaded: false
+        });
 
         await n3.setMarked(true, { reason: 'userAction' });
         await n1.setMarked(true, { reason: 'userAction' });
         await n2b.setMarked(true, { reason: 'userAction' });
 
-        view.cursor = view.root;
+        view.cursor = windowA;
         const before = treeSnapshot(view.root);
         await view.action_pasteMarked({ type: 'command' });
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
-        assertEqual(view.root.nodes[0].id, 'n1', 'First marked node should be n1', snap);
-        assertEqual(view.root.nodes[1].id, 'n2b', 'Second marked node should be n2b', snap);
-        assertEqual(view.root.nodes[2].id, 'n3', 'Third marked node should be n3', snap);
-        assertEqual(view.root.nodes[3].id, 'n2', 'Unmoved node should follow marked nodes', snap);
+        assertEqual(windowA.nodes[0].id, 'n1', 'First marked node should be n1', snap);
+        assertEqual(windowA.nodes[1].id, 'n2b', 'Second marked node should be n2b', snap);
+        assertEqual(windowA.nodes[2].id, 'n3', 'Third marked node should be n3', snap);
+        assertEqual(windowA.nodes[3].id, 'n2', 'Unmoved node should follow marked nodes', snap);
         assertEqual(n2.nodes.length, 1, 'n2 should keep remaining child', snap);
         assertEqual(n2.nodes[0].id, 'n2a', 'n2 should keep n2a child', snap);
         assert(n2a.parent === n2, 'n2a should remain under n2', snap);
@@ -1292,10 +2296,37 @@
       });
       test('paste marked before inserts before cursor', async () => {
         const view = createView();
-        const n1 = await addChild(view.root, { id: 'n1', loaded: true });
-        const n2 = await addChild(view.root, { id: 'n2', loaded: true });
-        const n3 = await addChild(view.root, { id: 'n3', loaded: true });
-        const n4 = await addChild(view.root, { id: 'n4', loaded: true });
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const n1 = await addChild(windowA, {
+          id: 'n1',
+          tabId: 1,
+          windowId: 10,
+          loaded: true
+        });
+        const n2 = await addChild(windowA, {
+          id: 'n2',
+          tabId: 2,
+          windowId: 10,
+          loaded: true
+        });
+        const n3 = await addChild(windowA, {
+          id: 'n3',
+          tabId: 3,
+          windowId: 10,
+          loaded: true
+        });
+        const n4 = await addChild(windowA, {
+          id: 'n4',
+          tabId: 4,
+          windowId: 10,
+          loaded: true
+        });
 
         await n4.setMarked(true, { reason: 'userAction' });
         await n2.setMarked(true, { reason: 'userAction' });
@@ -1306,10 +2337,10 @@
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
-        assertEqual(view.root.nodes[0].id, 'n1', 'n1 should stay first', snap);
-        assertEqual(view.root.nodes[1].id, 'n2', 'Marked node should lead block', snap);
-        assertEqual(view.root.nodes[2].id, 'n4', 'Marked node should follow in order', snap);
-        assertEqual(view.root.nodes[3].id, 'n3', 'Cursor should move after marked block', snap);
+        assertEqual(windowA.nodes[0].id, 'n1', 'n1 should stay first', snap);
+        assertEqual(windowA.nodes[1].id, 'n2', 'Marked node should lead block', snap);
+        assertEqual(windowA.nodes[2].id, 'n4', 'Marked node should follow in order', snap);
+        assertEqual(windowA.nodes[3].id, 'n3', 'Cursor should move after marked block', snap);
         return { before, after };
       });
 
@@ -1553,36 +2584,13 @@
         const snap = { before, after };
         const labelNode = group.nodes.find(n => n.label === 'Keep' && n.type === '');
         assert(labelNode, 'Label node should remain', snap);
+        assertEqual(ancestor.windowId, 1, 'Ancestor windowId should remain', snap);
+        assertEqual(ancestor.loaded, true, 'Ancestor should stay loaded', snap);
         assertEqual(labelNode.note, 'Note', 'Label should keep note', snap);
         assertEqual(labelNode.checkbox, 'X', 'Label should keep checkbox', snap);
         assertEqual(labelNode.checkboxPx, 0.5, 'Label should keep checkbox percent', snap);
         assertEqual(labelNode.nodes.length, 2, 'Label should receive tabs', snap);
         assert(!group.nodes.includes(win), 'Window node should be removed', snap);
-        return { before, after };
-      });
-
-      test('loaded metadata window merges into unloaded ancestor and keeps label', async () => {
-        const view = createView();
-        const ancestor = await addChild(view.root, {
-          id: 'wa', type: 'window', loaded: false, expanded: true
-        });
-        const group = await addChild(ancestor, { id: 'g1', label: 'Group' });
-        const win = await addChild(group, {
-          id: 'w1', type: 'window', windowId: 10, loaded: true, expanded: true, label: 'Keep'
-        });
-        win.note = 'Note';
-        await addChild(win, { id: 't1', tabId: 1, windowId: 10, loaded: true, url: 'https://a' });
-        view.cursor = win;
-        const before = treeSnapshot(view.root);
-        await view.action_deleteNode({ type: 'command' });
-        const after = treeSnapshot(view.root);
-        const snap = { before, after };
-        assertEqual(ancestor.loaded, true, 'Ancestor window should become loaded', snap);
-        assertEqual(ancestor.windowId, 10, 'Ancestor should adopt windowId', snap);
-        const labelNode = group.nodes.find(n => n.label === 'Keep' && n.type === '');
-        assert(labelNode, 'Label node should remain', snap);
-        assertEqual(labelNode.note, 'Note', 'Label should keep note', snap);
-        assertEqual(labelNode.nodes.length, 1, 'Label should receive tabs', snap);
         return { before, after };
       });
 
@@ -1625,26 +2633,8 @@
         const after = treeSnapshot(view.root);
         const snap = { before, after };
         assert(!group.nodes.includes(win), 'Window node should be removed', snap);
-        assertEqual(group.nodes[0].id, 't1', 'Tab should be promoted into group', snap);
-        return { before, after };
-      });
-
-      test('boring window with unloaded ancestor unwraps and loads ancestor', async () => {
-        const view = createView();
-        const ancestor = await addChild(view.root, {
-          id: 'wa', type: 'window', loaded: false, expanded: true
-        });
-        const group = await addChild(ancestor, { id: 'g1', label: 'Group' });
-        const win = await addChild(group, {
-          id: 'w1', type: 'window', windowId: 10, loaded: true, expanded: true
-        });
-        await addChild(win, { id: 't1', tabId: 1, windowId: 10, loaded: true, url: 'https://a' });
-        view.cursor = win;
-        const before = treeSnapshot(view.root);
-        await view.action_deleteNode({ type: 'command' });
-        const after = treeSnapshot(view.root);
-        const snap = { before, after };
-        assertEqual(ancestor.loaded, true, 'Ancestor should become loaded', snap);
+        assertEqual(ancestor.windowId, 1, 'Ancestor windowId should remain', snap);
+        assertEqual(ancestor.loaded, true, 'Ancestor should stay loaded', snap);
         assertEqual(group.nodes[0].id, 't1', 'Tab should be promoted into group', snap);
         return { before, after };
       });

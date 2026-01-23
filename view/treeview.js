@@ -816,6 +816,40 @@ export class TreeView extends Tree {
     this.setCursor(node);
   }
 
+  getOnlyChildLoadedWindowProxy () {
+    if (! this.cursor) return null;
+    if (! this.cursor.hasKids || (! this.cursor.hasKids())) return null;
+    const isLoadedSelf = (this.cursor.isLoaded && this.cursor.isLoaded());
+    const hasLoadedDesc = (
+      this.cursor.hasLoadedTabsDeep
+        ? this.cursor.hasLoadedTabsDeep()
+        : (this.cursor.hasLoadedTabs && this.cursor.hasLoadedTabs())
+    );
+    if (! isLoadedSelf && ! hasLoadedDesc) return null;
+    const parent = this.cursor.parent;
+    if (! parent || ! parent.isWindow || (! parent.isWindow())) return null;
+    if (! parent.isLoaded || (! parent.isLoaded())) return null;
+    if ((undefined === parent.windowId) || (null === parent.windowId)) return null;
+    if (parent.nodes.length !== 1) return null;
+    return parent;
+  }
+
+  async moveWindowProxy (windowNode, direction, nestIntoExpandedSibling) {
+    if (! windowNode) return;
+    const originalCursor = this.cursor;
+    this.cursor = windowNode;
+    try {
+      if ('up' === direction) {
+        await this.moveNodeUpWithNest(nestIntoExpandedSibling);
+      } else {
+        await this.moveNodeDownWithNest(nestIntoExpandedSibling);
+      }
+    } finally {
+      this.cursor = originalCursor;
+      this.setCursor(originalCursor);
+    }
+  }
+
   async moveNodeUpWithNest (nestIntoExpandedSibling) {
 
     // if root or 1st child of root, or if outside of root, do nothing
@@ -824,6 +858,9 @@ export class TreeView extends Tree {
     if (! this.cursor.isChildOf(this.viewRoot, false)) return;
     if (this.cursor.parent.isRoot() && (0 === this.cursor.indexOf())) return;
     if ((this.cursor.parent === this.viewRoot) && (0 === this.cursor.indexOf())) return;
+
+    const windowProxy = this.getOnlyChildLoadedWindowProxy();
+    let forceWindowProxy = false;
 
     // node can be moved up; take position of previous visible row
     const prevRow = this.cursor.prevVisibleNode();
@@ -870,13 +907,18 @@ export class TreeView extends Tree {
         );
         if (altAnchor && canNestInto(altAnchor) &&
           ((nestIntoExpandedSibling) || (shouldForceWindowNest && altAnchor.isWindow()))) {
+          if (windowProxy &&
+            (! altAnchor.isWindow || (! altAnchor.isWindow()))) {
+            await this.moveWindowProxy(windowProxy, 'up', nestIntoExpandedSibling);
+            return;
+          }
           const destParent = altAnchor;
           const destIndex = altAnchor.nodes.length;
           await this.cursor.moveTo(destParent, destIndex, { reason: 'userAction' });
           this.setStatus(`moved up: ${this.cursor.toLine()}`);
           return;
         }
-        if (shouldForceWindowNest) return;
+        if (shouldForceWindowNest) forceWindowProxy = true;
       }
     }
     if (nestIntoExpandedSibling &&
@@ -890,6 +932,16 @@ export class TreeView extends Tree {
     }
     const destParent = anchor.parent;
     const destIndex = anchor.indexOf();
+
+    if (! forceWindowProxy && windowProxy &&
+      (! destParent.isWindow || (! destParent.isWindow())))
+      forceWindowProxy = true;
+    if (forceWindowProxy) {
+      if (windowProxy) {
+        await this.moveWindowProxy(windowProxy, 'up', nestIntoExpandedSibling);
+      }
+      return;
+    }
 
     // move it
     await this.cursor.moveTo(destParent, destIndex, { reason: 'userAction' });
@@ -912,6 +964,8 @@ export class TreeView extends Tree {
     if (! this.cursor) return;
     if (this.cursor.isRoot()) return;
     if (! this.cursor.isChildOf(this.viewRoot, false)) return;
+
+    const windowProxy = this.getOnlyChildLoadedWindowProxy();
 
     // take position of next visible row outside our own branch, probably
     const nextRow = this.cursor.nextVisibleNodeNotMyChild(this.viewRoot);
@@ -938,6 +992,11 @@ export class TreeView extends Tree {
       } else {
         destIndex = nextRow.indexOf();
       }
+    }
+
+    if (windowProxy && (! destParent.isWindow || (! destParent.isWindow()))) {
+      await this.moveWindowProxy(windowProxy, 'down', nestIntoExpandedSibling);
+      return;
     }
 
     // move it
