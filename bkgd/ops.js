@@ -69,6 +69,37 @@ export class OpsQueue {
     return this.db.listOpsByState('running', limit);
   }
 
+  async listOpsByState (state, limit = 50) {
+    return this.db.listOpsByState(state, limit);
+  }
+
+  async pruneDoneOps ({ maxAgeMs = 7 * 24 * 60 * 60 * 1000, limit = 500 } = {}) {
+    const cutoff = Date.now() - maxAgeMs;
+    const done = await this.db.listOpsByState('done', 0);
+    let removed = 0;
+    const enforceLimit = Number.isFinite(limit) && (limit > 0);
+    for (const op of done) {
+      const updatedAt = op.updatedAt || op.createdAt || 0;
+      if (updatedAt >= cutoff) continue;
+      await this.db.deleteOp(op.opId);
+      removed += 1;
+      if (enforceLimit && (removed >= limit)) break;
+    }
+    return removed;
+  }
+
+  async clearAllOps () {
+    let removed = 0;
+    for (const state of ['pending', 'running', 'failed', 'done']) {
+      const ops = await this.db.listOpsByState(state, 0);
+      for (const op of ops) {
+        await this.db.deleteOp(op.opId);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+
   async requeueFailedOps ({ limit = 10, maxRetries = 3, minAgeMs = 1000 } = {}) {
     const failed = await this.listFailedOps(0);
     const now = Date.now();

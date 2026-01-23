@@ -57,6 +57,10 @@ export class Bkgd {
     this.opsProcessing = false;
     this.opsProcessingRequested = false;
     this.opsProcessingTimer = null;
+    this.opsPruneAt = 0;
+    this.opsPruneIntervalMs = 5 * 60 * 1000;
+    this.opsPruneMaxAgeMs = 7 * 24 * 60 * 60 * 1000;
+    this.opsPruneLimit = 500;
 
     // reconcile dirty hint state
     this.reconcileDirtyAt = 0;
@@ -209,6 +213,7 @@ export class Bkgd {
       await this.markReconcileDirty('opsBatch');
     }
     await this.maybeWarnOpsBacklog();
+    await this.maybePruneOpsQueue();
 
     if (this.opsProcessingRequested) {
       this.scheduleOpsProcessing();
@@ -343,6 +348,57 @@ export class Bkgd {
       status: `Ops backlog: ${pending} pending tasks (consider keeping one view open)`,
       severity: 'warn'
     });
+  }
+
+  isOpTargetMissing (op) {
+    if (! op || ! op.payload || ! this.tree) return false;
+    const nodeId = op.payload.nodeId;
+    if (nodeId && ! this.tree.nodes[nodeId]) return true;
+    if ('ensureMoved' === op.name) {
+      const destParentId = op.payload.destParentId;
+      if (destParentId && ! this.tree.nodes[destParentId]) return true;
+    }
+    return false;
+  }
+
+  async pruneMissingOps ({ limit = 500 } = {}) {
+    if (! this.opsQueue) return 0;
+    await this.treeLoaded;
+    let removed = 0;
+    const enforceLimit = Number.isFinite(limit) && (limit > 0);
+    const states = ['pending', 'running', 'failed', 'done'];
+    for (const state of states) {
+      if (enforceLimit && (removed >= limit)) break;
+      const batchLimit = enforceLimit ? (limit - removed) : 0;
+      const ops = await this.opsQueue.listOpsByState(state, batchLimit);
+      for (const op of ops) {
+        if (enforceLimit && (removed >= limit)) break;
+        if (! this.isOpTargetMissing(op)) continue;
+        await this.opsQueue.db.deleteOp(op.opId);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+
+  async maybePruneOpsQueue (opts = {}) {
+    if (! this.opsQueue) return 0;
+    const intervalMs = Number.isFinite(opts.intervalMs)
+      ? opts.intervalMs
+      : this.opsPruneIntervalMs;
+    if (! Number.isFinite(intervalMs) || intervalMs <= 0) return 0;
+    const now = Date.now();
+    if ((now - this.opsPruneAt) < intervalMs) return 0;
+    const maxAgeMs = Number.isFinite(opts.maxAgeMs)
+      ? opts.maxAgeMs
+      : this.opsPruneMaxAgeMs;
+    const limit = Number.isFinite(opts.limit)
+      ? opts.limit
+      : this.opsPruneLimit;
+    const removedDone = await this.opsQueue.pruneDoneOps({ maxAgeMs, limit });
+    const removedMissing = await this.pruneMissingOps({ limit });
+    this.opsPruneAt = now;
+    return removedDone + removedMissing;
   }
 
   initConnectListener () {
@@ -928,6 +984,41 @@ export class Bkgd {
     const response = {};
     response.nodes = this.tree.serializeNodes();
     return response;
+  }
+
+  async bkgd_pruneOps (msg) {
+    await this.treeDbLoaded;
+    if (! this.opsQueue) {
+      this.opsQueue = new OpsQueue(this.tree.db);
+    }
+    const maxAgeMs = Number.isFinite(msg && msg.maxAgeMs)
+      ? msg.maxAgeMs
+      : this.opsPruneMaxAgeMs;
+    const limit = Number.isFinite(msg && msg.limit)
+      ? msg.limit
+      : this.opsPruneLimit;
+    const pruneMissing = (msg && (undefined !== msg.pruneMissing))
+      ? Boolean(msg.pruneMissing)
+      : true;
+    const removedDone = await this.opsQueue.pruneDoneOps({ maxAgeMs, limit });
+    const removedMissing = pruneMissing
+      ? await this.pruneMissingOps({ limit })
+      : 0;
+    this.opsPruneAt = Date.now();
+    return {
+      removed: removedDone + removedMissing,
+      removedDone,
+      removedMissing
+    };
+  }
+
+  async bkgd_clearOps (msg) {
+    await this.treeDbLoaded;
+    if (! this.opsQueue) {
+      this.opsQueue = new OpsQueue(this.tree.db);
+    }
+    const removed = await this.opsQueue.clearAllOps();
+    return { removed };
   }
 
   async bkgd_generateTutorial (msg) {

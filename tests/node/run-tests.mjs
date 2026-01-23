@@ -323,6 +323,106 @@ test('OpsQueue requeueStaleRunningOps skips fresh ops without starvation', async
   assertEqual(db.ops.get('op-fresh').state, 'running', 'Should keep fresh op running');
 });
 
+test('OpsQueue pruneDoneOps removes old done ops and respects limit', async () => {
+  const db = new FakeOpsDb();
+  const queue = new OpsQueue(db, { idGen: { newId: () => 'op-x' } });
+  const now = Date.now();
+  const originalNow = Date.now;
+  try {
+    Date.now = () => now;
+    db.ops.set('op-old-1', {
+      opId: 'op-old-1',
+      state: 'done',
+      createdAt: 1,
+      updatedAt: now - 10000
+    });
+    db.ops.set('op-old-2', {
+      opId: 'op-old-2',
+      state: 'done',
+      createdAt: 2,
+      updatedAt: now - 8000
+    });
+    db.ops.set('op-fresh', {
+      opId: 'op-fresh',
+      state: 'done',
+      createdAt: 3,
+      updatedAt: now - 1000
+    });
+    db.ops.set('op-failed', {
+      opId: 'op-failed',
+      state: 'failed',
+      createdAt: 4,
+      updatedAt: now - 20000
+    });
+    const removed = await queue.pruneDoneOps({ maxAgeMs: 5000, limit: 1 });
+    assertEqual(removed, 1, 'Should remove one old done op');
+    const remainingDone = [...db.ops.values()].filter((op) => op.state === 'done');
+    assertEqual(remainingDone.length, 2, 'Should keep remaining done ops');
+    assert(db.ops.has('op-fresh'), 'Should keep recent done op');
+    assert(db.ops.has('op-failed'), 'Should not touch other states');
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test('OpsQueue clearAllOps removes all ops', async () => {
+  const db = new FakeOpsDb();
+  const queue = new OpsQueue(db, { idGen: { newId: () => 'op-x' } });
+  db.ops.set('op-pending', { opId: 'op-pending', state: 'pending', createdAt: 1 });
+  db.ops.set('op-running', { opId: 'op-running', state: 'running', createdAt: 2 });
+  db.ops.set('op-done', { opId: 'op-done', state: 'done', createdAt: 3 });
+  const removed = await queue.clearAllOps();
+  assertEqual(removed, 3, 'Should remove all ops');
+  assertEqual(db.ops.size, 0, 'Ops store should be empty');
+});
+
+test('bkgd_pruneOps removes ops with missing node targets', async () => {
+  const db = new FakeOpsDb();
+  const bkgd = new Bkgd();
+  const tree = createTree(bkgd);
+  tree.createRootNode();
+  bkgd.tree = tree;
+  bkgd.opsQueue = new OpsQueue(db, { idGen: { newId: () => 'op-x' } });
+  bkgd.resolveTreeDbLoaded();
+  bkgd.resolveTreeLoaded();
+
+  await addChild(tree.root, { id: 'n1' });
+  db.ops.set('op-missing', {
+    opId: 'op-missing',
+    state: 'pending',
+    name: 'ensureLoaded',
+    payload: { nodeId: 'missing' },
+    createdAt: 1,
+    updatedAt: 1
+  });
+  db.ops.set('op-missing-parent', {
+    opId: 'op-missing-parent',
+    state: 'running',
+    name: 'ensureMoved',
+    payload: { nodeId: 'n1', destParentId: 'missing-parent' },
+    createdAt: 1,
+    updatedAt: 1
+  });
+  db.ops.set('op-valid', {
+    opId: 'op-valid',
+    state: 'pending',
+    name: 'ensureLoaded',
+    payload: { nodeId: 'n1' },
+    createdAt: 1,
+    updatedAt: 1
+  });
+
+  const result = await bkgd.bkgd_pruneOps({
+    maxAgeMs: 1000,
+    limit: 10,
+    pruneMissing: true
+  });
+
+  assertEqual(result.removedMissing, 2, 'Should remove ops with missing targets');
+  assertEqual(result.removed, 2, 'Removed count should include missing ops');
+  assert(db.ops.has('op-valid'), 'Should keep ops with valid targets');
+});
+
 test('OpsQueue countPendingOps returns pending count', async () => {
   const db = new FakeOpsDb();
   const queue = new OpsQueue(db, { idGen: { newId: () => 'op-x' } });

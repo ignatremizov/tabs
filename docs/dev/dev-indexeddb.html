@@ -57,6 +57,14 @@ code {
   threshold. Both are bounded by <code>maxRetries</code>.
   </p>
   <p>
+  Maintenance:
+  the background prunes old <code>done</code> ops on a periodic timer to
+  keep the queue size manageable and also removes ops which reference missing
+  node IDs. For manual cleanup, the background accepts <code>bkgd_pruneOps</code>
+  (remove old done ops and optionally dangling ops) and <code>bkgd_clearOps</code>
+  (clear all ops) messages.
+  </p>
+  <p>
   Reconcile scheduling:
   the background registers a <code>periodicReconcile</code> alarm and runs
   a reconcile pass on startup. Dirty hints are tracked with
