@@ -2233,6 +2233,41 @@
         return { before, after };
       });
 
+      test('move up inverts to nest unloaded node into unloaded window', async () => {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = false;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          false,
+          'moveUpIntoExpandedSibling should be disabled'
+        );
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          loaded: false,
+          expanded: true
+        });
+        await addChild(windowA, {
+          id: 'w1c1',
+          expanded: true
+        });
+        const mover = await addChild(view.root, {
+          id: 'n1',
+          loaded: false
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await view.action_moveNodeUpInvertNest({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(mover.parent, windowA, 'Node should move into unloaded window', snap);
+        assertEqual(windowA.nodes[windowA.nodes.length - 1].id, 'n1',
+          'Node should append to window children', snap);
+        return { before, after };
+      });
+
       testGroup('Marked Nodes');
       test('paste marked uses tree order', async () => {
         const view = createView();

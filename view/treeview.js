@@ -887,10 +887,18 @@ export class TreeView extends Tree {
       if (anchor.isRoot && anchor.isRoot()) return null;
       return anchor;
     };
+    const cursorHasLoadedTabs = (
+      (this.cursor.isLoaded && this.cursor.isLoaded())
+      || (this.cursor.hasLoadedTabsDeep
+        ? this.cursor.hasLoadedTabsDeep()
+        : (this.cursor.hasLoadedTabs && this.cursor.hasLoadedTabs()))
+    );
     const canNestInto = (node) => {
       if (! node.hasKids || (! node.hasKids())) return false;
       if (! node.isExpanded || (! node.isExpanded())) return false;
-      if (node.isWindow && node.isWindow() && (! node.isLoaded())) return false;
+      if (node.isWindow && node.isWindow() && (! node.isLoaded())) {
+        return ! cursorHasLoadedTabs;
+      }
       return true;
     };
     const anchor = resolveAnchor(prevRow);
