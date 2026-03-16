@@ -2799,6 +2799,32 @@
         return { before, after };
       });
 
+      test('delete hovered node keeps existing cursor without scrolling to it', async () => {
+        const view = createView();
+        view.viewScope = 'session';
+        const selected = await addChild(view.root, { id: 'n1', label: 'Selected' });
+        const hovered = await addChild(view.root, { id: 'n2', label: 'Hovered' });
+        let scrollCalls = 0;
+        selected.scrollIntoView = () => { scrollCalls += 1; };
+        view.cursor = selected;
+        view.mouseNode = hovered;
+
+        const before = treeSnapshot(view.root);
+        await view.action_deleteNode({ type: 'click' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after, scrollCalls };
+
+        assertEqual(view.cursor, selected,
+          'Deleting another node should keep the current cursor', snap);
+        assertEqual(scrollCalls, 0,
+          'Deleting another node should not scroll back to the current cursor',
+          snap);
+        assertEqual(view.root.nodes.length, 1, 'Hovered node should be removed', snap);
+        assertEqual(view.root.nodes[0], selected,
+          'Selected node should remain in the tree', snap);
+        return { before, after, scrollCalls };
+      });
+
       test('delete unloaded window leaf removes node', async () => {
         const view = createView();
         const win = await addChild(view.root, {

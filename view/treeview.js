@@ -1299,6 +1299,10 @@ export class TreeView extends Tree {
       // move to prev row if cursor is already on the last row
       if (newCursor === this.cursor) newCursor = this.cursor.prevVisibleNode();
     }
+    const restoreCursor = () => {
+      if (newCursor === this.cursor) return;
+      this.setCursor(newCursor);
+    };
 
     // delete depending on the node type and state
     const toDelete = cursor;
@@ -1391,7 +1395,7 @@ export class TreeView extends Tree {
         await toDelete.unload({ reason: 'userAction' });
         await toDelete.deleteSelf({ reason: 'userAction' });
         this.setStatus(`deleted ${line}`);
-        this.setCursor(newCursor);
+        restoreCursor();
         return;
       }
 
@@ -1403,7 +1407,7 @@ export class TreeView extends Tree {
           keepTabsOnClose: true
         });
         this.setStatus(`unloaded ${line}`);
-        this.setCursor(newCursor);
+        restoreCursor();
         return;
       }
 
@@ -1420,7 +1424,7 @@ export class TreeView extends Tree {
         );
         await toDelete.deleteSelf({ reason: 'userAction' });
         this.setStatus(`unwrapped ${line}`);
-        this.setCursor(newCursor);
+        restoreCursor();
         return;
       }
 
@@ -1446,7 +1450,7 @@ export class TreeView extends Tree {
         );
         await toDelete.deleteSelf({ reason: 'userAction' });
         this.setStatus(`unwrapped ${line}`);
-        this.setCursor(newCursor);
+        restoreCursor();
         return;
       }
 
@@ -1464,7 +1468,7 @@ export class TreeView extends Tree {
           await node.moveTo(innerParent, innerIndex, { reason: 'userAction' });
         }
         this.setStatus(`unwrapped ${line}`);
-        this.setCursor(newCursor);
+        restoreCursor();
         return;
       }
       const tabCount = toDelete.getLoadedAndUnloadedTabs().length;
@@ -1484,7 +1488,7 @@ export class TreeView extends Tree {
       );
       await toDelete.deleteSelf({ reason: 'userAction' });
       this.setStatus(`deleted ${line}`);
-      this.setCursor(newCursor);
+      restoreCursor();
       return;
     }
     // if leaf, just delete it... simple
@@ -1524,7 +1528,7 @@ export class TreeView extends Tree {
     }
 
     // update the cursor
-    this.setCursor(newCursor);
+    restoreCursor();
   }
 
   getWrapNodeForWindowDelete (windowNode) {
