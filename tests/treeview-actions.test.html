@@ -30,6 +30,7 @@
     .legend { margin-top: 6px; font-size: 0.9em; color: #555; }
     .legend span { margin-right: 12px; }
     .hidden-test-ui { display: none; }
+    .action-line { font-family: system-ui, sans-serif; }
     #tree-view, #tree-root { display: none; }
     #details-box, #details-btn,
     #view-scope-btn, #tree-view-in-tab-btn,
@@ -288,6 +289,24 @@
           view.lastConfirm = { title, description };
           return true;
         };
+        const proto = Object.getPrototypeOf(view);
+        for (const key of Object.getOwnPropertyNames(proto)) {
+          if (!key.startsWith('action_') || typeof view[key] !== 'function') continue;
+          const original = view[key].bind(view);
+          view[key] = async (...args) => {
+            const first = args && args.length ? args[0] : null;
+            const info = { name: key, args };
+            if (first && typeof first === 'object') {
+              if (first.type) info.eventType = first.type;
+              if (first.requestedAction) info.requestedAction = first.requestedAction;
+              if (first.resolvedAction) info.resolvedAction = first.resolvedAction;
+            }
+            view.lastAction = info;
+            if (!window.__testActions) window.__testActions = [];
+            window.__testActions.push(info);
+            return await original(...args);
+          };
+        }
         return view;
       }
 
@@ -321,6 +340,22 @@
         }
         walk(root, 0);
         return lines.join('\n');
+      }
+
+      async function runAction(view, action, eventType = 'command') {
+        const resolved = view.resolveMoveAction(action);
+        const handler = view[`action_${resolved}`];
+        if (!handler) {
+          throw new Error(`Missing handler for action_${resolved}`);
+        }
+        const displayRequested = actionKey(action) || action;
+        const displayResolved = view.describeMoveAction(resolved);
+        await handler.call(view, {
+          type: eventType,
+          requestedAction: displayRequested,
+          resolvedAction: displayResolved
+        });
+        return resolved;
       }
 
       function setDropTarget(view, node, right = false) {
@@ -449,13 +484,47 @@
       }
 
       const tests = [];
+      const expectedSnapshots = window.expectedSnapshots || {};
+      const updateExpected = /[?&]update_expected=1(?:&|$)/.test(location.search);
       function testGroup(title) { tests.push({ type: 'group', title }); }
       function groupId(title) {
         return title.toLowerCase()
           .replace(/[^a-z0-9]+/g, '-')
           .replace(/(^-|-$)/g, '');
       }
-      function test(name, fn) { tests.push({ type: 'test', name, fn }); }
+      function test(name, fn, expected) { tests.push({ type: 'test', name, fn, expected }); }
+      function formatAction(action) {
+        if (!action) return '';
+        let label = '';
+        const requested = action.requestedAction;
+        const resolved = action.resolvedAction;
+        if (requested && resolved && requested !== resolved) {
+          label = `${requested} -> ${resolved}`;
+        } else if (requested) {
+          label = requested;
+        } else if (action.name) {
+          label = action.name.startsWith('action_')
+            ? action.name.slice('action_'.length)
+            : action.name;
+        }
+        if (!label) return '';
+        const eventType = action.eventType;
+        return eventType ? `${label} (${eventType})` : label;
+      }
+
+      function formatActions(actions) {
+        if (!actions || !actions.length) return '';
+        return actions.map(formatAction).join(' -> ');
+      }
+
+      function actionKey(action) {
+        if (!action) return '';
+        if (action === 'moveNodeUp') return '⇧↑';
+        if (action === 'moveNodeUpInvertNest') return '⇧⎇↑';
+        if (action === 'moveNodeDown') return '⇧↓';
+        if (action === 'moveNodeDownInvertNest') return '⇧⎇↓';
+        return '';
+      }
       function makeAssertionError(message, snapshot) {
         const err = new Error(message || 'Assertion failed');
         if (snapshot) err.snapshot = snapshot;
@@ -474,6 +543,61 @@
           );
         }
       }
+
+      testGroup('Keybindings');
+      test('move up keybinding obeys toggle', async () => {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = true;
+        assertEqual(
+          view.resolveMoveAction('moveNodeUp'),
+          'moveNodeUp',
+          'Shift+Up should map to moveNodeUp when toggle on'
+        );
+        assertEqual(
+          view.resolveMoveAction('moveNodeUpInvertNest'),
+          'moveNodeUpInvertNest',
+          'Shift+Alt+Up should map to invert when toggle on'
+        );
+
+        view.moveUpIntoExpandedSibling = false;
+        assertEqual(
+          view.resolveMoveAction('moveNodeUp'),
+          'moveNodeUpInvertNest',
+          'Shift+Up should map to invert when toggle off'
+        );
+        assertEqual(
+          view.resolveMoveAction('moveNodeUpInvertNest'),
+          'moveNodeUp',
+          'Shift+Alt+Up should map to moveNodeUp when toggle off'
+        );
+      });
+
+      test('move down keybinding obeys toggle', async () => {
+        const view = createView();
+        view.moveDownIntoExpandedSibling = true;
+        assertEqual(
+          view.resolveMoveAction('moveNodeDown'),
+          'moveNodeDown',
+          'Shift+Down should map to moveNodeDown when toggle on'
+        );
+        assertEqual(
+          view.resolveMoveAction('moveNodeDownInvertNest'),
+          'moveNodeDownInvertNest',
+          'Shift+Alt+Down should map to invert when toggle on'
+        );
+
+        view.moveDownIntoExpandedSibling = false;
+        assertEqual(
+          view.resolveMoveAction('moveNodeDown'),
+          'moveNodeDownInvertNest',
+          'Shift+Down should map to invert when toggle off'
+        );
+        assertEqual(
+          view.resolveMoveAction('moveNodeDownInvertNest'),
+          'moveNodeDown',
+          'Shift+Alt+Down should map to moveNodeDown when toggle off'
+        );
+      });
 
       testGroup('Move Nodes');
       test('move down keeps window above sibling leaf', async () => {
@@ -514,7 +638,55 @@
 
         view.cursor = windowB;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeDown({ type: 'command' });
+        await runAction(view, 'moveNodeDown');
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(windowB.parent, view.root, 'Window should move to root', snap);
+        assertEqual(view.root.nodes[1].id, 'w1', 'Window should land before leaf', snap);
+        assertEqual(view.root.nodes[2].id, 't3', 'Leaf should remain after window', snap);
+        return { before, after };
+      });
+
+      test('move down keeps window above sibling leaf (Invert)', async () => {
+        const view = createView();
+        const windowA = await addChild(view.root, {
+          id: 'wa',
+          type: 'window',
+          windowId: 1,
+          loaded: true,
+          expanded: true
+        });
+        const parent = await addChild(windowA, {
+          id: 'p1',
+          tabId: 1,
+          windowId: 1,
+          loaded: true,
+          expanded: true
+        });
+        const windowB = await addChild(parent, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        await addChild(windowB, {
+          id: 't2',
+          tabId: 2,
+          windowId: 10,
+          loaded: true
+        });
+        await addChild(view.root, {
+          id: 't3',
+          tabId: 3,
+          windowId: 10,
+          loaded: false
+        });
+
+        view.cursor = windowB;
+        const before = treeSnapshot(view.root);
+        await runAction(view, 'moveNodeDownInvertNest');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
@@ -569,7 +741,7 @@
 
         view.cursor = windowB;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeUp({ type: 'command' });
+        await runAction(view, 'moveNodeUp');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
@@ -645,7 +817,7 @@
 
         view.cursor = t4;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeUp({ type: 'command' });
+        await runAction(view, 'moveNodeUp');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
@@ -662,7 +834,7 @@
         return await runMoveUpDeepPromotionTest(false);
       });
 
-      test('move up promotes before ancestor (Toggle on)', async () => {
+      test('move up promotes before ancestor due to no nest target (Toggle on)', async () => {
         return await runMoveUpDeepPromotionTest(true);
       });
 
@@ -725,9 +897,9 @@
         view.cursor = t4;
         const before = treeSnapshot(view.root);
         if (useInvert) {
-          await view.action_moveNodeUpInvertNest({ type: 'command' });
+          await runAction(view, 'moveNodeUpInvertNest');
         } else {
-          await view.action_moveNodeUp({ type: 'command' });
+          await runAction(view, 'moveNodeUp');
         }
         const after = treeSnapshot(view.root);
         const snap = { before, after };
@@ -801,7 +973,7 @@
 
         view.cursor = windowB;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeUp({ type: 'command' });
+        await runAction(view, 'moveNodeUp');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
@@ -856,7 +1028,7 @@
 
         view.cursor = windowB;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeUp({ type: 'command' });
+        await runAction(view, 'moveNodeUp');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
@@ -900,7 +1072,7 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeDown({ type: 'command' });
+        await runAction(view, 'moveNodeDown');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
@@ -945,7 +1117,7 @@
 
         view.cursor = first;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeDown({ type: 'command' });
+        await runAction(view, 'moveNodeDown');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
@@ -989,7 +1161,7 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeUp({ type: 'command' });
+        await runAction(view, 'moveNodeUp');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
@@ -1033,7 +1205,7 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeUp({ type: 'command' });
+        await runAction(view, 'moveNodeUp');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
@@ -1080,7 +1252,7 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeUp({ type: 'command' });
+        await runAction(view, 'moveNodeUp');
         if (windowB.nodes.length === 0) {
           await windowB.windowClosed({ reason: 'onWindowRemoved' });
         }
@@ -1130,7 +1302,7 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeUp({ type: 'command' });
+        await runAction(view, 'moveNodeUp');
         if (windowB.nodes.length === 0) {
           await windowB.windowClosed({ reason: 'onWindowRemoved' });
         }
@@ -1143,7 +1315,7 @@
         return { before, after };
       });
 
-      test('move up ignores unloaded window (Toggle on)', async () => {
+      test('move up loads unloaded window with moved tab (Toggle on)', async () => {
         const view = createView();
         view.moveUpIntoExpandedSibling = true;
         assertEqual(
@@ -1179,12 +1351,17 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeUp({ type: 'command' });
+        await runAction(view, 'moveNodeUp');
+        if (windowB.nodes.length === 0) {
+          await windowB.windowClosed({ reason: 'onWindowRemoved' });
+        }
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
-        assertEqual(mover.parent, windowB, 'Tab should remain in window', snap);
-        assertEqual(windowB.nodes[0].id, 't2', 'Tab should remain in window', snap);
+        assertEqual(mover.parent, windowA, 'Tab should move into unloaded window', snap);
+        assert(windowA.isLoaded(), 'Window should become loaded', snap);
+        assertEqual(windowA.windowId, 20, 'Window should reuse loaded window id', snap);
+        assert(!view.root.nodes.includes(windowB), 'Empty window should be removed', snap);
         return { before, after };
       });
 
@@ -1228,7 +1405,7 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeUp({ type: 'command' });
+        await runAction(view, 'moveNodeUp');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
@@ -1278,7 +1455,7 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeUp({ type: 'command' });
+        await runAction(view, 'moveNodeUp');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
@@ -1329,7 +1506,7 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeUp({ type: 'command' });
+        await runAction(view, 'moveNodeUp');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
@@ -1379,7 +1556,7 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeUp({ type: 'command' });
+        await runAction(view, 'moveNodeUp');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
@@ -1430,7 +1607,7 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeUpInvertNest({ type: 'command' });
+        await runAction(view, 'moveNodeUpInvertNest');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
@@ -1480,7 +1657,7 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeUp({ type: 'command' });
+        await runAction(view, 'moveNodeUp');
         await windowA.deleteSelf({ reason: 'onTabRemoved' });
         const after = treeSnapshot(view.root);
         const snap = { before, after };
@@ -1527,7 +1704,7 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeUp({ type: 'command' });
+        await runAction(view, 'moveNodeUp');
         await windowB.deleteSelf({ reason: 'onTabRemoved' });
         const after = treeSnapshot(view.root);
         const snap = { before, after };
@@ -1657,7 +1834,7 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeDown({ type: 'command' });
+        await runAction(view, 'moveNodeDown');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
@@ -1708,7 +1885,7 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeDown({ type: 'command' });
+        await runAction(view, 'moveNodeDown');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
@@ -1759,7 +1936,7 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeDown({ type: 'command' });
+        await runAction(view, 'moveNodeDown');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
@@ -1810,7 +1987,7 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeDown({ type: 'command' });
+        await runAction(view, 'moveNodeDown');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
@@ -1861,7 +2038,7 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeDownInvertNest({ type: 'command' });
+        await runAction(view, 'moveNodeDownInvertNest');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
@@ -1911,7 +2088,7 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeDown({ type: 'command' });
+        await runAction(view, 'moveNodeDown');
         await windowA.deleteSelf({ reason: 'onTabRemoved' });
         const after = treeSnapshot(view.root);
         const snap = { before, after };
@@ -1958,7 +2135,7 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeUp({ type: 'command' });
+        await runAction(view, 'moveNodeUp');
         await windowB.deleteSelf({ reason: 'onTabRemoved' });
         const after = treeSnapshot(view.root);
         const snap = { before, after };
@@ -2092,7 +2269,7 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeDownInvertNest({ type: 'command' });
+        await runAction(view, 'moveNodeDownInvertNest');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
@@ -2137,7 +2314,7 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeDownInvertNest({ type: 'command' });
+        await runAction(view, 'moveNodeDownInvertNest');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
@@ -2180,7 +2357,7 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeUpInvertNest({ type: 'command' });
+        await runAction(view, 'moveNodeUpInvertNest');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
@@ -2224,7 +2401,7 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeUpInvertNest({ type: 'command' });
+        await runAction(view, 'moveNodeUpInvertNest');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
@@ -2258,13 +2435,152 @@
 
         view.cursor = mover;
         const before = treeSnapshot(view.root);
-        await view.action_moveNodeUpInvertNest({ type: 'command' });
+        await runAction(view, 'moveNodeUpInvertNest');
         const after = treeSnapshot(view.root);
         const snap = { before, after };
 
         assertEqual(mover.parent, windowA, 'Node should move into unloaded window', snap);
         assertEqual(windowA.nodes[windowA.nodes.length - 1].id, 'n1',
           'Node should append to window children', snap);
+        return { before, after };
+      });
+
+      test('move up splits loaded branch before previous window when nesting disabled', async () => {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = false;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          false,
+          'moveUpIntoExpandedSibling should be disabled'
+        );
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        await addChild(windowA, {
+          id: 'w1c1',
+          tabId: 1,
+          windowId: 10,
+          loaded: true
+        });
+        const windowB = await addChild(view.root, {
+          id: 'w2',
+          type: 'window',
+          windowId: 20,
+          loaded: true,
+          expanded: true
+        });
+        const mover = await addChild(windowB, {
+          id: 'n2',
+          tabId: 2,
+          windowId: 20,
+          loaded: true
+        });
+        await addChild(windowB, {
+          id: 'n3',
+          tabId: 3,
+          windowId: 20,
+          loaded: true
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await runAction(view, 'moveNodeUp');
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(mover.parent, view.root, 'Node should move to root', snap);
+        assertEqual(view.root.nodes[1].id, 'n2', 'Node should land before window', snap);
+        assertEqual(view.root.nodes[2].id, 'w2', 'Window should stay after moved node', snap);
+        return { before, after };
+      });
+
+      test('move up invert nests into collapsed window when available', async () => {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = false;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          false,
+          'moveUpIntoExpandedSibling should be disabled'
+        );
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: false
+        });
+        await addChild(windowA, {
+          id: 'w1c1',
+          tabId: 1,
+          windowId: 10,
+          loaded: true
+        });
+        const windowB = await addChild(view.root, {
+          id: 'w2',
+          type: 'window',
+          windowId: 20,
+          loaded: true,
+          expanded: true
+        });
+        const mover = await addChild(windowB, {
+          id: 'n2',
+          tabId: 2,
+          windowId: 20,
+          loaded: true
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await runAction(view, 'moveNodeUpInvertNest');
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(mover.parent, windowA, 'Node should move into collapsed window', snap);
+        assertEqual(windowA.nodes[windowA.nodes.length - 1].id, 'n2',
+          'Node should append to window children', snap);
+        return { before, after };
+      });
+
+      test('move up no-ops for first node of first loaded window', async () => {
+        const view = createView();
+        view.moveUpIntoExpandedSibling = false;
+        assertEqual(
+          view.moveUpIntoExpandedSibling,
+          false,
+          'moveUpIntoExpandedSibling should be disabled'
+        );
+        const windowA = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 10,
+          loaded: true,
+          expanded: true
+        });
+        const mover = await addChild(windowA, {
+          id: 'n1',
+          tabId: 1,
+          windowId: 10,
+          loaded: true
+        });
+        await addChild(windowA, {
+          id: 'n2',
+          tabId: 2,
+          windowId: 10,
+          loaded: true
+        });
+
+        view.cursor = mover;
+        const before = treeSnapshot(view.root);
+        await runAction(view, 'moveNodeUp');
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(mover.parent, windowA, 'Node should stay in first window', snap);
+        assertEqual(windowA.nodes[0].id, 'n1', 'Node should remain first', snap);
         return { before, after };
       });
 
@@ -2705,11 +3021,23 @@
             results.push({ type: 'group', title: item.title });
             continue;
           }
+          window.__testActions = [];
           try {
             const snap = await item.fn();
+            const actions = window.__testActions || [];
+            if (snap && updateExpected) expectedSnapshots[item.name] = snap.after;
+            if (snap) {
+              snap.expected = item.expected || expectedSnapshots[item.name];
+              snap.actions = actions;
+            }
             results.push({ type: 'test', name: item.name, pass: true, snap });
           } catch (e) {
             const snap = e && e.snapshot ? e.snapshot : null;
+            const actions = window.__testActions || [];
+            if (snap) {
+              snap.expected = item.expected || expectedSnapshots[item.name];
+              snap.actions = actions;
+            }
             results.push({
               type: 'test',
               name: item.name,
@@ -2755,7 +3083,14 @@
               $after.textContent = 'After:';
               const $afterSnap = document.createElement('pre');
               renderSnapshot($afterSnap, result.snap.after);
-              $snap.append($before, $beforeSnap, $after, $afterSnap);
+              $snap.append($before, $beforeSnap);
+              if (result.snap.actions && result.snap.actions.length) {
+                const $action = document.createElement('div');
+                $action.className = 'action-line';
+                $action.textContent = `Action: ${formatActions(result.snap.actions)}`;
+                $snap.append($action);
+              }
+              $snap.append($after, $afterSnap);
               $div.appendChild($snap);
             }
           } else {
@@ -2775,7 +3110,21 @@
               $after.textContent = 'After:';
               const $afterSnap = document.createElement('pre');
               renderSnapshot($afterSnap, result.snap.after);
-              $snap.append($before, $beforeSnap, $after, $afterSnap);
+              $snap.append($before, $beforeSnap);
+              if (result.snap.actions && result.snap.actions.length) {
+                const $action = document.createElement('div');
+                $action.className = 'action-line';
+                $action.textContent = `Action: ${formatActions(result.snap.actions)}`;
+                $snap.append($action);
+              }
+              $snap.append($after, $afterSnap);
+              if (result.snap.expected) {
+                const $expected = document.createElement('div');
+                $expected.textContent = 'Expected:';
+                const $expectedSnap = document.createElement('pre');
+                renderSnapshot($expectedSnap, result.snap.expected);
+                $snap.append($expected, $expectedSnap);
+              }
               $div.appendChild($snap);
             }
           }
@@ -2787,7 +3136,18 @@
         $summary.textContent = `${passCount} passed, ${failCount} failed out of ${totalTests} tests`;
         $summary.className = failCount === 0 ? 'all-pass' : 'has-fail';
 
+        if (updateExpected) {
+          const $expected = document.createElement('pre');
+          $expected.className = 'snapshot';
+          $expected.textContent = JSON.stringify(expectedSnapshots, null, 2);
+          const $title = document.createElement('div');
+          $title.textContent = 'Expected snapshots (copy into window.expectedSnapshots):';
+          $results.prepend($title, $expected);
+          window.expectedSnapshots = expectedSnapshots;
+        }
+
         renderLegend($results);
+        window.__TEST_DONE__ = true;
       }
 
       runTests();

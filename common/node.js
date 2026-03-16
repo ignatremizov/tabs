@@ -155,12 +155,18 @@ export class Node {
     // TODO: if deleting a window node, handle any loaded tabs specially
     //   (since loaded tabs cannot exist outside a window)
     if (this.hasKids()) {
+      const moveArgs = { ...args };
+      if ((! this.tree.bkgd)
+        && this.isWindow()
+        && (undefined === moveArgs.allowWindowProxy)) {
+        moveArgs.allowWindowProxy = false;
+      }
       let newIndex = this.indexOf() + 1;
       // do it last-first so open tabs won't change order during the move
       // (forward order has issues with race conditions for open tabs)
       const reversed = [...this.nodes].reverse();
       for (const node of reversed) {
-        await node.moveTo(this.parent, newIndex, args);
+        await node.moveTo(this.parent, newIndex, moveArgs);
       }
     }
   }
@@ -169,9 +175,15 @@ export class Node {
     debug('Node.promoteKidsToParentAtIndex()');
     if (this.isRoot()) return;
     if (! this.hasKids()) return;
+    const moveArgs = { ...args };
+    if ((! this.tree.bkgd)
+      && this.isWindow()
+      && (undefined === moveArgs.allowWindowProxy)) {
+      moveArgs.allowWindowProxy = false;
+    }
     const reversed = [...this.nodes].reverse();
     for (const node of reversed) {
-      await node.moveTo(destParent, destIndex, args);
+      await node.moveTo(destParent, destIndex, moveArgs);
     }
   }
 
@@ -1068,7 +1080,8 @@ export class Node {
       : null;
     // view-only: if moving the only child of a window into a
     // windowless parent, move the window container instead
-    if (args.reason === 'userAction'
+    const allowWindowProxy = (args.allowWindowProxy !== false);
+    if (allowWindowProxy && args.reason === 'userAction'
       && (! this.tree.bkgd)
       && (! this.isWindow())
       && openTabs
@@ -1197,12 +1210,26 @@ export class Node {
       ) {
         // if loaded tab moved to unloaded window, load the window
         const newWindow = this.getWindowNode();
-        const newWindowLoaded = (
+        let newWindowLoaded = (
           newWindow
           && newWindow.isLoaded()
           && (undefined !== newWindow.windowId)
           && (null !== newWindow.windowId)
         );
+        if (newWindow && (! newWindowLoaded) && (! this.tree.bkgd)) {
+          const prevWindowId = prevWindow ? prevWindow.windowId : undefined;
+          const prevHasLoaded = prevWindow && (prevWindow.hasLoadedTabsDeep
+            ? prevWindow.hasLoadedTabsDeep()
+            : prevWindow.hasLoadedTabs());
+          if ((undefined !== prevWindowId) && (null !== prevWindowId)
+            && (! prevHasLoaded)) {
+            await newWindow.setTabFields({
+              loaded: true,
+              windowId: prevWindowId
+            }, { reason: 'moveTo.reuseWindow' });
+            newWindowLoaded = true;
+          }
+        }
         if (newWindow && (! newWindowLoaded)) {
           const loadMsg = {
             reason: 'moveTo.loadedTabToUnloadedWindow',

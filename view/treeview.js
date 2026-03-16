@@ -574,6 +574,39 @@ export class TreeView extends Tree {
     return result;
   }
 
+  resolveMoveAction (action) {
+    // Keybinding actions are swapped when the nesting toggle is off.
+    // This keeps action methods deterministic while the toggle only
+    // affects which action gets invoked for Shift vs Shift+Alt.
+    if (! action) return action;
+    if (action === 'moveNodeUp' || action === 'moveNodeUpInvertNest') {
+      if (! this.moveUpIntoExpandedSibling) {
+        return (action === 'moveNodeUp')
+          ? 'moveNodeUpInvertNest'
+          : 'moveNodeUp';
+      }
+      return action;
+    }
+    if (action === 'moveNodeDown' || action === 'moveNodeDownInvertNest') {
+      if (! this.moveDownIntoExpandedSibling) {
+        return (action === 'moveNodeDown')
+          ? 'moveNodeDownInvertNest'
+          : 'moveNodeDown';
+      }
+      return action;
+    }
+    return action;
+  }
+
+  describeMoveAction (action) {
+    if (! action) return action;
+    if (action === 'moveNodeUp') return 'moveNodeUp (nest)';
+    if (action === 'moveNodeUpInvertNest') return 'moveNodeUp (no nest)';
+    if (action === 'moveNodeDown') return 'moveNodeDown (nest)';
+    if (action === 'moveNodeDownInvertNest') return 'moveNodeDown (no nest)';
+    return action;
+  }
+
   initBodyHandlers () {
     // absolutely NEVER scroll horizontally
     this.$body.addEventListener('scroll', () => { this.$body.scrollLeft = 0; });
@@ -637,10 +670,11 @@ export class TreeView extends Tree {
   async dispatchInputEvent (event) {
     // look up the event name to see if it's mapped to an action
     // ... then call that action
-    const handlerName = this.keyBindngs[event.processedName];
-    if (handlerName) {
+    const requestedAction = this.keyBindngs[event.processedName];
+    const resolvedAction = this.resolveMoveAction(requestedAction);
+    if (resolvedAction) {
       // bindable actions detectable by naming convention
-      const handler = this[`action_${handlerName}`];
+      const handler = this[`action_${resolvedAction}`];
       if (handler) {
         // unsure if necessary
         event.preventDefault();
@@ -649,13 +683,19 @@ export class TreeView extends Tree {
         // actually handle the event, but only one at a time
         const unlock = await this.keyEventMutex.lock();
         try {
-          this.setStatus(`key: ${handlerName}`);
+          const requestedLabel = this.describeMoveAction(requestedAction);
+          const resolvedLabel = this.describeMoveAction(resolvedAction);
+          if (requestedAction && resolvedAction !== requestedAction) {
+            this.setStatus(`key: ${requestedLabel} -> ${resolvedLabel}`);
+          } else {
+            this.setStatus(`key: ${resolvedLabel}`);
+          }
           await handler.bind(this)(event);  // equivalent to this.handler(event);
         }
         finally { unlock(); }
       }
       else {
-        this.setStatus(`handler not found: ${handlerName}`);
+        this.setStatus(`handler not found: ${resolvedAction}`);
       }
     }
   }
@@ -834,15 +874,15 @@ export class TreeView extends Tree {
     return parent;
   }
 
-  async moveWindowProxy (windowNode, direction, nestIntoExpandedSibling) {
+  async moveWindowProxy (windowNode, direction, nestIntoExpandedSibling, opts = {}) {
     if (! windowNode) return;
     const originalCursor = this.cursor;
     this.cursor = windowNode;
     try {
       if ('up' === direction) {
-        await this.moveNodeUpWithNest(nestIntoExpandedSibling);
+        await this.moveNodeUpWithNest(nestIntoExpandedSibling, opts);
       } else {
-        await this.moveNodeDownWithNest(nestIntoExpandedSibling);
+        await this.moveNodeDownWithNest(nestIntoExpandedSibling, opts);
       }
     } finally {
       this.cursor = originalCursor;
@@ -850,7 +890,7 @@ export class TreeView extends Tree {
     }
   }
 
-  async moveNodeUpWithNest (nestIntoExpandedSibling) {
+  async moveNodeUpWithNest (nestIntoExpandedSibling, opts = {}) {
 
     // if root or 1st child of root, or if outside of root, do nothing
     if (! this.cursor) return;
@@ -861,6 +901,21 @@ export class TreeView extends Tree {
 
     const windowProxy = this.getOnlyChildLoadedWindowProxy();
     let forceWindowProxy = false;
+    const cursorHasLoadedTabs = (
+      (this.cursor.isLoaded && this.cursor.isLoaded())
+      || (this.cursor.hasLoadedTabsDeep
+        ? this.cursor.hasLoadedTabsDeep()
+        : (this.cursor.hasLoadedTabs && this.cursor.hasLoadedTabs()))
+    );
+    const canNestIntoWindow = (node) => {
+      if (! node || ! node.isWindow || (! node.isWindow())) return false;
+      if (node.isLoaded && node.isLoaded()) return true;
+      return nestIntoExpandedSibling;
+    };
+    const canNestIntoNonWindow = (node) => {
+      if (! node || ! node.hasKids || (! node.hasKids())) return false;
+      return nestIntoExpandedSibling;
+    };
 
     // node can be moved up; take position of previous visible row
     const prevRow = this.cursor.prevVisibleNode();
@@ -887,37 +942,24 @@ export class TreeView extends Tree {
       if (anchor.isRoot && anchor.isRoot()) return null;
       return anchor;
     };
-    const cursorHasLoadedTabs = (
-      (this.cursor.isLoaded && this.cursor.isLoaded())
-      || (this.cursor.hasLoadedTabsDeep
-        ? this.cursor.hasLoadedTabsDeep()
-        : (this.cursor.hasLoadedTabs && this.cursor.hasLoadedTabs()))
+    const canNestInto = (node) => (
+      canNestIntoWindow(node) || canNestIntoNonWindow(node)
     );
-    const canNestInto = (node) => {
-      if (! node.hasKids || (! node.hasKids())) return false;
-      if (! node.isExpanded || (! node.isExpanded())) return false;
-      if (node.isWindow && node.isWindow() && (! node.isLoaded())) {
-        return ! cursorHasLoadedTabs;
-      }
-      return true;
-    };
     const anchor = resolveAnchor(prevRow);
     if (prevRow.isParentOf(this.cursor)) {
       let altPrevRow = this.cursor.parent.prevVisibleNode(this.viewRoot);
       if (altPrevRow && (altPrevRow !== this.cursor.parent)) {
         const targetParent = this.cursor.parent.parent;
         const altAnchor = resolveAnchorForParent(altPrevRow, targetParent);
-        const shouldForceWindowNest = (
-          this.cursor.isLoaded && this.cursor.isLoaded() &&
-          (! this.cursor.isWindow || (! this.cursor.isWindow())) &&
-          this.cursor.parent &&
-          this.cursor.parent.isWindow && this.cursor.parent.isWindow()
-        );
-        if (altAnchor && canNestInto(altAnchor) &&
-          ((nestIntoExpandedSibling) || (shouldForceWindowNest && altAnchor.isWindow()))) {
+        if (altAnchor && canNestInto(altAnchor)) {
           if (windowProxy &&
             (! altAnchor.isWindow || (! altAnchor.isWindow()))) {
-            await this.moveWindowProxy(windowProxy, 'up', nestIntoExpandedSibling);
+            await this.moveWindowProxy(
+              windowProxy,
+              'up',
+              nestIntoExpandedSibling,
+              opts
+            );
             return;
           }
           const destParent = altAnchor;
@@ -926,7 +968,16 @@ export class TreeView extends Tree {
           this.setStatus(`moved up: ${this.cursor.toLine()}`);
           return;
         }
-        if (shouldForceWindowNest) forceWindowProxy = true;
+        const atFirstWindowTop = (
+          (! altAnchor)
+          && anchor
+          && anchor.isWindow && anchor.isWindow()
+          && anchor.parent
+          && anchor.parent.isRoot
+          && anchor.parent.isRoot()
+          && (anchor.indexOf() === 0)
+        );
+        if (atFirstWindowTop && cursorHasLoadedTabs) return;
       }
     }
     if (nestIntoExpandedSibling &&
@@ -940,33 +991,59 @@ export class TreeView extends Tree {
     }
     const destParent = anchor.parent;
     const destIndex = anchor.indexOf();
+    const leavingWindow = (
+      this.cursor.parent
+      && this.cursor.parent.isWindow
+      && this.cursor.parent.isWindow()
+    );
+    const movingToRoot = (
+      destParent.isRoot
+      && destParent.isRoot()
+    );
 
     if (! forceWindowProxy && windowProxy &&
-      (! destParent.isWindow || (! destParent.isWindow())))
-      forceWindowProxy = true;
+      (! destParent.isWindow || (! destParent.isWindow()))) {
+      const shouldKeepWindowProxy = !(
+        leavingWindow
+        && cursorHasLoadedTabs
+        && movingToRoot
+      );
+      if (shouldKeepWindowProxy) forceWindowProxy = true;
+    }
     if (forceWindowProxy) {
       if (windowProxy) {
-        await this.moveWindowProxy(windowProxy, 'up', nestIntoExpandedSibling);
+        await this.moveWindowProxy(
+          windowProxy,
+          'up',
+          nestIntoExpandedSibling,
+          opts
+        );
       }
       return;
     }
 
     // move it
-    await this.cursor.moveTo(destParent, destIndex, { reason: 'userAction' });
+    const moveArgs = { reason: 'userAction' };
+    if (leavingWindow
+      && cursorHasLoadedTabs
+      && movingToRoot) {
+      moveArgs.allowWindowProxy = false;
+    }
+    await this.cursor.moveTo(destParent, destIndex, moveArgs);
     this.setStatus(`moved up: ${this.cursor.toLine()}`);
   }
 
   async action_moveNodeUp (event) {
     debug('TreeView.action_moveNodeUp()');
-    await this.moveNodeUpWithNest(this.moveUpIntoExpandedSibling);
+    await this.moveNodeUpWithNest(true);
   }
 
   async action_moveNodeUpInvertNest (event) {
     debug('TreeView.action_moveNodeUpInvertNest()');
-    await this.moveNodeUpWithNest(!this.moveUpIntoExpandedSibling);
+    await this.moveNodeUpWithNest(false);
   }
 
-  async moveNodeDownWithNest (nestIntoExpandedSibling) {
+  async moveNodeDownWithNest (nestIntoExpandedSibling, opts = {}) {
 
     // if root, or outside of root, do nothing
     if (! this.cursor) return;
@@ -974,6 +1051,15 @@ export class TreeView extends Tree {
     if (! this.cursor.isChildOf(this.viewRoot, false)) return;
 
     const windowProxy = this.getOnlyChildLoadedWindowProxy();
+    const canNestIntoWindow = (node) => {
+      if (! node || ! node.isWindow || (! node.isWindow())) return false;
+      if (node.isLoaded && node.isLoaded()) return true;
+      return nestIntoExpandedSibling;
+    };
+    const canNestIntoNonWindow = (node) => {
+      if (! node || ! node.hasKids || (! node.hasKids())) return false;
+      return nestIntoExpandedSibling;
+    };
 
     // take position of next visible row outside our own branch, probably
     const nextRow = this.cursor.nextVisibleNodeNotMyChild(this.viewRoot);
@@ -987,9 +1073,8 @@ export class TreeView extends Tree {
       destParent = this.cursor.parent.parent;
       destIndex = this.cursor.parent.indexOf() + 1;
     }
-    // if next row is an expanded parent, move before 1st child
-    else if (nestIntoExpandedSibling &&
-      nextRow.hasKids() && nextRow.isExpanded()) {
+    // if next row is a parent (window nodes included), move before 1st child
+    else if ((canNestIntoWindow(nextRow) || canNestIntoNonWindow(nextRow))) {
       destParent = nextRow;
       destIndex = 0;
     }
@@ -1014,12 +1099,12 @@ export class TreeView extends Tree {
 
   async action_moveNodeDown (event) {
     debug('TreeView.action_moveNodeDown()');
-    await this.moveNodeDownWithNest(this.moveDownIntoExpandedSibling);
+    await this.moveNodeDownWithNest(true);
   }
 
   async action_moveNodeDownInvertNest (event) {
     debug('TreeView.action_moveNodeDownInvertNest()');
-    await this.moveNodeDownWithNest(!this.moveDownIntoExpandedSibling);
+    await this.moveNodeDownWithNest(false);
   }
 
   async action_moveNodeUpNoDescend (event) {
