@@ -595,17 +595,31 @@ export class Bkgd {
       return error('failed to get list of windows', err);
     }
 
-    console.time('mergeOpenWindowsIntoTree');
+    if (! globalThis.__TKTSTO_TEST_QUIET__) {
+      console.time('mergeOpenWindowsIntoTree');
+    }
     // attach browser windows to window nodes
     let attached = [];
     const attachedNodeIds = new Set();
     for (const window of windows) {
       debug(`Window ID: ${window.id}`);
-      // detect whether window is already in tree
-      // match by windowId (old, unreliable, windowId changes or goes stale)
-      //let winNode = this.tree.root.getWindowId(window.id);
-      // search for a Window in the tree with matching tabs
-      let winNode = await this.tree.findMatchingWindow(window, attachedNodeIds);
+      // Prefer an already-loaded exact windowId match within the same session.
+      let winNode = this.tree.root.getWindowId(window.id);
+      if (winNode && attachedNodeIds.has(winNode.id)) {
+        winNode = null;
+      }
+      if (winNode) {
+        const hasLoadedDesc = winNode.hasLoadedTabsDeep
+          ? winNode.hasLoadedTabsDeep()
+          : winNode.hasLoadedTabs();
+        if ((! winNode.isLoaded()) && (! hasLoadedDesc)) {
+          winNode = null;
+        }
+      }
+      // Otherwise search for a Window in the tree with matching tabs.
+      if (! winNode) {
+        winNode = await this.tree.findMatchingWindow(window, attachedNodeIds);
+      }
       if (winNode) {
         winNode.load({ reason: 'mergeOpenWindowsIntoTree' });
       }
@@ -649,15 +663,80 @@ export class Bkgd {
       const window = obj.window;
       for (const tab of window.tabs) {
         debug(`Tab ID: ${tab.id}, URL: ${tab.url}`, tab);
+        const tabUrl = this.tree.getTabPendingUrl(tab);
+        const localTabList = winNode.getLoadedAndUnloadedTabs();
         // detect whether tab is already in tree
         // (it usually should be, since findMatchingWindow() attaches tabIds)
-        const tabNode = this.tree.getNodeByTabId(tab.id);
+        const attachedTabNode = this.tree.getNodeByTabId(tab.id);
+        let tabNode = localTabList.find((node) => node.tabId === tab.id);
+        if (! tabNode) {
+          const localUrlMatches = localTabList.filter((node) =>
+            { return node.url === tabUrl; });
+          if (localUrlMatches.length > 0) {
+            tabNode = this.tree.choosePreferredTabNode(localUrlMatches);
+          }
+        }
+        if ((! tabNode)
+          && attachedTabNode
+          && (attachedTabNode.getWindowNode(false) === winNode)) {
+          tabNode = attachedTabNode;
+        }
+        if ((! tabNode)
+          && Number.isInteger(tab.index)
+          && (tab.index >= 0)
+          && (tab.index < localTabList.length)) {
+          const indexCandidate = localTabList[tab.index];
+          if (indexCandidate && (! indexCandidate.isWindow())) {
+            tabNode = indexCandidate;
+          }
+        }
+        if (! tabNode) tabNode = attachedTabNode;
         if (tabNode) {
-          // Update faviconUrl for existing tabs (may not have been saved before)
-          if (tab.favIconUrl && (tabNode.faviconUrl !== tab.favIconUrl)) {
-            await tabNode.setTabFields(
-              { favIconUrl: tab.favIconUrl },
-              { reason: 'mergeOpenWindowsIntoTree' });
+          const changes = {};
+          if (tabNode.tabId !== tab.id) changes.tabId = tab.id;
+          if (tabNode.windowId !== window.id) changes.windowId = window.id;
+          if (undefined !== tab.title && (tabNode.title !== tab.title)) {
+            changes.title = tab.title;
+          }
+          if (undefined !== tabUrl && (tabNode.url !== tabUrl)) {
+            changes.url = tabUrl;
+          }
+          if ((undefined !== tab.favIconUrl)
+            && (tabNode.faviconUrl !== tab.favIconUrl)) {
+            changes.favIconUrl = tab.favIconUrl;
+          }
+          if (! tabNode.isLoaded()) changes.loaded = true;
+          if (undefined !== tab.active && (tabNode.active !== tab.active)) {
+            changes.active = tab.active;
+          }
+          if ((undefined !== tab.discarded)
+            && (tabNode.discarded !== tab.discarded)) {
+            changes.discarded = tab.discarded;
+          }
+          if ((undefined !== tab.frozen)
+            && (tabNode.frozen !== tab.frozen)) {
+            changes.frozen = tab.frozen;
+          }
+          if ((undefined !== tab.hidden)
+            && (tabNode.hidden !== tab.hidden)) {
+            changes.hidden = tab.hidden;
+          }
+          if ((undefined !== tab.incognito)
+            && (tabNode.incognito !== tab.incognito)) {
+            changes.incognito = tab.incognito;
+          }
+          if ((undefined !== tab.lastAccessed)
+            && (tabNode.atime !== tab.lastAccessed)) {
+            changes.atime = tab.lastAccessed;
+          }
+          if (Object.keys(changes).length > 0) {
+            await tabNode.setTabFields(changes, { reason: 'mergeOpenWindowsIntoTree' });
+          }
+          if (tabNode.getWindowNode(false) !== winNode) {
+            await tabNode.moveTo(winNode, winNode.nodes.length, {
+              reason: 'mergeOpenWindowsIntoTree',
+              emit: false
+            });
           }
           continue;
         }
@@ -679,7 +758,7 @@ export class Bkgd {
           windowId: window.id,
           tabId: tab.id,
           title: tab.title,
-          url: tab.url,
+          url: tabUrl,
           faviconUrl: tab.favIconUrl,
           loaded: true,
           active: tab.active,

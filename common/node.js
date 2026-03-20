@@ -754,8 +754,16 @@ export class Node {
 
   async setTabFields (changes, args) {
     if (! args) return;
+    if ((args.ensureUniqueBindings !== false)
+      && this.tree
+      && this.tree.ensureUniqueBrowserBindings) {
+      await this.tree.ensureUniqueBrowserBindings(this, changes, args);
+    }
     // abort on no-op
     if (Object.keys(changes).length === 0) return;
+    if ((undefined !== changes.tabId) && (null !== changes.tabId)) {
+      changes = { ...changes, oldTabId: undefined };
+    }
     // Do The Thing
     for (const [key, value] of Object.entries(changes)) {
       // Map browser API's favIconUrl to our faviconUrl property

@@ -1220,9 +1220,48 @@ test('findMatchingWindow honors exclude list', async () => {
   const match2 = await tree.findMatchingWindow(realWindow, exclude);
   assert(match2, 'Should match a second window node');
   assert(match2.id !== match1.id, 'Exclude list should prevent reuse');
-  const tab = tree.nodes.t1;
-  assertEqual(tab.tabId, 1, 'Should attach tabId to matched node');
-  assertEqual(tab.wasLoaded, false, 'Matched tab should reset wasLoaded');
+  assertEqual(match2.windowId, 101, 'Excluded rematch should attach the other window');
+  const matchedTab = match2.findNodes((node) =>
+    { return node.url === 'https://example.com/a'; })[0];
+  assertEqual(matchedTab.tabId, 1, 'Matched window should own the tab binding');
+  assertEqual(matchedTab.wasLoaded, false, 'Matched tab should reset wasLoaded');
+});
+
+test('setTabFields detaches conflicting tab bindings', async () => {
+  const tree = createTree(null);
+  const win = await addChild(tree.root, {
+    id: 'w1',
+    type: 'window',
+    windowId: 1,
+    loaded: true
+  });
+  const stale = await addChild(win, {
+    id: 'stale',
+    tabId: 10,
+    windowId: 1,
+    url: 'https://example.com/stale',
+    loaded: true,
+    active: true
+  });
+  stale.oldTabId = 10;
+  const fresh = await addChild(win, {
+    id: 'fresh',
+    url: 'https://example.com/fresh',
+    loaded: false
+  });
+
+  await fresh.setTabFields({
+    tabId: 10,
+    windowId: 1,
+    loaded: true,
+    active: false
+  }, { reason: 'test' });
+
+  assertEqual(tree.getNodeByTabId(10).id, 'fresh', 'Fresh node should win the tabId');
+  assertEqual(stale.tabId, undefined, 'Stale node should lose direct tabId binding');
+  assertEqual(stale.oldTabId, undefined, 'Stale node should lose oldTabId binding');
+  assertEqual(stale.loaded, false, 'Stale node should be marked unloaded');
+  assertEqual(stale.active, false, 'Stale node should no longer be active');
 });
 
 test('mergeOpenWindowsIntoTree assigns unique window nodes', async () => {
@@ -1269,6 +1308,76 @@ test('mergeOpenWindowsIntoTree assigns unique window nodes', async () => {
   const unfocusedWindow = windowNodes.find((n) => n.windowId === 1098);
   assertEqual(focusedWindow.active, true, 'Focused window should be active');
   assertEqual(unfocusedWindow.active, false, 'Unfocused window should be inactive');
+});
+
+test('mergeOpenWindowsIntoTree repairs stale tab placement and duplicate bindings', async () => {
+  const originalGetAll = api.windows.getAll;
+  try {
+    const bkgd = new Bkgd();
+    const tree = createTree(bkgd);
+    bkgd.tree = tree;
+
+    const liveWin = await addChild(tree.root, {
+      id: 'live-win',
+      type: 'window',
+      windowId: 50,
+      loaded: true
+    });
+    const staleWin = await addChild(tree.root, {
+      id: 'stale-win',
+      type: 'window',
+      windowId: 60,
+      loaded: true
+    });
+    const liveTab = await addChild(liveWin, {
+      id: 'live-tab',
+      tabId: 10,
+      windowId: 50,
+      url: 'https://example.com/old',
+      title: 'Old title',
+      loaded: true
+    });
+    const staleTab = await addChild(staleWin, {
+      id: 'stale-tab',
+      tabId: 11,
+      windowId: 60,
+      url: 'https://example.com/stale',
+      loaded: true
+    });
+
+    api.windows.getAll = async () => ([
+      {
+        id: 50,
+        focused: true,
+        tabs: [
+          {
+            id: 11,
+            index: 0,
+            url: 'https://example.com/live',
+            title: 'Live title',
+            active: true,
+            discarded: false,
+            frozen: false,
+            hidden: false,
+            incognito: false,
+            lastAccessed: 123
+          }
+        ]
+      }
+    ]);
+
+    await bkgd.mergeOpenWindowsIntoTree();
+
+    assertEqual(liveTab.tabId, 11, 'Live tab should attach to the open browser tab');
+    assertEqual(liveTab.url, 'https://example.com/live', 'Live tab URL should refresh from browser');
+    assertEqual(liveTab.title, 'Live title', 'Live tab title should refresh from browser');
+    assertEqual(liveTab.parent.id, 'live-win', 'Live tab should stay under the active window');
+    assertEqual(staleTab.tabId, undefined, 'Stale duplicate should lose the tab binding');
+    assertEqual(staleTab.loaded, false, 'Stale duplicate should be unloaded');
+    assertEqual(tree.getNodeByTabId(11).id, 'live-tab', 'Lookup should resolve to repaired tab');
+  } finally {
+    api.windows.getAll = originalGetAll;
+  }
 });
 
 test('runReconcile drops boring closed tabs', async () => {

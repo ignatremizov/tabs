@@ -355,9 +355,10 @@ export class Tree {
     );
     if (1 === directMatches.length) return directMatches[0];
     if (directMatches.length > 1) {
+      const preferred = this.choosePreferredTabNode(directMatches);
       warn(`Tree.getNodeByTabId(${tabId}) found ${directMatches.length} tabId matches, not 1`,
         directMatches);
-      return directMatches[0];
+      return preferred;
     }
 
     const oldMatches = root.findNodes((node) =>
@@ -365,9 +366,99 @@ export class Tree {
     );
     if (1 === oldMatches.length) return oldMatches[0];
     if (1 > oldMatches.length) return null;
+    const preferred = this.choosePreferredTabNode(oldMatches);
     warn(`Tree.getNodeByTabId(${tabId}) found ${oldMatches.length} oldTabId matches, not 1`,
       oldMatches);
-    return oldMatches[0];
+    return preferred;
+  }
+
+  choosePreferredTabNode (nodes) {
+    if (! nodes || (nodes.length < 1)) return null;
+    if (1 === nodes.length) return nodes[0];
+    const scored = nodes.map((node) => ({
+      node,
+      score: [
+        node.isLoaded() ? 1 : 0,
+        node.isActive() ? 1 : 0,
+        node.windowId ? 1 : 0,
+        node.shouldUnloadNotDelete() ? 1 : 0,
+        node.ctime || 0,
+        node.id || ''
+      ]
+    }));
+    scored.sort((a, b) => {
+      for (let i = 0; i < a.score.length; i++) {
+        if (a.score[i] < b.score[i]) return 1;
+        if (a.score[i] > b.score[i]) return -1;
+      }
+      return 0;
+    });
+    return scored[0].node;
+  }
+
+  async ensureUniqueBrowserBindings (targetNode, changes, args) {
+    if (! targetNode || ! changes) return;
+
+    if ((undefined !== changes.tabId) && (null !== changes.tabId)) {
+      await this.clearConflictingTabBindings(targetNode, changes.tabId, args);
+    }
+
+    const nextType = ('type' in changes) ? changes.type : targetNode.type;
+    if ((nextType === 'window')
+      && (undefined !== changes.windowId)
+      && (null !== changes.windowId)) {
+      await this.clearConflictingWindowBindings(
+        targetNode,
+        changes.windowId,
+        args
+      );
+    }
+  }
+
+  async clearConflictingTabBindings (targetNode, tabId, args) {
+    for (const node of Object.values(this.nodes)) {
+      if ((! node) || (node === targetNode) || node.isWindow()) continue;
+      const directMatch = (node.tabId === tabId);
+      const oldMatch = (node.oldTabId === tabId);
+      if ((! directMatch) && (! oldMatch)) continue;
+
+      const staleChanges = {};
+      if (directMatch) {
+        staleChanges.tabId = undefined;
+        staleChanges.windowId = undefined;
+        staleChanges.active = false;
+        staleChanges.loaded = false;
+        staleChanges.wasLoaded = Boolean(node.loaded || node.wasLoaded);
+      }
+      if (oldMatch) staleChanges.oldTabId = undefined;
+      await node.setTabFields(staleChanges, {
+        ...args,
+        emit: false,
+        ensureUniqueBindings: false,
+        reason: 'dedupeTabBinding'
+      });
+    }
+  }
+
+  async clearConflictingWindowBindings (targetNode, windowId, args) {
+    for (const node of Object.values(this.nodes)) {
+      if ((! node) || (node === targetNode) || (! node.isWindow())) continue;
+      if (node.windowId !== windowId) continue;
+      const staleChanges = {
+        windowId: undefined,
+        active: false
+      };
+      if (node.isLoaded()) {
+        staleChanges.loaded = false;
+        staleChanges.wasLoaded = Boolean(node.loaded || node.wasLoaded);
+      }
+      await node.setTabFields(staleChanges, {
+        ...args,
+        emit: false,
+        ensureUniqueBindings: false,
+        reason: 'dedupeWindowBinding'
+      });
+    }
   }
 
   getTabPendingUrl (tab) {
