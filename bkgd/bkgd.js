@@ -661,6 +661,11 @@ export class Bkgd {
     for (const obj of attached) {
       const winNode = obj.winNode;
       const window = obj.window;
+      let pinnedPrefixCount = 0;
+      for (const browserTab of window.tabs) {
+        if (browserTab && browserTab.pinned) pinnedPrefixCount += 1;
+        else break;
+      }
       for (const tab of window.tabs) {
         debug(`Tab ID: ${tab.id}, URL: ${tab.url}`, tab);
         const tabUrl = this.tree.getTabPendingUrl(tab);
@@ -683,9 +688,9 @@ export class Bkgd {
         }
         if ((! tabNode)
           && Number.isInteger(tab.index)
-          && (tab.index >= 0)
-          && (tab.index < localTabList.length)) {
-          const indexCandidate = localTabList[tab.index];
+          && ((tab.index - pinnedPrefixCount) >= 0)
+          && ((tab.index - pinnedPrefixCount) < localTabList.length)) {
+          const indexCandidate = localTabList[tab.index - pinnedPrefixCount];
           if (indexCandidate && (! indexCandidate.isWindow())) {
             tabNode = indexCandidate;
           }

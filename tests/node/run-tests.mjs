@@ -1380,6 +1380,76 @@ test('mergeOpenWindowsIntoTree repairs stale tab placement and duplicate binding
   }
 });
 
+test('mergeOpenWindowsIntoTree adjusts index fallback after pinned tabs', async () => {
+  const originalGetAll = api.windows.getAll;
+  try {
+    const bkgd = new Bkgd();
+    const tree = createTree(bkgd);
+    bkgd.tree = tree;
+
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 77,
+      loaded: true
+    });
+    const first = await addChild(win, {
+      id: 't1',
+      url: 'https://saved.example.com/one',
+      loaded: false
+    });
+    const second = await addChild(win, {
+      id: 't2',
+      url: 'https://saved.example.com/two',
+      loaded: false
+    });
+
+    api.windows.getAll = async () => ([
+      {
+        id: 77,
+        focused: true,
+        tabs: [
+          {
+            id: 90,
+            index: 0,
+            pinned: true,
+            url: 'https://pinned.example.com/mail',
+            title: 'Pinned mail',
+            active: false
+          },
+          {
+            id: 91,
+            index: 1,
+            pinned: false,
+            url: 'https://live.example.com/one',
+            title: 'Live one',
+            active: true
+          },
+          {
+            id: 92,
+            index: 2,
+            pinned: false,
+            url: 'https://live.example.com/two',
+            title: 'Live two',
+            active: false
+          }
+        ]
+      }
+    ]);
+
+    await bkgd.mergeOpenWindowsIntoTree();
+
+    assertEqual(first.tabId, 91, 'First saved node should map to first unpinned tab');
+    assertEqual(second.tabId, 92, 'Second saved node should map to second unpinned tab');
+    assertEqual(first.url, 'https://live.example.com/one',
+      'First saved node should refresh from first unpinned tab');
+    assertEqual(second.url, 'https://live.example.com/two',
+      'Second saved node should refresh from second unpinned tab');
+  } finally {
+    api.windows.getAll = originalGetAll;
+  }
+});
+
 test('runReconcile drops boring closed tabs', async () => {
   const originalGetAll = api.windows.getAll;
   try {
