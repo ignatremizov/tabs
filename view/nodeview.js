@@ -410,6 +410,7 @@ export class NodeView extends Node {
 
   $renderChildren () {
     this.$render();
+    if (this.$nodes) this.$nodes.replaceChildren();
     // FIXME: if ('window' === viewScope),
     // render and behave as if all child windows are collapsed
     if (this.isExpanded()) {

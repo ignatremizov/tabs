@@ -2786,6 +2786,40 @@
           'Focused window should be active');
       });
 
+      test('whole-tree render is idempotent', async () => {
+        const view = createView();
+        const win = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 1,
+          expanded: true
+        });
+        await addChild(win, {
+          id: 't1',
+          type: 'tab',
+          loaded: true,
+          label: 'First tab'
+        });
+        await addChild(win, {
+          id: 't2',
+          type: 'tab',
+          loaded: true,
+          label: 'Second tab'
+        });
+
+        view.viewScope = 'session';
+        view.windowNode = win;
+        view.viewRoot = view.root;
+
+        view.$renderWholeTree();
+        view.$renderWholeTree();
+
+        assertEqual(document.getElementById('tree-root').children.length, 1,
+          'Tree root should only contain one rendered root node');
+        assertEqual(document.querySelectorAll('#tree-root .row').length, 4,
+          'Repeated whole-tree render should not duplicate visible rows');
+      });
+
       testGroup('Basic Deletes');
       test('delete leaf node removes it', async () => {
         const view = createView();

@@ -265,12 +265,7 @@ export class TreeView extends Tree {
     this.viewRoot.$renderChildren();
     if (this.root.$) this.root.$.classList.add('root-nodes');
     // add the view root node to the page
-    if (this.$treeRoot.childNodes.length > 0) {
-      this.$treeRoot.replaceChild(
-        this.viewRoot.$,
-        this.$treeRoot.childNodes[0]);
-    }
-    else this.$treeRoot.appendChild(this.viewRoot.$);
+    this.$treeRoot.replaceChildren(this.viewRoot.$);
   }
 
   setStatus (msg) {
@@ -2519,43 +2514,53 @@ export class TreeView extends Tree {
 
   tree_refreshAll (msg, sender, sendResponse) {
     // Re-render the entire tree (used after batch updates like favicon backfill)
-    debug('TreeView.tree_refreshAll()');
-    this.$renderWholeTree();
+    try {
+      debug('TreeView.tree_refreshAll()');
+      this.$renderWholeTree();
+    } catch (err) {
+      error('TreeView.tree_refreshAll() failed', err, msg);
+      throw err;
+    }
   }
 
   async onMessage (msg, sender, sendResponse) {
     // if message not for us, let parent class handle it
-    if (!(msg && msg.msg && msg.msg.startsWith('treeview_')))
-      return super.onMessage(msg, sender, sendResponse);
+    try {
+      if (!(msg && msg.msg && msg.msg.startsWith('treeview_')))
+        return await super.onMessage(msg, sender, sendResponse);
 
-    debug(`TreeView.onMessage(${msg.msg})`, this.windowId);
+      debug(`TreeView.onMessage(${msg.msg})`, this.windowId);
 
-    // ignore messages for other windows unless broadcast
-    if (msg.windowId && (msg.windowId !== this.windowId)) return;
+      // ignore messages for other windows unless broadcast
+      if (msg.windowId && (msg.windowId !== this.windowId)) return;
 
-    debug(`TreeView.onMessage(${msg.msg})`, msg);
-    if ('treeview_onCommand' === msg.msg) {
-      // don't do any of this when a dialog box exists
-      if (this.dialogActive) return;
-      // turn this off in case it's still visible
-      this.hideHoverMenu();
-      // find the matching 'action_doStuff' function
-      const actionName = `action_${msg.action}`;
-      const handler = this[actionName];
-      // actually handle the event, but only one at a time
-      const unlock = await this.keyEventMutex.lock();
-      try {
-        this.setStatus(`key: ${msg.action}`);
-        // event type tells handlers to use keyboard cursor, not mouse
-        await handler.bind(this)({ type: 'command' });
+      debug(`TreeView.onMessage(${msg.msg})`, msg);
+      if ('treeview_onCommand' === msg.msg) {
+        // don't do any of this when a dialog box exists
+        if (this.dialogActive) return;
+        // turn this off in case it's still visible
+        this.hideHoverMenu();
+        // find the matching 'action_doStuff' function
+        const actionName = `action_${msg.action}`;
+        const handler = this[actionName];
+        // actually handle the event, but only one at a time
+        const unlock = await this.keyEventMutex.lock();
+        try {
+          this.setStatus(`key: ${msg.action}`);
+          // event type tells handlers to use keyboard cursor, not mouse
+          await handler.bind(this)({ type: 'command' });
+        }
+        finally { unlock(); }
+        return;
       }
-      finally { unlock(); }
-      return;
-    }
-    if ('treeview_status' === msg.msg) {
-      const status = msg.status || '';
-      if (status) this.setStatus(status);
-      return;
+      if ('treeview_status' === msg.msg) {
+        const status = msg.status || '';
+        if (status) this.setStatus(status);
+        return;
+      }
+    } catch (err) {
+      error(`TreeView.onMessage(${msg && msg.msg ? msg.msg : 'unknown'}) failed`, err, msg);
+      throw err;
     }
   }
 
