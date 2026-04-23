@@ -597,7 +597,7 @@ Browser-based tests live in `tests/`. Run them with `make test` (starts a local 
 
 `tests/node/` provides a Node-based runner for core modules with API stubs.
 
-- Run `node tests/node/run-tests.mjs` for quick checks.
+- Run `make test-node` for Node-based checks; the Make target wires in `tests/node/loader.mjs` so extension-root imports like `/api.js` resolve correctly under Node.
 - Run `make coverage` to collect V8 coverage and update the badge in `readme.md`.
 
 #### Writing New Tests
