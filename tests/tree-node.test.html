@@ -1337,6 +1337,70 @@
         }
       });
 
+      test('moveTo reorders loaded tabs after pinned browser tabs', async () => {
+        const tree = createTree();
+        tree.bkgd = {};
+        const api = getApi();
+        const originalTabsMove = api.tabs.move;
+        const originalTabsQuery = api.tabs.query;
+        const moveCalls = [];
+        try {
+          api.tabs.query = async (queryInfo) => {
+            assertEqual(queryInfo.windowId, 10, 'Should query the active window');
+            return [
+              { id: 99, pinned: true, windowId: 10, index: 0 },
+              { id: 1, pinned: false, windowId: 10, index: 1 },
+              { id: 2, pinned: false, windowId: 10, index: 2 }
+            ];
+          };
+          api.tabs.move = async (tabIds, moveInfo) => {
+            moveCalls.push({
+              tabIds: Array.isArray(tabIds) ? [...tabIds] : [tabIds],
+              moveInfo: { ...moveInfo }
+            });
+            return {};
+          };
+
+          const windowNode = await addChild(tree.root, {
+            id: 'w1',
+            type: 'window',
+            windowId: 10,
+            loaded: true,
+            expanded: true
+          });
+          const first = await addChild(windowNode, {
+            id: 't1',
+            tabId: 1,
+            windowId: 10,
+            loaded: true
+          });
+          const second = await addChild(windowNode, {
+            id: 't2',
+            tabId: 2,
+            windowId: 10,
+            loaded: true
+          });
+
+          windowNode.reorderAllTabsInThisWindow =
+            Node.prototype.reorderAllTabsInThisWindow;
+          first.reorderAllTabsInThisWindow =
+            Node.prototype.reorderAllTabsInThisWindow;
+          second.reorderAllTabsInThisWindow =
+            Node.prototype.reorderAllTabsInThisWindow;
+
+          await second.moveTo(windowNode, 0, { reason: 'userAction' });
+
+          assertEqual(moveCalls.length, 1, 'Should reorder browser tabs once');
+          assertEqual(moveCalls[0].moveInfo.index, 1,
+            'Should start reordering after pinned tabs');
+          assertEqual(moveCalls[0].tabIds.join(','), '2,1',
+            'Should preserve tree order for movable tabs');
+        } finally {
+          api.tabs.move = originalTabsMove;
+          api.tabs.query = originalTabsQuery;
+        }
+      });
+
       testGroup('Tree Utilities');
       test('findMatchingWindow honors exclude list', async () => {
         const tree = createTree();

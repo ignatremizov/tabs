@@ -1522,17 +1522,45 @@ export class Node {
           // get a list of all loaded tab nodes in this window node, in order
           const tabNodeList = windowNode.getLoadedTabs();
 
-          // tell browser to move *all* tabs in this window to that order
+          // Keep pinned tabs fixed at the front of the browser window.
+          // Browser tab indexes include the pinned prefix, but the tree only
+          // models the movable strip, so reorders must start at the first
+          // unpinned index instead of absolute zero.
+          let browserTabs = [];
+          try {
+            browserTabs = await api.tabs.query({ windowId: windowNode.windowId });
+          } catch (err) {
+            warn(`Node.reorderAllTabsInThisWindow(): tab query failed: ${err}`);
+          }
+          const browserTabMap = new Map();
+          let firstMovableIndex = 0;
+          let sawUnpinnedTab = false;
+          for (const tab of browserTabs) {
+            browserTabMap.set(tab.id, tab);
+            if (! sawUnpinnedTab) {
+              if (tab && (! tab.pinned)) {
+                sawUnpinnedTab = true;
+              } else {
+                firstMovableIndex += 1;
+              }
+            }
+          }
+
+          // tell browser to move all movable tabs in this window to tree order
           const tabIds = [];
-          for (const node of tabNodeList)
-            if (node.tabId) tabIds.push(node.tabId);
+          for (const node of tabNodeList) {
+            if (! node.tabId) continue;
+            const browserTab = browserTabMap.get(node.tabId);
+            if (browserTab && browserTab.pinned) continue;
+            tabIds.push(node.tabId);
+          }
 
           debug(`Node.reorderAllTabsInThisWindow():`, tabIds);
 
           // attempt to reorder the tabs
           if (tabIds.length > 0)
             await api.tabs.move(tabIds,
-              { index: 0, windowId: windowNode.windowId });
+              { index: firstMovableIndex, windowId: windowNode.windowId });
           debug('tab reorder success');
           success = true;
           tries ++;
