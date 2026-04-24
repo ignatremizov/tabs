@@ -2,7 +2,7 @@
 # Copyright (C) 2025 Selene ToyKeeper & Ignat Remizov
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-.PHONY: all help firefox-zip chrome-zip chrome-dir firefox-sign tag test test-node todo coverage v
+.PHONY: all help firefox-zip firefox-zip-current chrome-zip chrome-dir firefox-sign tag test test-node todo coverage v
 
 ifneq ($(filter v,$(MAKECMDGOALS)),)
 VERBOSE=1
@@ -18,6 +18,7 @@ help:
 	@echo "Available targets:"
 	@echo "  all          - Build both Firefox and Chrome zip files"
 	@echo "  firefox-zip  - Build Firefox extension zip file"
+	@echo "  firefox-zip-current - Build Firefox zip with current manifest version"
 	@echo "  chrome-zip   - Build Chrome/Chromium extension zip file"
 	@echo "  chrome-dir   - Create dist/chromium for Load Unpacked"
 	@echo "  firefox-sign - Sign Firefox extension via AMO (requires .env JWT_ISSUER/JWT_SECRET)"
@@ -32,6 +33,9 @@ help:
 # about:debugging#/runtime/this-firefox -> Load Temporary Add-On
 firefox-zip:
 	./bin/update-version.sh
+	./make-zip.sh firefox
+
+firefox-zip-current:
 	./make-zip.sh firefox
 
 chrome-zip:
