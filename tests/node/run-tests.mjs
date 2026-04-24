@@ -423,6 +423,60 @@ test('bkgd_pruneOps removes ops with missing node targets', async () => {
   assert(db.ops.has('op-valid'), 'Should keep ops with valid targets');
 });
 
+test('startup purges stale browser move ops without deleting fresh ops', async () => {
+  const db = new FakeOpsDb();
+  const bkgd = new Bkgd();
+  bkgd.opsQueue = new OpsQueue(db, { idGen: { newId: () => 'op-x' } });
+  bkgd.bootStartedAt = 2000;
+
+  db.ops.set('op-old-browser-move', {
+    opId: 'op-old-browser-move',
+    state: 'pending',
+    name: 'ensureMoved',
+    source: 'browserEvent',
+    createdAt: 1000,
+    updatedAt: 1000,
+    payload: {}
+  });
+  db.ops.set('op-fresh-browser-move', {
+    opId: 'op-fresh-browser-move',
+    state: 'pending',
+    name: 'ensureMoved',
+    source: 'browserEvent',
+    createdAt: 3000,
+    updatedAt: 3000,
+    payload: {}
+  });
+  db.ops.set('op-view-move', {
+    opId: 'op-view-move',
+    state: 'pending',
+    name: 'ensureMoved',
+    source: 'view',
+    createdAt: 1000,
+    updatedAt: 1000,
+    payload: {}
+  });
+  db.ops.set('op-browser-unload', {
+    opId: 'op-browser-unload',
+    state: 'pending',
+    name: 'ensureUnloaded',
+    source: 'browserEvent',
+    createdAt: 1000,
+    updatedAt: 1000,
+    payload: {}
+  });
+
+  const removed = await bkgd.purgeStaleBrowserEventMoveOps();
+
+  assertEqual(removed, 1, 'Should remove only stale browser move ops');
+  assert(! db.ops.has('op-old-browser-move'),
+    'Should delete pre-boot browser move op');
+  assert(db.ops.has('op-fresh-browser-move'),
+    'Should keep fresh browser move op');
+  assert(db.ops.has('op-view-move'), 'Should keep view move op');
+  assert(db.ops.has('op-browser-unload'), 'Should keep non-move browser op');
+});
+
 test('OpsQueue countPendingOps returns pending count', async () => {
   const db = new FakeOpsDb();
   const queue = new OpsQueue(db, { idGen: { newId: () => 'op-x' } });

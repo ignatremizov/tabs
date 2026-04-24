@@ -160,7 +160,9 @@ export async function runReconcile ({ reason } = {}) {
   bkgd.reconcileInFlight = true;
   let didWork = false;
   try {
-    await bkgd.treeLoaded;
+    if ('startup' !== reason) {
+      await bkgd.treeLoaded;
+    }
     let windows;
     try {
       windows = await api.windows.getAll({ populate: true });
@@ -305,7 +307,7 @@ export async function runReconcile ({ reason } = {}) {
       }
     }
 
-    if (didWork) {
+    if (didWork && ('startup' !== reason)) {
       await emit('tree_refreshAll', {});
     }
     log(`runReconcile(${reason}) done; changed=${didWork}`);

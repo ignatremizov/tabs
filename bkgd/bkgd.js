@@ -40,6 +40,7 @@ export class Bkgd {
       this.resolveTreeLoaded = resolve;
     });
     this.backupQueued = false;
+    this.bootStartedAt = Date.now();
 
     // queues for saved nodes which are in the process of being loaded
     // (empty except during brief moments before browser opens stuff)
@@ -105,23 +106,23 @@ export class Bkgd {
       // give the tree a link to the bkgd object
       this.tree.bkgd = this;
       //  actually load the tree from storage
-      this.tree.init().then(() => {
+      this.tree.init().then(async () => {
         debug('Bkgd.resolveTreeDbLoaded()');
         this.resolveTreeDbLoaded();  // let listeners know the IDB is loaded
         this.idGen.cache = this.tree.nodes;
         // grab all the open windows and tabs, and put them in the tree
-        this.mergeOpenWindowsIntoTree().then(() => {
-          // and if this is the first boot, add tutorial nodes
-          if (this.tree.needsTutorial) {
-            createNewUserTutorialNodes(this.tree);
-          }
-          runReconcile.call(this, { reason: 'startup' });
-          // tree is ready to use
-          debug('Bkgd.resolveTreeLoaded()');
-          this.resolveTreeLoaded();  // let listeners know the tree is loaded
-          this.tree.resolveTreeLoaded();
-          this.scheduleOpsProcessing();
-        });
+        await this.mergeOpenWindowsIntoTree();
+        // and if this is the first boot, add tutorial nodes
+        if (this.tree.needsTutorial) {
+          createNewUserTutorialNodes(this.tree);
+        }
+        await this.purgeStaleBrowserEventMoveOps();
+        await runReconcile.call(this, { reason: 'startup' });
+        // tree is ready to use
+        debug('Bkgd.resolveTreeLoaded()');
+        this.resolveTreeLoaded();  // let listeners know the tree is loaded
+        this.tree.resolveTreeLoaded();
+        this.scheduleOpsProcessing();
       });
     });
 
@@ -377,6 +378,31 @@ export class Bkgd {
         await this.opsQueue.db.deleteOp(op.opId);
         removed += 1;
       }
+    }
+    return removed;
+  }
+
+  async purgeStaleBrowserEventMoveOps ({ limit = 0 } = {}) {
+    if (! this.opsQueue) return 0;
+    const states = ['pending', 'running', 'failed'];
+    const bootStartedAt = this.bootStartedAt || Date.now();
+    const enforceLimit = Number.isFinite(limit) && (limit > 0);
+    let removed = 0;
+    for (const state of states) {
+      if (enforceLimit && (removed >= limit)) break;
+      const batchLimit = enforceLimit ? (limit - removed) : 0;
+      const ops = await this.opsQueue.listOpsByState(state, batchLimit);
+      for (const op of ops) {
+        if (enforceLimit && (removed >= limit)) break;
+        if (op.source !== 'browserEvent') continue;
+        if (op.name !== 'ensureMoved') continue;
+        if ((op.createdAt || 0) >= bootStartedAt) continue;
+        await this.opsQueue.db.deleteOp(op.opId);
+        removed += 1;
+      }
+    }
+    if (removed > 0) {
+      debug(`purgeStaleBrowserEventMoveOps: removed ${removed} stale ops`);
     }
     return removed;
   }

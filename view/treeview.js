@@ -2516,6 +2516,10 @@ export class TreeView extends Tree {
     // Re-render the entire tree (used after batch updates like favicon backfill)
     try {
       debug('TreeView.tree_refreshAll()');
+      if (! this.viewRoot || ! this.$treeRoot) {
+        debug('TreeView.tree_refreshAll() skipped before initial render');
+        return;
+      }
       this.$renderWholeTree();
     } catch (err) {
       error('TreeView.tree_refreshAll() failed', err, msg);
