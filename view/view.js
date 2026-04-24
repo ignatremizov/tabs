@@ -10,7 +10,6 @@ import { TreeView } from './treeview.js';
 
 log('/view/view.js running');
 
-
 function init() {
   let tree = new TreeView();
   tree.init();
@@ -22,4 +21,3 @@ function init() {
 document.addEventListener('DOMContentLoaded', () => {
   const tree = init();
 });
-
