@@ -215,16 +215,27 @@
       let base32encode;
       let IdGenerator;
       let Bkgd;
+      let NodeView;
       try {
         const cacheBust = `?v=${Date.now()}`;
-        const [treeMod, nodeMod, commonMod, optionsMod, base32Mod, idGenMod, bkgdMod] = await Promise.all([
+        const [
+          treeMod,
+          nodeMod,
+          commonMod,
+          optionsMod,
+          base32Mod,
+          idGenMod,
+          bkgdMod,
+          nodeViewMod
+        ] = await Promise.all([
           import('../common/tree.js' + cacheBust),
           import('../common/node.js' + cacheBust),
           import('../common/common.js' + cacheBust),
           import('../options/client-id-form.js' + cacheBust),
           import('../common/base32.js' + cacheBust),
           import('../common/id-generator.js' + cacheBust),
-          import('../bkgd/bkgd.js' + cacheBust)
+          import('../bkgd/bkgd.js' + cacheBust),
+          import('../view/nodeview.js' + cacheBust)
         ]);
         Tree = treeMod.Tree;
         Node = nodeMod.Node;
@@ -235,6 +246,7 @@
         base32encode = base32Mod.base32encode;
         IdGenerator = idGenMod.IdGenerator;
         Bkgd = bkgdMod.Bkgd;
+        NodeView = nodeViewMod.NodeView;
       } catch (err) {
         $summary.textContent = `Failed to load modules: ${err}`;
         $summary.className = 'has-fail';
@@ -509,6 +521,58 @@
         const index = parent.nodes.length;
         return await parent.addChild(index, details, { reason: 'test' });
       }
+
+      testGroup('Rendering');
+      test('NodeView renders pinned tab icon', async () => {
+        const tree = new Tree(NodeView);
+        tree.document = document;
+        tree.window = window;
+        tree.resolveTreeLoaded();
+        const node = await addChild(tree.root, {
+          id: 'pinned-tab',
+          title: 'Pinned Tab',
+          url: 'https://example.com/pinned',
+          tabId: 10,
+          windowId: 1,
+          loaded: true,
+          pinned: true
+        });
+
+        node.$render();
+
+        const $pin = node.$row.querySelector('.node-pin-icon');
+        assert($pin, 'Pinned node should render a pin icon');
+        assertEqual($pin.textContent, '📌', 'Pin icon should use pin glyph');
+        assertEqual($pin.getAttribute('aria-label'), 'Pinned tab',
+          'Pin icon should expose an accessible label');
+        assert(node.$row.classList.contains('pinned'),
+          'Pinned node row should have pinned class');
+      });
+
+      test('NodeView removes pinned tab icon after unpin', async () => {
+        const tree = new Tree(NodeView);
+        tree.document = document;
+        tree.window = window;
+        tree.resolveTreeLoaded();
+        const node = await addChild(tree.root, {
+          id: 'pin-toggle-tab',
+          title: 'Pinned Tab',
+          url: 'https://example.com/pinned',
+          tabId: 10,
+          windowId: 1,
+          loaded: true,
+          pinned: true
+        });
+
+        node.$render();
+        node.pinned = false;
+        node.$render();
+
+        assert(! node.$row.querySelector('.node-pin-icon'),
+          'Unpinned node should not render a pin icon');
+        assert(! node.$row.classList.contains('pinned'),
+          'Unpinned node row should not keep pinned class');
+      });
 
       testGroup('Tab Removal');
       test('onTabRemoved removes boring last tab and window', async () => {

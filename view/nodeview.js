@@ -146,6 +146,8 @@ export class NodeView extends Node {
     else this.$row.classList.remove('frozen');
     if (this.hidden) this.$row.classList.add('tab-hidden');
     else this.$row.classList.remove('tab-hidden');
+    if (this.pinned) this.$row.classList.add('pinned');
+    else this.$row.classList.remove('pinned');
 
     // title row text
     // full row: [3/14] [X] @ Label Text ~ <a href="link">Link Title</a>
@@ -195,6 +197,16 @@ export class NodeView extends Node {
       $ckbox.className = 'node-checkbox ' + cbType;
       $ckbox.textContent = cbText;
       this.$row.append($ckbox);
+    }
+
+    // pinned tab marker
+    if (this.pinned) {
+      const $pinIcon = doc.createElement('span');
+      $pinIcon.className = 'node-pin-icon';
+      $pinIcon.textContent = '📌';
+      $pinIcon.title = 'Pinned tab';
+      $pinIcon.setAttribute('aria-label', 'Pinned tab');
+      this.$row.append($pinIcon);
     }
 
     // favicon

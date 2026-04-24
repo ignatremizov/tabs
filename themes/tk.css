@@ -331,6 +331,18 @@ body:not(.unfocused) *:hover::-webkit-scrollbar-thumb {
   margin-right: 0.25em;
 }
 
+.node-pin-icon {
+  display: inline-block;
+  width: 1em;
+  margin-right: 0.2em;
+  color: var(--pinned-icon-fg, var(--label-loaded-fg));
+  font-size: 0.85em;
+  line-height: 1;
+  text-align: center;
+  vertical-align: middle;
+  text-shadow: var(--medium-text-shadow);
+}
+
 .row a {
   text-decoration: none;
 }
@@ -1017,6 +1029,7 @@ foo {
     #00000080  0.07em 0.10em 0.15em,
     #000000a0  0.10em 0.15em 0.25em;
   /***** main tree view *****/
+  --pinned-icon-fg: #ffd45a;
   /***** tree lines *****/
   --tree-line-dragging: #f0f;
   /***** window nodes *****/
