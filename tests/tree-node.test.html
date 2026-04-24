@@ -1401,6 +1401,413 @@
         }
       });
 
+      test('browser tab move within a window tree promotes children in place', async () => {
+        const tree = createTree();
+        const api = getApi();
+        const originalTabsGet = api.tabs.get;
+        const originalTabsQuery = api.tabs.query;
+        try {
+          const windowNode = await addChild(tree.root, {
+            id: 'window',
+            type: 'window',
+            windowId: 10,
+            loaded: true,
+            expanded: true
+          });
+          const sourceAnchor = await addChild(windowNode, {
+            id: 'source-anchor',
+            tabId: 9,
+            windowId: 10,
+            loaded: true,
+            title: 'Source anchor'
+          });
+          const moved = await addChild(windowNode, {
+            id: 'moved',
+            tabId: 1,
+            windowId: 10,
+            loaded: true,
+            title: 'Moved tab'
+          });
+          const childOne = await addChild(moved, {
+            id: 'child-one',
+            tabId: 2,
+            windowId: 10,
+            loaded: true,
+            title: 'Former child one'
+          });
+          const childTwo = await addChild(moved, {
+            id: 'child-two',
+            tabId: 3,
+            windowId: 10,
+            loaded: true,
+            title: 'Former child two'
+          });
+          const childThree = await addChild(moved, {
+            id: 'child-three',
+            tabId: 4,
+            windowId: 10,
+            loaded: true,
+            title: 'Former child three'
+          });
+          const sourceTail = await addChild(windowNode, {
+            id: 'source-tail',
+            tabId: 5,
+            windowId: 10,
+            loaded: true,
+            title: 'Source tail'
+          });
+
+          const before = treeSnapshot(tree.root);
+
+          api.tabs.get = async (tabId) => ({
+            id: tabId,
+            windowId: 10,
+            pinned: false
+          });
+          api.tabs.query = async (queryInfo) => {
+            assertEqual(queryInfo.windowId, 10, 'Should query moved window');
+            return [
+              { id: 9, index: 0, windowId: 10, pinned: false },
+              { id: 2, index: 1, windowId: 10, pinned: false },
+              { id: 3, index: 2, windowId: 10, pinned: false },
+              { id: 4, index: 3, windowId: 10, pinned: false },
+              { id: 5, index: 4, windowId: 10, pinned: false },
+              { id: 1, index: 5, windowId: 10, pinned: false }
+            ];
+          };
+
+          await tree.onTabMoved(1, {
+            windowId: 10,
+            fromIndex: 1,
+            toIndex: 5
+          });
+
+          const after = treeSnapshot(tree.root);
+          const snap = { before, after };
+
+          assertEqualWithSnapshot(
+            moved.nodes.length,
+            0,
+            'Browser tab move should not keep children under moved tab node',
+            snap
+          );
+          assertEqualWithSnapshot(
+            windowNode.nodes[0],
+            sourceAnchor,
+            'Source anchor should remain before promoted children',
+            snap
+          );
+          assertEqualWithSnapshot(
+            windowNode.nodes[1],
+            childOne,
+            'First former child should be promoted in same window tree',
+            snap
+          );
+          assertEqualWithSnapshot(
+            windowNode.nodes[2],
+            childTwo,
+            'Second former child should be promoted in same window tree',
+            snap
+          );
+          assertEqualWithSnapshot(
+            windowNode.nodes[3],
+            childThree,
+            'Third former child should be promoted in same window tree',
+            snap
+          );
+          assertEqualWithSnapshot(
+            windowNode.nodes[4],
+            sourceTail,
+            'Source tail should remain after promoted children',
+            snap
+          );
+          assertEqualWithSnapshot(
+            windowNode.nodes[5],
+            moved,
+            'Moved tab should land at browser-reported same-window index',
+            snap
+          );
+          assertEqualWithSnapshot(
+            tree.reorderCalled,
+            undefined,
+            'Browser-originated tree correction should not reorder browser tabs',
+            snap
+          );
+
+          return snap;
+        } finally {
+          api.tabs.get = originalTabsGet;
+          api.tabs.query = originalTabsQuery;
+        }
+      });
+
+      test('browser tab move can land between promoted children', async () => {
+        const tree = createTree();
+        const api = getApi();
+        const originalTabsGet = api.tabs.get;
+        const originalTabsQuery = api.tabs.query;
+        try {
+          const windowNode = await addChild(tree.root, {
+            id: 'window',
+            type: 'window',
+            windowId: 10,
+            loaded: true,
+            expanded: true
+          });
+          const moved = await addChild(windowNode, {
+            id: 'a-moved',
+            tabId: 1,
+            windowId: 10,
+            loaded: true,
+            title: 'A moved tab'
+          });
+          const childB = await addChild(moved, {
+            id: 'b-child',
+            tabId: 2,
+            windowId: 10,
+            loaded: true,
+            title: 'B former child'
+          });
+          const childC = await addChild(moved, {
+            id: 'c-child',
+            tabId: 3,
+            windowId: 10,
+            loaded: true,
+            title: 'C former child'
+          });
+          const siblingD = await addChild(windowNode, {
+            id: 'd-sibling',
+            tabId: 4,
+            windowId: 10,
+            loaded: true,
+            title: 'D sibling'
+          });
+
+          const before = treeSnapshot(tree.root);
+
+          api.tabs.get = async (tabId) => ({
+            id: tabId,
+            windowId: 10,
+            pinned: false
+          });
+          api.tabs.query = async (queryInfo) => {
+            assertEqual(queryInfo.windowId, 10, 'Should query moved window');
+            return [
+              { id: 2, index: 0, windowId: 10, pinned: false },
+              { id: 1, index: 1, windowId: 10, pinned: false },
+              { id: 3, index: 2, windowId: 10, pinned: false },
+              { id: 4, index: 3, windowId: 10, pinned: false }
+            ];
+          };
+
+          await tree.onTabMoved(1, {
+            windowId: 10,
+            fromIndex: 0,
+            toIndex: 1
+          });
+
+          const after = treeSnapshot(tree.root);
+          const snap = { before, after };
+
+          assertEqualWithSnapshot(
+            moved.nodes.length,
+            0,
+            'Moved tab should not keep children after browser tab move',
+            snap
+          );
+          assertEqualWithSnapshot(
+            windowNode.nodes.map((node) => node.id).join(','),
+            'b-child,a-moved,c-child,d-sibling',
+            'Browser order B,A,C,D should become sibling order B,A,C,D',
+            snap
+          );
+          assertEqualWithSnapshot(
+            childB.parent,
+            windowNode,
+            'B should be promoted before moved tab',
+            snap
+          );
+          assertEqualWithSnapshot(
+            childC.parent,
+            windowNode,
+            'C should be promoted after moved tab',
+            snap
+          );
+          assertEqualWithSnapshot(
+            siblingD.parent,
+            windowNode,
+            'D should remain in the same window tree',
+            snap
+          );
+
+          return snap;
+        } finally {
+          api.tabs.get = originalTabsGet;
+          api.tabs.query = originalTabsQuery;
+        }
+      });
+
+      test('browser tab move between window trees promotes children in place', async () => {
+        const tree = createTree();
+        const api = getApi();
+        const originalTabsGet = api.tabs.get;
+        const originalTabsQuery = api.tabs.query;
+        try {
+          const sourceWindow = await addChild(tree.root, {
+            id: 'source-window',
+            type: 'window',
+            windowId: 10,
+            loaded: true,
+            expanded: true
+          });
+          const destWindow = await addChild(tree.root, {
+            id: 'dest-window',
+            type: 'window',
+            windowId: 20,
+            loaded: true,
+            expanded: true
+          });
+          const sourceAnchor = await addChild(sourceWindow, {
+            id: 'source-anchor',
+            tabId: 9,
+            windowId: 10,
+            loaded: true,
+            title: 'Source anchor'
+          });
+          const moved = await addChild(sourceWindow, {
+            id: 'moved',
+            tabId: 1,
+            windowId: 10,
+            loaded: true,
+            title: 'Moved tab'
+          });
+          const childOne = await addChild(moved, {
+            id: 'child-one',
+            tabId: 2,
+            windowId: 10,
+            loaded: true,
+            title: 'Former child one'
+          });
+          const childTwo = await addChild(moved, {
+            id: 'child-two',
+            tabId: 3,
+            windowId: 10,
+            loaded: true,
+            title: 'Former child two'
+          });
+          const childThree = await addChild(moved, {
+            id: 'child-three',
+            tabId: 4,
+            windowId: 10,
+            loaded: true,
+            title: 'Former child three'
+          });
+          const sourceTail = await addChild(sourceWindow, {
+            id: 'source-tail',
+            tabId: 5,
+            windowId: 10,
+            loaded: true,
+            title: 'Source tail'
+          });
+          const destAnchor = await addChild(destWindow, {
+            id: 'dest-anchor',
+            tabId: 20,
+            windowId: 20,
+            loaded: true,
+            title: 'Destination anchor'
+          });
+
+          const before = treeSnapshot(tree.root);
+
+          api.tabs.get = async (tabId) => ({
+            id: tabId,
+            windowId: 20,
+            pinned: false
+          });
+          api.tabs.query = async (queryInfo) => {
+            assertEqual(queryInfo.windowId, 20, 'Should query destination window');
+            return [
+              { id: 20, index: 0, windowId: 20, pinned: false },
+              { id: 1, index: 1, windowId: 20, pinned: false }
+            ];
+          };
+
+          await tree.onTabAttached(1, {
+            newWindowId: 20,
+            newPosition: 1
+          });
+
+          const after = treeSnapshot(tree.root);
+          const snap = { before, after };
+
+          assertEqualWithSnapshot(
+            moved.nodes.length,
+            0,
+            'Browser tab move should not keep children under moved tab node',
+            snap
+          );
+          assertEqualWithSnapshot(
+            sourceWindow.nodes[0],
+            sourceAnchor,
+            'Source anchor should remain before promoted children',
+            snap
+          );
+          assertEqualWithSnapshot(
+            sourceWindow.nodes[1],
+            childOne,
+            'First former child should be promoted in source tree',
+            snap
+          );
+          assertEqualWithSnapshot(
+            sourceWindow.nodes[2],
+            childTwo,
+            'Second former child should be promoted in source tree',
+            snap
+          );
+          assertEqualWithSnapshot(
+            sourceWindow.nodes[3],
+            childThree,
+            'Third former child should be promoted in source tree',
+            snap
+          );
+          assertEqualWithSnapshot(
+            sourceWindow.nodes[4],
+            sourceTail,
+            'Source tail should remain after promoted children',
+            snap
+          );
+          assertEqualWithSnapshot(
+            destWindow.nodes[0],
+            destAnchor,
+            'Destination anchor should remain before moved tab',
+            snap
+          );
+          assertEqualWithSnapshot(
+            destWindow.nodes[1],
+            moved,
+            'Moved tab should land in destination tree at browser-reported index',
+            snap
+          );
+          assertEqualWithSnapshot(
+            moved.windowId,
+            20,
+            'Moved tab node should adopt destination window ID',
+            snap
+          );
+          assertEqualWithSnapshot(
+            tree.reorderCalled,
+            undefined,
+            'Browser-originated tree correction should not reorder browser tabs',
+            snap
+          );
+
+          return snap;
+        } finally {
+          api.tabs.get = originalTabsGet;
+          api.tabs.query = originalTabsQuery;
+        }
+      });
+
       testGroup('Tree Utilities');
       test('findMatchingWindow honors exclude list', async () => {
         const tree = createTree();

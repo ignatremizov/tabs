@@ -26,6 +26,8 @@ export class Tree {
     this.markedNodes = [];
     this.pendingMoves = new Map();
     this.pendingMoveTimeoutMs = 2000;
+    this.suppressedTabMoves = new Map();
+    this.suppressedTabMoveTimeoutMs = 2000;
 
     // holds tabIds of "tabs" we need to ignore,
     // like Vivaldi panels
@@ -54,6 +56,7 @@ export class Tree {
       'loaded',
       'wasLoaded',
       'active',
+      'pinned',
       'marked',
       'checkbox',
       'checkboxPx',
@@ -101,6 +104,37 @@ export class Tree {
     }
   }
 
+  suppressTabMovedEvents (windowId, tabIds) {
+    if ((undefined === windowId) || (null === windowId)) return;
+    const ids = Array.isArray(tabIds) ? tabIds : [tabIds];
+    const until = Date.now() + this.suppressedTabMoveTimeoutMs;
+    for (const tabId of ids) {
+      if ((undefined === tabId) || (null === tabId)) continue;
+      this.suppressedTabMoves.set(`${windowId}:${tabId}`, until);
+    }
+  }
+
+  clearSuppressedTabMovedEvents (windowId, tabIds) {
+    if ((undefined === windowId) || (null === windowId)) return;
+    const ids = Array.isArray(tabIds) ? tabIds : [tabIds];
+    for (const tabId of ids) {
+      if ((undefined === tabId) || (null === tabId)) continue;
+      this.suppressedTabMoves.delete(`${windowId}:${tabId}`);
+    }
+  }
+
+  isSuppressedTabMovedEvent (windowId, tabId) {
+    const key = `${windowId}:${tabId}`;
+    const until = this.suppressedTabMoves.get(key);
+    if (! until) return false;
+    if (Date.now() > until) {
+      this.suppressedTabMoves.delete(key);
+      return false;
+    }
+    this.suppressedTabMoves.delete(key);
+    return true;
+  }
+
   destroy () {
   }
 
@@ -126,7 +160,16 @@ export class Tree {
 
   initListeners () {
     api.runtime.onMessage.addListener( (msg, sender, sendResponse) => {
-      this.onMessage(msg, sender, sendResponse);
+      try {
+        const result = this.onMessage(msg, sender, sendResponse);
+        if (result && ('function' === typeof result.then)) {
+          result.catch((err) => {
+            error(`Tree.onMessage(${msg && msg.msg ? msg.msg : 'unknown'}) failed`, err, msg);
+          });
+        }
+      } catch (err) {
+        error(`Tree.onMessage(${msg && msg.msg ? msg.msg : 'unknown'}) failed`, err, msg);
+      }
     });
   }
 
@@ -474,6 +517,155 @@ export class Tree {
     return tab.url;
   }
 
+  async getWindowPinnedPrefixCount (windowId) {
+    let tabs;
+    try {
+      tabs = await api.tabs.query({ windowId });
+    } catch (err) {
+      warn(`Tree.getWindowPinnedPrefixCount(${windowId}) failed: ${err}`);
+      return 0;
+    }
+    tabs.sort((a, b) => (a.index || 0) - (b.index || 0));
+    let count = 0;
+    for (const tab of tabs) {
+      if (tab && tab.pinned) count += 1;
+      else break;
+    }
+    return count;
+  }
+
+  browserTabIndexToMovableIndex (index, pinnedPrefixCount) {
+    // Browser tab indexes count pinned tabs; tree placement for movable tabs
+    // must subtract that fixed prefix.
+    if (! Number.isInteger(index)) return null;
+    return index - pinnedPrefixCount;
+  }
+
+  getMovableLoadedTabs (windowNode, excludeNode = null) {
+    return windowNode.getLoadedTabs().filter((node) =>
+      (! node.pinned) && (node !== excludeNode)
+    );
+  }
+
+  getPinnedLoadedTabs (windowNode, excludeNode = null) {
+    return windowNode.getLoadedTabs().filter((node) =>
+      node.pinned && (node !== excludeNode)
+    );
+  }
+
+  getPinnedInsertDestination (windowNode, pinnedIndex, excludeNode = null) {
+    // When reordering an existing pinned node, exclude it before interpreting
+    // the browser's target index so rightward moves don't count the node twice.
+    const pinnedTabs = this.getPinnedLoadedTabs(windowNode, excludeNode);
+    if ((! Number.isInteger(pinnedIndex)) || (pinnedIndex <= 0)
+      || (pinnedTabs.length === 0)) {
+      return { destParent: windowNode, destIndex: 0 };
+    }
+    if (pinnedIndex >= pinnedTabs.length) {
+      const lastPinned = pinnedTabs[pinnedTabs.length - 1];
+      return {
+        destParent: lastPinned.parent,
+        destIndex: lastPinned.indexOf() + 1
+      };
+    }
+    const nextPinned = pinnedTabs[pinnedIndex];
+    return {
+      destParent: nextPinned.parent,
+      destIndex: nextPinned.indexOf()
+    };
+  }
+
+  getFirstMovableInsertDestination (windowNode) {
+    // Unpinned tabs must start after the pinned prefix, even when there are no
+    // other movable tabs in the tree yet.
+    const pinnedTabs = this.getPinnedLoadedTabs(windowNode);
+    if (pinnedTabs.length === 0) {
+      return { destParent: windowNode, destIndex: 0 };
+    }
+    const lastPinned = pinnedTabs[pinnedTabs.length - 1];
+    return {
+      destParent: lastPinned.parent,
+      destIndex: lastPinned.indexOf() + 1
+    };
+  }
+
+  getMovableInsertDestination (windowNode, movableIndex, excludeNode = null) {
+    // Use the movable strip only.  Excluding the moving node prevents stale tree
+    // position from turning pin/unpin transitions into false no-ops.
+    const tabList = this.getMovableLoadedTabs(windowNode, excludeNode);
+    if ((tabList.length === 0)
+      || (! Number.isInteger(movableIndex))
+      || (movableIndex <= 0)) {
+      return this.getFirstMovableInsertDestination(windowNode);
+    }
+    if (movableIndex >= tabList.length) {
+      const lastNode = tabList[tabList.length - 1];
+      return {
+        destParent: lastNode.parent,
+        destIndex: lastNode.indexOf() + 1
+      };
+    }
+    const nextNode = tabList[movableIndex];
+    return {
+      destParent: nextNode.parent,
+      destIndex: nextNode.indexOf()
+    };
+  }
+
+  async getBrowserEventTabDestination (tabNode, windowNode, browserIndex, pinned) {
+    if (pinned) {
+      return this.getPinnedInsertDestination(
+        windowNode,
+        browserIndex,
+        tabNode
+      );
+    }
+    const pinnedPrefixCount =
+      await this.getWindowPinnedPrefixCount(windowNode.windowId);
+    const movableIndex = this.browserTabIndexToMovableIndex(
+      browserIndex,
+      pinnedPrefixCount
+    );
+    return this.getMovableInsertDestination(
+      windowNode,
+      movableIndex,
+      tabNode
+    );
+  }
+
+  async moveTabNodeForBrowserEvent (
+    tabNode,
+    destParent,
+    destIndex,
+    reason,
+    details = {}
+  ) {
+    if (details.moveNodeOnly && tabNode.hasKids()) {
+      await tabNode.promoteKids({
+        reason,
+        skipTabReorder: true
+      });
+      if (details.windowNode && Number.isInteger(details.browserIndex)) {
+        const dest = await this.getBrowserEventTabDestination(
+          tabNode,
+          details.windowNode,
+          details.browserIndex,
+          details.pinned
+        );
+        destParent = dest.destParent;
+        destIndex = dest.destIndex;
+      }
+    }
+    if ((tabNode.parent === destParent)
+      && (tabNode.indexOf() === destIndex)) {
+      return;
+    }
+    return await tabNode.moveTo(destParent, destIndex, {
+      reason,
+      skipTabReorder: true
+    });
+  }
+
   async onWindowCreated (window, args) {
     // are we re-opening a saved window?
     let savedWindowNode;
@@ -590,8 +782,12 @@ export class Tree {
         discarded: tab.discarded,
         frozen: tab.frozen,
         hidden: tab.hidden,
-        incognito: tab.incognito
+        incognito: tab.incognito,
+        pinned: Boolean(tab.pinned || savedTabNode.pinned)
       }, { reason: 'onTabCreated' });
+      // If the browser reports the tab as still unpinned during restore, keep
+      // the saved pinned state until a real pinned update or pin failure lands.
+      if (tab.pinned) savedTabNode.pinRestorePending = false;
       // put the tab in the right position
       await savedTabNode.reorderAllTabsInThisWindow();
       return;
@@ -619,21 +815,33 @@ export class Tree {
     let destIndex = winNode.nodes.length;
 
     if (this.reorderTabsOnCreate === false) {
-      const tabList = winNode.getLoadedTabs();
-      if (tabList.length === 0) {
-        destParent = winNode;
-        destIndex = 0;
-      } else if ((tab.index === 0) || (! Number.isInteger(tab.index))) {
-        destParent = winNode;
-        destIndex = 0;
-      } else if (tab.index >= tabList.length) {
-        const lastNode = tabList[tabList.length - 1];
-        destParent = lastNode.parent;
-        destIndex = lastNode.indexOf() + 1;
+      const pinnedPrefixCount =
+        await this.getWindowPinnedPrefixCount(tab.windowId);
+      if (tab.pinned) {
+        const dest = this.getPinnedInsertDestination(winNode, tab.index);
+        destParent = dest.destParent;
+        destIndex = dest.destIndex;
       } else {
-        const prevNode = tabList[tab.index - 1];
-        destParent = prevNode.parent;
-        destIndex = prevNode.indexOf() + 1;
+        const movableIndex =
+          this.browserTabIndexToMovableIndex(tab.index, pinnedPrefixCount);
+        const tabList = this.getMovableLoadedTabs(winNode);
+        if (tabList.length === 0) {
+          const dest = this.getFirstMovableInsertDestination(winNode);
+          destParent = dest.destParent;
+          destIndex = dest.destIndex;
+        } else if ((movableIndex === null) || (movableIndex <= 0)) {
+          const dest = this.getFirstMovableInsertDestination(winNode);
+          destParent = dest.destParent;
+          destIndex = dest.destIndex;
+        } else if (movableIndex >= tabList.length) {
+          const lastNode = tabList[tabList.length - 1];
+          destParent = lastNode.parent;
+          destIndex = lastNode.indexOf() + 1;
+        } else {
+          const prevNode = tabList[movableIndex - 1];
+          destParent = prevNode.parent;
+          destIndex = prevNode.indexOf() + 1;
+        }
       }
     } else {
       // find the active tab so we can compare to the new tab
@@ -697,6 +905,7 @@ export class Tree {
       frozen: tab.frozen,
       hidden: tab.hidden,  // firefox only?
       incognito: tab.incognito,
+      pinned: Boolean(tab.pinned),
       atime: tab.lastAccessed
       }, { reason: 'onTabCreated' });
   }
@@ -804,62 +1013,85 @@ export class Tree {
       // FIXME: also shouldn't happen
       return error(`Tree.onTabMoved() can't find tabId="${tabId}"`);
     }
-    debug(`Tree.onTabMoved(): ${tabNode.toLine()}`);
-    // for later use
-    async function doTheMove(destParent, destIndex) {
-      return await tabNode.moveTo(destParent, destIndex, { reason: 'onTabMoved' });
-    }
-    // get the ordered list of tabs in this windowNode
-    let tabList = windowNode.getLoadedTabs();
-    if (tabList.length < 1) {
-      // this happens if I drag a tab into nowhere to create a new window,
-      // and it initially has no tabs
-      debug('Tree.onTabMoved(): new window?', moveInfo.fromIndex, moveInfo.toIndex);
-      return await doTheMove(windowNode, 0);
-    }
-    if (moveInfo.toIndex >= tabList.length) {
-      // this happens if I drag a tab into the end of another window
-      //return error(`Tree.onTabMoved() not enough tabs found in windowNode`);
-      let prevNode = tabList[moveInfo.toIndex - 1];
-      let destParent = prevNode.parent;
-      let destIndex = prevNode.indexOf() + 1;
-      debug('Tree.onTabMoved(): past end of window', moveInfo.fromIndex, moveInfo.toIndex);
-      return await doTheMove(destParent, destIndex);
-    }
-    // do nothing if the tab is already in the right place
-    // (this probably means we initiated the tabMove operation)
-    if (tabNode === tabList[moveInfo.toIndex]) {
-      debug('Tree.onTabMoved(): tab already at correct index', moveInfo.fromIndex, moveInfo.toIndex);
+    if (this.isSuppressedTabMovedEvent(moveInfo.windowId, tabId)) {
+      debug(`Tree.onTabMoved(${tabId}) ignored extension reorder event`);
       return;
     }
-    // if moving left, things are surprisingly easy...
-    // just insert immediately before the tab at the new location
-    if (moveInfo.toIndex < moveInfo.fromIndex) {
-      let prevNode = tabList[moveInfo.toIndex];
-      let destParent = prevNode.parent;
-      let destIndex = prevNode.indexOf();
-      // TODO: ideally should be just after the previous tab in the tree,
-      // but that's a lot harder to calculate
-      debug('Tree.onTabMoved(): moving left', moveInfo.fromIndex, moveInfo.toIndex);
-      return await doTheMove(destParent, destIndex);
+    let browserTab = null;
+    try {
+      browserTab = await api.tabs.get(tabId);
+    } catch (err) {
+      warn(`Tree.onTabMoved(${tabId}) tab lookup failed: ${err}`);
     }
-    // if moving right, then move to just before the next tab
-    // (Node.moveTo handles parent becoming its own child, so that's okay)
-    let nextNode = tabList[moveInfo.toIndex + 1];
-    if (nextNode) {
-      let destParent = nextNode.parent;
-      let destIndex = nextNode.indexOf();
-      debug('Tree.onTabMoved(): moving right', moveInfo.fromIndex, moveInfo.toIndex);
-      return await doTheMove(destParent, destIndex);
+    if (browserTab && tabNode.pinned !== Boolean(browserTab.pinned)) {
+      await tabNode.setTabFields(
+        { pinned: Boolean(browserTab.pinned) },
+        { reason: 'onTabMoved' }
+      );
     }
-    else {
-      // right-most tab
-      let lastNode = tabList[tabList.length - 1];
-      let destParent = lastNode.parent;
-      let destIndex = lastNode.indexOf() + 1;
-      debug('Tree.onTabMoved(): right-most tab', moveInfo.fromIndex, moveInfo.toIndex);
-      return await doTheMove(destParent, destIndex);
+    if ((browserTab && browserTab.pinned) || tabNode.pinned) {
+      const dest = this.getPinnedInsertDestination(
+        windowNode,
+        moveInfo.toIndex,
+        tabNode
+      );
+      if ((tabNode.parent === dest.destParent)
+        && (tabNode.indexOf() === dest.destIndex)
+        && ((! tabNode.hasKids()) || (moveInfo.fromIndex === moveInfo.toIndex))) {
+        debug('Tree.onTabMoved(): pinned tab already at correct index',
+          moveInfo.fromIndex, moveInfo.toIndex);
+        return;
+      }
+      return await this.moveTabNodeForBrowserEvent(
+        tabNode,
+        dest.destParent,
+        dest.destIndex,
+        'onTabMoved',
+        {
+          moveNodeOnly: moveInfo.fromIndex !== moveInfo.toIndex,
+          windowNode,
+          browserIndex: moveInfo.toIndex,
+          pinned: true
+        }
+      );
     }
+    const pinnedPrefixCount =
+      await this.getWindowPinnedPrefixCount(moveInfo.windowId);
+    const fromIndex = this.browserTabIndexToMovableIndex(
+      moveInfo.fromIndex,
+      pinnedPrefixCount
+    );
+    const toIndex = this.browserTabIndexToMovableIndex(
+      moveInfo.toIndex,
+      pinnedPrefixCount
+    );
+    if ((toIndex === null) || (toIndex < 0)) return;
+    debug(`Tree.onTabMoved(): ${tabNode.toLine()}`);
+    const dest = this.getMovableInsertDestination(
+      windowNode,
+      toIndex,
+      tabNode
+    );
+    if ((tabNode.parent === dest.destParent)
+      && ((tabNode.indexOf() === dest.destIndex)
+        || (tabNode.indexOf() + 1 === dest.destIndex))
+      && ((! tabNode.hasKids()) || (moveInfo.fromIndex === moveInfo.toIndex))) {
+      debug('Tree.onTabMoved(): tab already at correct index',
+        fromIndex, toIndex);
+      return;
+    }
+    return await this.moveTabNodeForBrowserEvent(
+      tabNode,
+      dest.destParent,
+      dest.destIndex,
+      'onTabMoved',
+      {
+        moveNodeOnly: moveInfo.fromIndex !== moveInfo.toIndex,
+        windowNode,
+        browserIndex: moveInfo.toIndex,
+        pinned: false
+      }
+    );
 
     // old: some thoughts on how this maybe should work
     // decide on a new position:
@@ -890,8 +1122,19 @@ export class Tree {
     const tabNode = this.getNodeByTabId(tabId);
     // if tab doesn't exist, do nothing
     if (! tabNode) return warn(`Tree.onTabAttached(${tabId}): no tab found`);
-    if (tabNode.windowId !== windowId) {
-      await tabNode.setTabFields({ windowId }, { reason: 'onTabAttached' });
+    let browserTab = null;
+    try {
+      browserTab = await api.tabs.get(tabId);
+    } catch (err) {
+      warn(`Tree.onTabAttached(${tabId}) tab lookup failed: ${err}`);
+    }
+    const attachmentChanges = {};
+    if (tabNode.windowId !== windowId) attachmentChanges.windowId = windowId;
+    if (browserTab && tabNode.pinned !== Boolean(browserTab.pinned)) {
+      attachmentChanges.pinned = Boolean(browserTab.pinned);
+    }
+    if (Object.keys(attachmentChanges).length > 0) {
+      await tabNode.setTabFields(attachmentChanges, { reason: 'onTabAttached' });
     }
 
     // find or create the window node
@@ -922,37 +1165,82 @@ export class Tree {
       //return;
     }
 
+    if ((browserTab && browserTab.pinned) || tabNode.pinned) {
+      const dest = this.getPinnedInsertDestination(
+        windowNode,
+        newIndex,
+        tabNode
+      );
+      if ((tabNode.getWindowNode(false) !== windowNode)
+        || (tabNode.parent !== dest.destParent)
+        || ((tabNode.indexOf() !== dest.destIndex)
+          && (tabNode.indexOf() + 1 !== dest.destIndex))) {
+        await this.moveTabNodeForBrowserEvent(
+          tabNode,
+          dest.destParent,
+          dest.destIndex,
+          'onTabAttached',
+          {
+            moveNodeOnly: true,
+            windowNode,
+            browserIndex: newIndex,
+            pinned: true
+          }
+        );
+      }
+      await windowNode.setActiveTab({ reason: 'onTabAttached' });
+      return;
+    }
     // get the ordered list of tabs in this windowNode
-    let tabList = windowNode.getLoadedTabs();
+    const pinnedPrefixCount = await this.getWindowPinnedPrefixCount(windowId);
+    const movableNewIndex =
+      this.browserTabIndexToMovableIndex(newIndex, pinnedPrefixCount);
+    if ((movableNewIndex === null) || (movableNewIndex < 0)) {
+      await windowNode.setActiveTab({ reason: 'onTabAttached' });
+      return;
+    }
+    let tabList = this.getMovableLoadedTabs(windowNode);
     let destParent;
     let destIndex;
     let skip = false;
     // already moved internally
     // (like, user moved it in the tree view, and the browser is catching up)
-    if (tabNode === tabList[newIndex]) {
+    if (tabNode === tabList[movableNewIndex]) {
       debug('Tree.onTabAttached(): already correct:', tabNode.toLine());
       skip = true;
     }
     // empty window
     else if (0 === tabList.length) {
-      destParent = windowNode;
-      destIndex = 0;
+      const dest = this.getFirstMovableInsertDestination(windowNode);
+      destParent = dest.destParent;
+      destIndex = dest.destIndex;
     }
     // right-most tab
-    else if (newIndex >= tabList.length) {
+    else if (movableNewIndex >= tabList.length) {
       const lastNode = tabList[tabList.length - 1];
       destParent = lastNode.parent;
       destIndex = lastNode.indexOf() + 1;
     }
     // middle or first tab
     else {
-      const nextNode = tabList[newIndex];
+      const nextNode = tabList[movableNewIndex];
       destParent = nextNode.parent;
       destIndex = nextNode.indexOf();
     }
     if (! skip) {
       debug('Tree.onTabAttached(): moving', tabNode.toLine(), destParent.toLine(), destIndex);
-      await tabNode.moveTo(destParent, destIndex, { reason: 'onTabAttached' });
+      await this.moveTabNodeForBrowserEvent(
+        tabNode,
+        destParent,
+        destIndex,
+        'onTabAttached',
+        {
+          moveNodeOnly: true,
+          windowNode,
+          browserIndex: newIndex,
+          pinned: false
+        }
+      );
     }
 
     // ensure only one tab is 'active'
@@ -995,12 +1283,22 @@ export class Tree {
     let changes = {};  // only changes we care about
     for (const field of
       ['title', 'url', 'favIconUrl',
-        'discarded', 'frozen', 'hidden']
+        'discarded', 'frozen', 'hidden', 'pinned']
     ) {
       // bugfix: sometimes Vivaldi gives me empty changeInfo,
       // so pull new values from tab object if necessary
       let value = changeInfo[field];
       if (undefined === value) value = tab[field];
+      if ('pinned' === field && tabNode.pinRestorePending) {
+        // Saved pinned tabs can emit an early false update before the browser
+        // accepts our pin request.  Ignore only the short one-way race; stale
+        // false updates after the guard window are treated as real unpins.
+        const guardMs = 2000;
+        const pendingAge = Date.now() - (tabNode.pinRestorePendingAt || 0);
+        if ((value === false) && (pendingAge <= guardMs)) continue;
+        tabNode.pinRestorePending = false;
+        tabNode.pinRestorePendingAt = 0;
+      }
       // clean up sloppy titles
       if ('title' === field) value = value.trim().replace(/\s+/g, ' ');
       // Map browser API's favIconUrl to our faviconUrl property for comparison
@@ -1008,10 +1306,51 @@ export class Tree {
       // if data actually changed, add it to the outgoing message
       if (tabNode[nodeField] !== value) changes[field] = value;
     }
+    const pinnedChanged = Object.prototype.hasOwnProperty.call(changes, 'pinned');
     // apply changes, if any
     if (Object.keys(changes).length > 0) {
       await tabNode.setTabFields(changes, { reason: 'onTabUpdated' });
     }
+    if (pinnedChanged) {
+      await this.repositionTabNodeAfterPinnedUpdate(tabNode, tab);
+    }
+  }
+
+  async repositionTabNodeAfterPinnedUpdate (tabNode, tab) {
+    const windowId = tab.windowId || tabNode.windowId;
+    const windowNode = this.root.getWindowId(windowId);
+    if (! windowNode) {
+      return warn(`Tree.repositionTabNodeAfterPinnedUpdate() can't find windowId="${windowId}"`);
+    }
+    let dest;
+    if (tabNode.pinned) {
+      dest = this.getPinnedInsertDestination(windowNode, tab.index, tabNode);
+    } else {
+      const pinnedPrefixCount = await this.getWindowPinnedPrefixCount(windowId);
+      const movableIndex = this.browserTabIndexToMovableIndex(
+        tab.index,
+        pinnedPrefixCount
+      );
+      if ((movableIndex === null) || (movableIndex < 0)) return;
+      dest = this.getMovableInsertDestination(windowNode, movableIndex, tabNode);
+    }
+    if ((tabNode.parent === dest.destParent)
+      && ((tabNode.indexOf() === dest.destIndex)
+        || (tabNode.indexOf() + 1 === dest.destIndex))) {
+      return;
+    }
+    return await this.moveTabNodeForBrowserEvent(
+      tabNode,
+      dest.destParent,
+      dest.destIndex,
+      'onTabUpdated',
+      {
+        moveNodeOnly: true,
+        windowNode,
+        browserIndex: tab.index,
+        pinned: tabNode.pinned
+      }
+    );
   }
 
   async onTabReplaced (addedTabId, removedTabId) {
@@ -1073,7 +1412,12 @@ export class Tree {
     if (handler) {
       // actually handle the event
       //debug(`Tree: ${msg.msg}()`);
-      handler.bind(this)(msg, sender, sendResponse);
+      const result = handler.bind(this)(msg, sender, sendResponse);
+      if (result && ('function' === typeof result.catch)) {
+        result.catch((err) => {
+          error(`Tree.${msg.msg}() failed`, err, msg);
+        });
+      }
       // FIXME: on sync error, tree should set an error state
       //   which can be exposed to the user to let them know they should
       //   reload the view or whatever...
@@ -1205,32 +1549,37 @@ export class Tree {
     msg.reason = 'tree_nodeChanged';
 
     // figure out what kind of change happened, and update it
-    if ('setExpanded' === changeType) {
-      return node.setExpanded(msg.expanded, msg);
-    }
-    else if ('setNotes' === changeType) {
-      return node.setNotes(msg.label, msg.note, msg);
-    }
-    else if ('setCheckbox' === changeType) {
-      return node.setCheckbox(msg.checkbox, msg);
-    }
-    else if ('setTabFields' === changeType) {
-      return node.setTabFields(msg.changes, msg);
-    }
-    else if ('setMarked' === changeType) {
-      return node.setMarked(msg.marked, msg);
-    }
-    else if ('setActive' === changeType) {
-      return node.setActive(msg.active, msg);
-    }
-    else if ('load' === changeType) {
-      return node.load(msg);
-    }
-    else if ('unload' === changeType) {
-      return node.unload(msg);
-    }
-    else {
-      return error(`tree_nodeChanged(): unsupported change type "${changeType}"`);
+    try {
+      if ('setExpanded' === changeType) {
+        return await node.setExpanded(msg.expanded, msg);
+      }
+      else if ('setNotes' === changeType) {
+        return await node.setNotes(msg.label, msg.note, msg);
+      }
+      else if ('setCheckbox' === changeType) {
+        return await node.setCheckbox(msg.checkbox, msg);
+      }
+      else if ('setTabFields' === changeType) {
+        return await node.setTabFields(msg.changes, msg);
+      }
+      else if ('setMarked' === changeType) {
+        return await node.setMarked(msg.marked, msg);
+      }
+      else if ('setActive' === changeType) {
+        return await node.setActive(msg.active, msg);
+      }
+      else if ('load' === changeType) {
+        return await node.load(msg);
+      }
+      else if ('unload' === changeType) {
+        return await node.unload(msg);
+      }
+      else {
+        return error(`tree_nodeChanged(): unsupported change type "${changeType}"`);
+      }
+    } catch (err) {
+      error(`tree_nodeChanged(${changeType}, ${nodeId}) failed`, err, msg);
+      return;
     }
   }
 
@@ -1312,25 +1661,33 @@ export class Tree {
       )) { if (! tabNodeList.includes(tabNode)) tabNodeList.push(tabNode); }
       // now attach browser tab IDs to nodes
       for (const tabNode of tabNodeList) {
-        let found = false;
-        for (const realTab of realTabList) {
-          // skip tabs we've already assigned to a node
-          if (realTab.attached) continue;
-          // this node matches the real tab
-          if (tabNode.url === realTab.url) {
-            found = true;
-            realTab.attached = true;
-            await tabNode.setTabFields({
-              tabId: realTab.id,
-              windowId: window.id,
-              loaded: true,
-              wasLoaded: false
-            }, { reason: 'mergeOpenWindowsIntoTree' });
-            break;  // stop searching realTabList for this tabNode
-          }
+        // Duplicate URLs are common for apps like Gmail/Drive.  Prefer the
+        // saved pinned state so startup pre-attachment does not swap pinned and
+        // unpinned copies before the full merge pass runs.
+        let realTab = realTabList.find((candidate) =>
+          (! candidate.attached)
+          && (tabNode.url === candidate.url)
+          && (tabNode.pinned === Boolean(candidate.pinned))
+        );
+        if (! realTab) {
+          // Fallback for older saved data or changed browser state; the later
+          // merge pass will refresh pinned state and reposition if needed.
+          realTab = realTabList.find((candidate) =>
+            (! candidate.attached) && (tabNode.url === candidate.url)
+          );
+        }
+        if (realTab) {
+          realTab.attached = true;
+          await tabNode.setTabFields({
+            tabId: realTab.id,
+            windowId: window.id,
+            loaded: true,
+            wasLoaded: false,
+            pinned: Boolean(realTab.pinned)
+          }, { reason: 'mergeOpenWindowsIntoTree' });
         }
         // if a "loaded" tab node wasn't found, assign it as "wasLoaded"
-        if ((! found) && tabNode.isLoaded()) {
+        if ((! realTab) && tabNode.isLoaded()) {
           await tabNode.unload({ reason: 'mergeOpenWindowsIntoTree' });
         }
       }
@@ -1346,8 +1703,21 @@ function tabArraysEqual(a, b) {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
     if (a[i].url !== b[i].url) return false;
+    if (Boolean(a[i].pinned) !== Boolean(b[i].pinned)) return false;
   }
   return true;
+}
+
+function countPinnedPositionMatches(candidate, needle) {
+  const limit = Math.min(candidate.length, needle.length);
+  let count = 0;
+  for (let i = 0; i < limit; i++) {
+    if ((candidate[i].url === needle[i].url)
+      && (Boolean(candidate[i].pinned) === Boolean(needle[i].pinned))) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 
@@ -1391,30 +1761,32 @@ function getWindowCandidateScore(candidate, needle) {
   // check if candidate is exclusively built from needle values
   const candidateIsSubset = candidate.every(v => tabArrayIncludes(needle, v));
 
+  const pinnedPositionMatches = countPinnedPositionMatches(candidate, needle);
+
   // category 1: exact match
   if (tabArraysEqual(candidate, needle))
-    return { category: 1, matchCount };
+    return { category: 1, matchCount, pinnedPositionMatches };
 
   // category 2 or 3: candidate contains all needle elements
   if (fullMatch) {
     // if the needle appears in order in the candidate,
     // it's a superset in order
     if (isTabSubSequence(needle, candidate))
-      return { category: 2, matchCount };
+      return { category: 2, matchCount, pinnedPositionMatches };
     else
-      return { category: 3, matchCount };
+      return { category: 3, matchCount, pinnedPositionMatches };
   }
 
   // category 4 or 5: candidate is made up solely of needle values
   if (candidateIsSubset) {
     if (isTabSubSequence(candidate, needle))
-      return { category: 4, matchCount };
+      return { category: 4, matchCount, pinnedPositionMatches };
     else
-      return { category: 5, matchCount };
+      return { category: 5, matchCount, pinnedPositionMatches };
   }
 
   // otherwise, candidate is a partial match that doesn't fit a category
-  return { category: 6, matchCount };
+  return { category: 6, matchCount, pinnedPositionMatches };
 }
 
 
@@ -1449,10 +1821,19 @@ function findClosestWindowMatch(needle, haystack) {
         bestScore = score;
         bestCandidate = candidate;
       }
+      // if URLs tie, prefer the candidate whose pinned positions line up.
+      else if ((score.category === bestScore.category)
+        && (score.matchCount === bestScore.matchCount)
+        && (score.pinnedPositionMatches > bestScore.pinnedPositionMatches)
+      ) {
+        bestScore = score;
+        bestCandidate = candidate;
+      }
       // if same category and same number of matches,
       // take the candidate with more metadata and children
       else if ((score.category === bestScore.category)
         && (score.matchCount === bestScore.matchCount)
+        && (score.pinnedPositionMatches === bestScore.pinnedPositionMatches)
       ) {
         const sMeta = (bestCandidate.winNode.label ? 1 : 0)
           + (bestCandidate.winNode.note ? 1 : 0)

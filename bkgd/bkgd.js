@@ -286,11 +286,9 @@ export class Bkgd {
 
   async ensureMoved (payload, op) {
     const node = this.tree.nodes[payload.nodeId];
-    const destParent = this.tree.nodes[payload.destParentId];
+    let destParent = this.tree.nodes[payload.destParentId];
     if (! node || ! destParent) return;
-    if (node.parent === destParent && node.indexOf() === payload.destIndex) {
-      return;
-    }
+    let destIndex = payload.destIndex;
     const args = {
       reason: payload.reason || 'tree_nodeMoved',
       when: payload.when
@@ -301,16 +299,44 @@ export class Bkgd {
     if (payload.prevParentId) {
       args.prevParentId = payload.prevParentId;
     }
+    if (payload.skipTabReorder) {
+      args.skipTabReorder = true;
+    }
+    if (payload.moveNodeOnly && node.hasKids()) {
+      await node.promoteKids({
+        reason: args.reason,
+        skipTabReorder: true
+      });
+    }
+    if (payload.moveNodeOnly
+      && Number.isInteger(payload.browserIndex)
+      && (undefined !== payload.browserWindowId)
+      && this.tree.getBrowserEventTabDestination) {
+      const windowNode = this.tree.root.getWindowId(payload.browserWindowId);
+      if (windowNode) {
+        const dest = await this.tree.getBrowserEventTabDestination(
+          node,
+          windowNode,
+          payload.browserIndex,
+          Boolean(payload.pinned)
+        );
+        destParent = dest.destParent;
+        destIndex = dest.destIndex;
+      }
+    }
+    if (node.parent === destParent && node.indexOf() === destIndex) {
+      return;
+    }
     if (this.tree.applyMoveForIntent) {
       return await this.tree.applyMoveForIntent(
         node,
         destParent,
-        payload.destIndex,
+        destIndex,
         args,
         op
       );
     }
-    return await node.moveTo(destParent, payload.destIndex, args);
+    return await node.moveTo(destParent, destIndex, args);
   }
 
   async ensureDeleted (payload, op) {
@@ -696,10 +722,47 @@ export class Bkgd {
         debug(`Tab ID: ${tab.id}, URL: ${tab.url}`, tab);
         const tabUrl = this.tree.getTabPendingUrl(tab);
         const localTabList = winNode.getLoadedAndUnloadedTabs();
+        const localPinnedTabList = localTabList.filter((node) => node.pinned);
+        const localMovableTabList = localTabList.filter((node) => ! node.pinned);
+        const getTabDestination = (tabNode = null) => {
+          // Startup merge receives browser indexes, where pinned tabs occupy a
+          // fixed prefix.  Convert those indexes into the correct tree sibling
+          // destination before creating or repositioning nodes.
+          if (tab.pinned) {
+            return this.tree.getPinnedInsertDestination(
+              winNode,
+              tab.index,
+              tabNode
+            );
+          }
+          const movableIndex = this.tree.browserTabIndexToMovableIndex(
+            tab.index,
+            pinnedPrefixCount
+          );
+          return this.tree.getMovableInsertDestination(
+            winNode,
+            movableIndex,
+            tabNode
+          );
+        };
         // detect whether tab is already in tree
         // (it usually should be, since findMatchingWindow() attaches tabIds)
         const attachedTabNode = this.tree.getNodeByTabId(tab.id);
         let tabNode = localTabList.find((node) => node.tabId === tab.id);
+        if ((! tabNode)
+          && attachedTabNode
+          && (attachedTabNode.getWindowNode(false) === winNode)) {
+          tabNode = attachedTabNode;
+        }
+        if (! tabNode) {
+          // Try same-pinned-state URL matches before generic URL matches.  This
+          // avoids swapping saved pinned/unpinned duplicates with identical URLs.
+          const localUrlMatches = localTabList.filter((node) =>
+            node.url === tabUrl && (node.pinned === Boolean(tab.pinned)));
+          if (localUrlMatches.length > 0) {
+            tabNode = this.tree.choosePreferredTabNode(localUrlMatches);
+          }
+        }
         if (! tabNode) {
           const localUrlMatches = localTabList.filter((node) =>
             { return node.url === tabUrl; });
@@ -708,21 +771,30 @@ export class Bkgd {
           }
         }
         if ((! tabNode)
-          && attachedTabNode
-          && (attachedTabNode.getWindowNode(false) === winNode)) {
-          tabNode = attachedTabNode;
+          && tab.pinned
+          && Number.isInteger(tab.index)
+          && (tab.index >= 0)
+          && (tab.index < localPinnedTabList.length)) {
+          const indexCandidate = localPinnedTabList[tab.index];
+          if (indexCandidate && (! indexCandidate.isWindow())) {
+            tabNode = indexCandidate;
+          }
         }
         if ((! tabNode)
           && Number.isInteger(tab.index)
           && ((tab.index - pinnedPrefixCount) >= 0)
-          && ((tab.index - pinnedPrefixCount) < localTabList.length)) {
-          const indexCandidate = localTabList[tab.index - pinnedPrefixCount];
+          && ((tab.index - pinnedPrefixCount) < localMovableTabList.length)) {
+          const indexCandidate = localMovableTabList[
+            tab.index - pinnedPrefixCount
+          ];
           if (indexCandidate && (! indexCandidate.isWindow())) {
             tabNode = indexCandidate;
           }
         }
         if (! tabNode) tabNode = attachedTabNode;
         if (tabNode) {
+          const prevWindowNode = tabNode.getWindowNode(false);
+          const prevPinned = tabNode.pinned;
           const changes = {};
           if (tabNode.tabId !== tab.id) changes.tabId = tab.id;
           if (tabNode.windowId !== window.id) changes.windowId = window.id;
@@ -752,6 +824,10 @@ export class Bkgd {
             && (tabNode.hidden !== tab.hidden)) {
             changes.hidden = tab.hidden;
           }
+          if ((undefined !== tab.pinned)
+            && (tabNode.pinned !== Boolean(tab.pinned))) {
+            changes.pinned = Boolean(tab.pinned);
+          }
           if ((undefined !== tab.incognito)
             && (tabNode.incognito !== tab.incognito)) {
             changes.incognito = tab.incognito;
@@ -763,19 +839,31 @@ export class Bkgd {
           if (Object.keys(changes).length > 0) {
             await tabNode.setTabFields(changes, { reason: 'mergeOpenWindowsIntoTree' });
           }
-          if (tabNode.getWindowNode(false) !== winNode) {
-            await tabNode.moveTo(winNode, winNode.nodes.length, {
-              reason: 'mergeOpenWindowsIntoTree',
-              emit: false
-            });
+          const pinnedChanged = prevPinned !== Boolean(tab.pinned);
+          const windowChanged = prevWindowNode !== winNode;
+          const pinnedPrefixRepair = Boolean(tab.pinned);
+          if (windowChanged || pinnedChanged || pinnedPrefixRepair) {
+            const dest = getTabDestination(tabNode);
+            // Repair only cross-window placement, real pin/unpin transitions,
+            // and pinned prefix placement.  Startup merge must not flatten a
+            // saved tree merely because browser tab order differs from the
+            // tree outline.
+            if ((tabNode.parent !== dest.destParent)
+              || ((tabNode.indexOf() !== dest.destIndex)
+                && (tabNode.indexOf() + 1 !== dest.destIndex))) {
+              await tabNode.moveTo(dest.destParent, dest.destIndex, {
+                reason: 'mergeOpenWindowsIntoTree',
+                emit: false
+              });
+            }
           }
           continue;
         }
         // if not, add new tab to the tree
-        // TODO: ... in an appropriate position
-        let destParent = winNode;
-        let destIndex = winNode.nodes.length;
-        if (tab.openerTabId && (tab.openerTabId !== tab.id)) {
+        let dest = getTabDestination();
+        let destParent = dest.destParent;
+        let destIndex = dest.destIndex;
+        if ((! tab.pinned) && tab.openerTabId && (tab.openerTabId !== tab.id)) {
           let found = this.tree.root.findNodes(
             (n) => { return (n.tabId === tab.openerTabId); });
           if (found.length > 0) {
@@ -797,6 +885,7 @@ export class Bkgd {
           frozen: tab.frozen,
           hidden: tab.hidden,  // firefox only?
           incognito: tab.incognito,
+          pinned: Boolean(tab.pinned),
           atime: tab.lastAccessed
           }, { reason: 'mergeOpenWindowsIntoTree' });
       }
@@ -1205,6 +1294,14 @@ export class Bkgd {
       this.windowsLoading.push(windowNode);
       // TODO: actually open the window?
     }
+    const shouldPinCreatedTab = Boolean(node.pinned);
+    // Existing-window creation can request pinned directly.  New-window
+    // creation must pin after the first tab exists, so guard the saved flag
+    // against early unpinned events until that follow-up completes.
+    if (shouldPinCreatedTab) {
+      node.pinRestorePending = true;
+      node.pinRestorePendingAt = Date.now();
+    }
     // - push node to be loaded, and open it (new window or existing window)
     this.nodesLoading.push(node);
     // actually open the tab
@@ -1228,8 +1325,9 @@ export class Bkgd {
       if (windowNode.incognito) createProperties.incognito = true;
       debug('bkgd_loadSavedNode() creating saved window', createProperties);
       try {
+        let createdWindow;
         try {
-          await api.windows.create(createProperties);
+          createdWindow = await api.windows.create(createProperties);
         } catch (err) {
           // handle "Error: Invalid value for bounds. Bounds must be at least 50% within visible screen space."
           if (err.message.includes('Invalid value for bounds')) {
@@ -1238,13 +1336,46 @@ export class Bkgd {
             // It's stupid that we have to do this, instead of the browser just
             // moving the window to an allowed position+size.
             delete createProperties.geometry;
-            await api.windows.create(createProperties);
+            createdWindow = await api.windows.create(createProperties);
           }
           else { throw err; }
+        }
+        let createdTabId = createdWindow && createdWindow.tabs
+          && createdWindow.tabs[0] && createdWindow.tabs[0].id;
+        if (shouldPinCreatedTab && (! createdTabId)) {
+          for (let i = 0; i < 20 && (! node.tabId); i += 1) {
+            await new Promise(resolve => setTimeout(resolve, 50));
+          }
+          createdTabId = node.tabId;
+        }
+        if (shouldPinCreatedTab && createdTabId && api.tabs.update) {
+          try {
+            await api.tabs.update(createdTabId, { pinned: true });
+            node.pinRestorePending = false;
+          } catch (err) {
+            node.pinRestorePending = false;
+            if (node.pinned) {
+              await node.setTabFields(
+                { pinned: false },
+                { reason: 'onTabUpdated' }
+              );
+            }
+            warn(`bkgd_loadSavedNode(): pin restored tab failed: ${err}`);
+          }
+        }
+        else if (shouldPinCreatedTab) {
+          node.pinRestorePending = false;
+          if (node.pinned) {
+            await node.setTabFields(
+              { pinned: false },
+              { reason: 'onTabUpdated' }
+            );
+          }
         }
       } catch (err) {
         this.windowsLoading.pop(windowNode);
         this.nodesLoading.pop(node);
+        node.pinRestorePending = false;
         warn(`loadSavedTab failed: ${err}`);
         response.result = err;
       }
@@ -1264,6 +1395,13 @@ export class Bkgd {
       //if (openerNode) createProperties.openerTabId = openerNode.tabId;
       // TODO? set index
       //   (code which executes later fixes the tab order anyway)
+      if (shouldPinCreatedTab) {
+        createProperties.pinned = true;
+        const pinnedTabs = windowNode.getLoadedAndUnloadedTabs()
+          .filter((tabNode) => tabNode.pinned);
+        const pinnedIndex = pinnedTabs.indexOf(node);
+        if (pinnedIndex >= 0) createProperties.index = pinnedIndex;
+      }
       debug('bkgd_loadSavedNode() using existing window', createProperties);
       try {
         await api.tabs.create(createProperties);
@@ -1272,6 +1410,7 @@ export class Bkgd {
         }
       } catch (err) {
         this.nodesLoading.pop(node);
+        node.pinRestorePending = false;
         warn(`loadSavedTab failed: ${err}`);
         response.result = err;
       }

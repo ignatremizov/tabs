@@ -16,11 +16,14 @@ if (!globalThis.chrome) {
     },
     tabs: {
       get: async () => ({}),
+      query: async () => ([]),
+      update: async () => ({}),
       move: async () => ({})
     },
     windows: {
       getAll: async () => ([]),
-      get: async () => ({})
+      get: async () => ({}),
+      update: async () => ({})
     },
     storage: {
       local: { get: async () => ({}), set: async () => ({}) },
@@ -830,6 +833,187 @@ test('ensureMoved passes op to applyMoveForIntent', async () => {
   assertEqual(receivedOp.opId, 'op-move', 'Should pass op to applyMoveForIntent');
 });
 
+test('ensureMoved can move browser tab node without its children', async () => {
+  const originalQuery = api.tabs.query;
+  try {
+    const bkgd = new Bkgd();
+    const tree = createTree(bkgd);
+    bkgd.tree = tree;
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const moved = await addChild(win, {
+      id: 'moved',
+      tabId: 10,
+      windowId: 1,
+      loaded: true
+    });
+    const child = await addChild(moved, {
+      id: 'child',
+      tabId: 11,
+      windowId: 1,
+      loaded: true
+    });
+    const sibling = await addChild(win, {
+      id: 'sibling',
+      tabId: 12,
+      windowId: 1,
+      loaded: true
+    });
+
+    api.tabs.query = async () => ([
+      { id: 11, index: 0, windowId: 1, pinned: false },
+      { id: 12, index: 1, windowId: 1, pinned: false },
+      { id: 10, index: 2, windowId: 1, pinned: false }
+    ]);
+
+    await bkgd.ensureMoved({
+      nodeId: moved.id,
+      destParentId: win.id,
+      destIndex: sibling.indexOf() + 1,
+      reason: 'onTabMoved',
+      skipTabReorder: true,
+      moveNodeOnly: true,
+      browserWindowId: 1,
+      browserIndex: 2,
+      pinned: false
+    });
+
+    assertEqual(moved.nodes.length, 0,
+      'Moved browser tab node should not keep its children');
+    assertEqual(win.nodes[0], child,
+      'Former child should remain at the original flat position');
+    assertEqual(win.nodes[1], sibling,
+      'Existing sibling should remain before the moved tab');
+    assertEqual(win.nodes[2], moved,
+      'Moved tab should land at the browser-reported flat index');
+  } finally {
+    api.tabs.query = originalQuery;
+  }
+});
+
+test('ensureMoved keeps browser-moved parent under outline parent', async () => {
+  const originalQuery = api.tabs.query;
+  try {
+    const bkgd = new Bkgd();
+    const tree = createTree(bkgd);
+    bkgd.tree = tree;
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const parentA = await addChild(win, {
+      id: 'a',
+      tabId: 10,
+      windowId: 1,
+      loaded: true
+    });
+    const childB = await addChild(parentA, {
+      id: 'b',
+      tabId: 11,
+      windowId: 1,
+      loaded: true
+    });
+    const movedC = await addChild(parentA, {
+      id: 'c',
+      tabId: 12,
+      windowId: 1,
+      loaded: true
+    });
+    const grandchildD = await addChild(movedC, {
+      id: 'd',
+      tabId: 13,
+      windowId: 1,
+      loaded: true
+    });
+    const grandchildE = await addChild(movedC, {
+      id: 'e',
+      tabId: 14,
+      windowId: 1,
+      loaded: true
+    });
+
+    api.tabs.query = async () => ([
+      { id: 10, index: 0, windowId: 1, pinned: false },
+      { id: 11, index: 1, windowId: 1, pinned: false },
+      { id: 13, index: 2, windowId: 1, pinned: false },
+      { id: 14, index: 3, windowId: 1, pinned: false },
+      { id: 12, index: 4, windowId: 1, pinned: false }
+    ]);
+
+    await bkgd.ensureMoved({
+      nodeId: movedC.id,
+      destParentId: win.id,
+      destIndex: 5,
+      reason: 'onTabMoved',
+      skipTabReorder: true,
+      moveNodeOnly: true,
+      browserWindowId: 1,
+      browserIndex: 4,
+      pinned: false
+    });
+
+    assertEqual(movedC.nodes.length, 0,
+      'Moved parent tab should not keep promoted children');
+    assertEqual(win.nodes.map((node) => node.id).join(','), 'a',
+      'Window root should not receive C as a top-level child');
+    assertEqual(parentA.nodes.map((node) => node.id).join(','), 'b,d,e,c',
+      'C should remain under A after D and E are promoted');
+    assertEqual(childB.parent, parentA, 'B should remain under A');
+    assertEqual(grandchildD.parent, parentA, 'D should be promoted under A');
+    assertEqual(grandchildE.parent, parentA, 'E should be promoted under A');
+    assertEqual(movedC.parent, parentA, 'C should remain under A');
+  } finally {
+    api.tabs.query = originalQuery;
+  }
+});
+
+test('view-side user move emits tree move without direct tab reorder request', async () => {
+  const originalSendMessage = api.runtime.sendMessage;
+  try {
+    const tree = createTree(null);
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const first = await addChild(win, {
+      id: 'first',
+      tabId: 10,
+      windowId: 1,
+      loaded: true
+    });
+    const moved = await addChild(win, {
+      id: 'moved',
+      tabId: 11,
+      windowId: 1,
+      loaded: true
+    });
+    const sent = [];
+    api.runtime.sendMessage = async (msg) => {
+      sent.push(msg);
+      return {};
+    };
+
+    await moved.moveTo(win, 0, { reason: 'userAction' });
+
+    assertEqual(win.nodes[0], moved, 'View tree should apply local move');
+    assertEqual(win.nodes[1], first, 'Original first tab should shift down');
+    assert(sent.some((msg) => msg.msg === 'tree_nodeMoved'),
+      'View should still notify background about the tree move');
+    assert(! sent.some((msg) => msg.msg === 'bkgd_reorderAllTabsInThisWindow'),
+      'View should not independently request browser tab reorder');
+  } finally {
+    api.runtime.sendMessage = originalSendMessage;
+  }
+});
+
 test('applyMoveForIntent keeps only-child loaded window content under window', async () => {
   const originalIndexedDb = globalThis.indexedDB;
   try {
@@ -1180,6 +1364,211 @@ test('bkgd_loadSavedNode creates window when windowId is missing', async () => {
   }
 });
 
+test('bkgd_loadSavedNode preserves pinned state while restoring saved tab', async () => {
+  const originalTabsCreate = api.tabs.create;
+  try {
+    const created = [];
+    api.tabs.create = async (props) => {
+      created.push(props);
+      return { id: 77 };
+    };
+
+    const bkgd = new Bkgd();
+    const tree = createTree(bkgd);
+    tree.createRootNode();
+    bkgd.tree = tree;
+    bkgd.resolveTreeLoaded();
+
+    const windowNode = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      loaded: true,
+      windowId: 1
+    });
+    await addChild(windowNode, {
+      id: 'existing-pinned',
+      tabId: 50,
+      windowId: 1,
+      url: 'https://example.com/existing-pinned',
+      loaded: true,
+      pinned: true
+    });
+    const tab = await addChild(windowNode, {
+      id: 't1',
+      url: 'https://example.com/pinned',
+      loaded: false,
+      pinned: true
+    });
+
+    await bkgd.bkgd_loadSavedNode({ nodeId: tab.id, reason: 'userAction' });
+
+    assertEqual(created.length, 1, 'Should create one browser tab');
+    assertEqual(created[0].pinned, true,
+      'Saved pinned tab should request pinned browser creation');
+    assertEqual(created[0].index, 1,
+      'Saved pinned tab should request its pinned-prefix index');
+
+    await tree.onTabCreated({
+      id: 77,
+      index: 0,
+      windowId: 1,
+      pinned: false,
+      url: 'https://example.com/pinned',
+      title: 'Pinned',
+      active: true
+    });
+
+    assertEqual(tab.tabId, 77, 'Saved node should attach to created tab');
+    assertEqual(tab.pinned, true,
+      'Saved pinned state should not be cleared by restore event');
+
+    await tree.onTabUpdated(77, { pinned: false }, {
+      id: 77,
+      windowId: 1,
+      pinned: false,
+      title: 'Pinned',
+      url: 'https://example.com/pinned'
+    });
+    assertEqual(tab.pinned, true,
+      'False update during pinned restore should not clear saved state');
+
+    await tree.onTabUpdated(77, { pinned: true }, {
+      id: 77,
+      windowId: 1,
+      pinned: true,
+      title: 'Pinned',
+      url: 'https://example.com/pinned'
+    });
+    assertEqual(tab.pinRestorePending, false,
+      'True pinned update should clear restore guard');
+  } finally {
+    api.tabs.create = originalTabsCreate;
+  }
+});
+
+test('pin restore guard allows stale unpinned updates', async () => {
+  const tree = createTree(null);
+  const win = await addChild(tree.root, {
+    id: 'w1',
+    type: 'window',
+    windowId: 1,
+    loaded: true
+  });
+  const tab = await addChild(win, {
+    id: 't1',
+    tabId: 77,
+    windowId: 1,
+    url: 'https://example.com/pinned',
+    loaded: true,
+    pinned: true
+  });
+  tab.pinRestorePending = true;
+  tab.pinRestorePendingAt = Date.now() - 3000;
+
+  await tree.onTabUpdated(77, { pinned: false }, {
+    id: 77,
+    windowId: 1,
+    pinned: false,
+    title: 'Pinned',
+    url: 'https://example.com/pinned'
+  });
+
+  assertEqual(tab.pinRestorePending, false,
+    'Stale restore guard should clear on later false update');
+  assertEqual(tab.pinned, false,
+    'Stale false update should be treated as a real unpin');
+});
+
+test('bkgd_loadSavedNode pins restored tab created with new window', async () => {
+  const originalWindowsCreate = api.windows.create;
+  const originalTabsUpdate = api.tabs.update;
+  try {
+    const updates = [];
+    api.windows.create = async () => ({
+      id: 99,
+      tabs: [{ id: 77 }]
+    });
+    api.tabs.update = async (tabId, props) => {
+      updates.push({ tabId, props });
+      return {};
+    };
+
+    const bkgd = new Bkgd();
+    const tree = createTree(bkgd);
+    tree.createRootNode();
+    bkgd.tree = tree;
+    bkgd.resolveTreeLoaded();
+
+    const windowNode = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      loaded: false,
+      windowId: undefined
+    });
+    const tab = await addChild(windowNode, {
+      id: 't1',
+      url: 'https://example.com/pinned',
+      loaded: false,
+      pinned: true
+    });
+
+    await bkgd.bkgd_loadSavedNode({ nodeId: tab.id, reason: 'userAction' });
+
+    assertEqual(updates.length, 1, 'Should pin the created browser tab');
+    assertEqual(updates[0].tabId, 77, 'Should pin the new window first tab');
+    assertEqual(updates[0].props.pinned, true,
+      'Should request pinned state after window creation');
+    assertEqual(tab.pinRestorePending, false,
+      'Successful post-create pinning should clear restore guard');
+  } finally {
+    api.windows.create = originalWindowsCreate;
+    api.tabs.update = originalTabsUpdate;
+  }
+});
+
+test('bkgd_loadSavedNode clears restore guard when new-window pinning fails', async () => {
+  const originalWindowsCreate = api.windows.create;
+  const originalTabsUpdate = api.tabs.update;
+  try {
+    api.windows.create = async () => ({
+      id: 99,
+      tabs: [{ id: 77 }]
+    });
+    api.tabs.update = async () => {
+      throw new Error('pin failed');
+    };
+
+    const bkgd = new Bkgd();
+    const tree = createTree(bkgd);
+    tree.createRootNode();
+    bkgd.tree = tree;
+    bkgd.resolveTreeLoaded();
+
+    const windowNode = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      loaded: false,
+      windowId: undefined
+    });
+    const tab = await addChild(windowNode, {
+      id: 't1',
+      url: 'https://example.com/pinned',
+      loaded: false,
+      pinned: true
+    });
+
+    await bkgd.bkgd_loadSavedNode({ nodeId: tab.id, reason: 'userAction' });
+
+    assertEqual(tab.pinRestorePending, false,
+      'Failed browser pinning should not leave restore guard stuck');
+    assertEqual(tab.pinned, false,
+      'Failed browser pinning should reconcile tree pinned state');
+  } finally {
+    api.windows.create = originalWindowsCreate;
+    api.tabs.update = originalTabsUpdate;
+  }
+});
+
 test('bkgd_loadSavedWindow uses nested loaded tabs when windowId missing', async () => {
   const originalWindowsCreate = api.windows.create;
   const originalTabsGet = api.tabs.get;
@@ -1281,6 +1670,87 @@ test('findMatchingWindow honors exclude list', async () => {
   assertEqual(matchedTab.wasLoaded, false, 'Matched tab should reset wasLoaded');
 });
 
+test('findMatchingWindow matches duplicate URLs by pinned state', async () => {
+  const tree = createTree(null);
+  const win = await addChild(tree.root, { id: 'w1', type: 'window' });
+  const regular = await addChild(win, {
+    id: 'regular',
+    url: 'https://same.example.com',
+    loaded: true,
+    pinned: false
+  });
+  const pinned = await addChild(win, {
+    id: 'pinned',
+    url: 'https://same.example.com',
+    loaded: true,
+    pinned: true
+  });
+
+  const realWindow = {
+    id: 102,
+    tabs: [
+      { id: 1, url: 'https://same.example.com', pinned: true },
+      { id: 2, url: 'https://same.example.com', pinned: false }
+    ]
+  };
+
+  const match = await tree.findMatchingWindow(realWindow);
+
+  assert(match, 'Should match saved window');
+  assertEqual(pinned.tabId, 1,
+    'Pinned browser tab should pre-attach to pinned saved duplicate');
+  assertEqual(regular.tabId, 2,
+    'Unpinned browser tab should pre-attach to unpinned saved duplicate');
+});
+
+test('findMatchingWindow scores duplicate windows by pinned order', async () => {
+  const tree = createTree(null);
+  const wrongWin = await addChild(tree.root, { id: 'wrong-win', type: 'window' });
+  await addChild(wrongWin, {
+    id: 'wrong-regular',
+    url: 'https://same.example.com',
+    loaded: true,
+    pinned: false
+  });
+  await addChild(wrongWin, {
+    id: 'wrong-pinned',
+    url: 'https://same.example.com',
+    loaded: true,
+    pinned: true
+  });
+
+  const rightWin = await addChild(tree.root, { id: 'right-win', type: 'window' });
+  const rightPinned = await addChild(rightWin, {
+    id: 'right-pinned',
+    url: 'https://same.example.com',
+    loaded: true,
+    pinned: true
+  });
+  const rightRegular = await addChild(rightWin, {
+    id: 'right-regular',
+    url: 'https://same.example.com',
+    loaded: true,
+    pinned: false
+  });
+
+  const realWindow = {
+    id: 103,
+    tabs: [
+      { id: 1, url: 'https://same.example.com', pinned: true },
+      { id: 2, url: 'https://same.example.com', pinned: false }
+    ]
+  };
+
+  const match = await tree.findMatchingWindow(realWindow);
+
+  assertEqual(match.id, rightWin.id,
+    'Window match should prefer pinned order when URLs tie');
+  assertEqual(rightPinned.tabId, 1,
+    'Pinned browser tab should attach to pinned node in selected window');
+  assertEqual(rightRegular.tabId, 2,
+    'Unpinned browser tab should attach to unpinned node in selected window');
+});
+
 test('setTabFields detaches conflicting tab bindings', async () => {
   const tree = createTree(null);
   const win = await addChild(tree.root, {
@@ -1316,6 +1786,39 @@ test('setTabFields detaches conflicting tab bindings', async () => {
   assertEqual(stale.oldTabId, undefined, 'Stale node should lose oldTabId binding');
   assertEqual(stale.loaded, false, 'Stale node should be marked unloaded');
   assertEqual(stale.active, false, 'Stale node should no longer be active');
+});
+
+test('setTabFields broadcasts pinned changes from move and attach events', async () => {
+  const originalSendMessage = api.runtime.sendMessage;
+  try {
+    const tree = createTree(null);
+    const node = await addChild(tree.root, {
+      id: 'tab',
+      tabId: 10,
+      windowId: 1,
+      loaded: true,
+      pinned: false
+    });
+    const sent = [];
+    api.runtime.sendMessage = async (msg) => {
+      sent.push(msg);
+      return {};
+    };
+
+    await node.setTabFields({ pinned: true }, { reason: 'onTabMoved' });
+    await node.setTabFields({ windowId: 2 }, { reason: 'onTabAttached' });
+
+    assertEqual(sent.length, 2,
+      'Move and attach field changes should notify open views');
+    assertEqual(sent[0].msg, 'tree_nodeChanged',
+      'Pinned move change should emit tree_nodeChanged');
+    assertEqual(sent[0].changes.pinned, true,
+      'Pinned move change should include pinned field');
+    assertEqual(sent[1].changes.windowId, 2,
+      'Attach change should include windowId field');
+  } finally {
+    api.runtime.sendMessage = originalSendMessage;
+  }
 });
 
 test('mergeOpenWindowsIntoTree assigns unique window nodes', async () => {
@@ -1504,6 +2007,524 @@ test('mergeOpenWindowsIntoTree adjusts index fallback after pinned tabs', async 
   }
 });
 
+test('mergeOpenWindowsIntoTree skips saved pinned nodes during index fallback', async () => {
+  const originalGetAll = api.windows.getAll;
+  try {
+    const bkgd = new Bkgd();
+    const tree = createTree(bkgd);
+    bkgd.tree = tree;
+
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 88,
+      loaded: true
+    });
+    const pinned = await addChild(win, {
+      id: 'pinned',
+      tabId: 80,
+      windowId: 88,
+      url: 'https://old-pinned.example.com',
+      loaded: true,
+      pinned: true
+    });
+    const first = await addChild(win, {
+      id: 'first',
+      url: 'https://saved.example.com/one',
+      loaded: false
+    });
+
+    api.windows.getAll = async () => ([
+      {
+        id: 88,
+        focused: true,
+        tabs: [
+          {
+            id: 80,
+            index: 0,
+            pinned: true,
+            url: 'https://new-pinned.example.com',
+            title: 'New pinned',
+            active: false
+          },
+          {
+            id: 81,
+            index: 1,
+            pinned: false,
+            url: 'https://live.example.com/one',
+            title: 'Live one',
+            active: true
+          }
+        ]
+      }
+    ]);
+
+    await bkgd.mergeOpenWindowsIntoTree();
+
+    assertEqual(pinned.pinned, true,
+      'Persisted pinned node should stay pinned after fallback matching');
+    assertEqual(first.tabId, 81,
+      'First unpinned live tab should attach to first unpinned saved node');
+    assertEqual(first.pinned, false,
+      'First unpinned saved node should stay unpinned');
+  } finally {
+    api.windows.getAll = originalGetAll;
+  }
+});
+
+test('mergeOpenWindowsIntoTree fallback matches saved pinned nodes', async () => {
+  const originalGetAll = api.windows.getAll;
+  try {
+    const bkgd = new Bkgd();
+    const tree = createTree(bkgd);
+    bkgd.tree = tree;
+
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 89,
+      loaded: true
+    });
+    const pinned = await addChild(win, {
+      id: 'pinned',
+      url: 'https://old-pinned.example.com',
+      loaded: false,
+      pinned: true
+    });
+    const first = await addChild(win, {
+      id: 'first',
+      url: 'https://saved.example.com/one',
+      loaded: false
+    });
+
+    api.windows.getAll = async () => ([
+      {
+        id: 89,
+        focused: true,
+        tabs: [
+          {
+            id: 90,
+            index: 0,
+            pinned: true,
+            url: 'https://new-pinned.example.com',
+            title: 'New pinned',
+            active: false
+          },
+          {
+            id: 91,
+            index: 1,
+            pinned: false,
+            url: 'https://live.example.com/one',
+            title: 'Live one',
+            active: true
+          }
+        ]
+      }
+    ]);
+
+    await bkgd.mergeOpenWindowsIntoTree();
+
+    assertEqual(pinned.tabId, 90,
+      'Pinned browser tab should fallback-match saved pinned node');
+    assertEqual(pinned.pinned, true,
+      'Pinned fallback match should keep pinned state');
+    assertEqual(first.tabId, 91,
+      'Unpinned browser tab should still fallback-match unpinned node');
+  } finally {
+    api.windows.getAll = originalGetAll;
+  }
+});
+
+test('mergeOpenWindowsIntoTree repositions tab that became pinned', async () => {
+  const originalGetAll = api.windows.getAll;
+  try {
+    const bkgd = new Bkgd();
+    const tree = createTree(bkgd);
+    bkgd.tree = tree;
+
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 90,
+      loaded: true
+    });
+    const regular = await addChild(win, {
+      id: 'regular',
+      tabId: 91,
+      windowId: 90,
+      url: 'https://regular.example.com',
+      loaded: true
+    });
+    const becamePinned = await addChild(win, {
+      id: 'became-pinned',
+      tabId: 92,
+      windowId: 90,
+      url: 'https://pin.example.com',
+      loaded: true,
+      pinned: false
+    });
+
+    api.windows.getAll = async () => ([
+      {
+        id: 90,
+        focused: true,
+        tabs: [
+          {
+            id: 92,
+            index: 0,
+            pinned: true,
+            url: 'https://pin.example.com',
+            title: 'Pinned',
+            active: true
+          },
+          {
+            id: 91,
+            index: 1,
+            pinned: false,
+            url: 'https://regular.example.com',
+            title: 'Regular',
+            active: false
+          }
+        ]
+      }
+    ]);
+
+    await bkgd.mergeOpenWindowsIntoTree();
+
+    assertEqual(becamePinned.pinned, true,
+      'Matched node should refresh pinned state from browser');
+    assertEqual(win.nodes[0], becamePinned,
+      'Pinned node should move into the pinned prefix');
+    assertEqual(win.nodes[1], regular,
+      'Regular node should remain after pinned prefix');
+  } finally {
+    api.windows.getAll = originalGetAll;
+  }
+});
+
+test('mergeOpenWindowsIntoTree repositions tab that became unpinned', async () => {
+  const originalGetAll = api.windows.getAll;
+  try {
+    const bkgd = new Bkgd();
+    const tree = createTree(bkgd);
+    bkgd.tree = tree;
+
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 91,
+      loaded: true
+    });
+    const becameUnpinned = await addChild(win, {
+      id: 'became-unpinned',
+      tabId: 100,
+      windowId: 91,
+      url: 'https://pin.example.com',
+      loaded: true,
+      pinned: true
+    });
+    const regular = await addChild(win, {
+      id: 'regular',
+      tabId: 101,
+      windowId: 91,
+      url: 'https://regular.example.com',
+      loaded: true
+    });
+
+    api.windows.getAll = async () => ([
+      {
+        id: 91,
+        focused: true,
+        tabs: [
+          {
+            id: 101,
+            index: 0,
+            pinned: false,
+            url: 'https://regular.example.com',
+            title: 'Regular',
+            active: false
+          },
+          {
+            id: 100,
+            index: 1,
+            pinned: false,
+            url: 'https://pin.example.com',
+            title: 'Unpinned',
+            active: true
+          }
+        ]
+      }
+    ]);
+
+    await bkgd.mergeOpenWindowsIntoTree();
+
+    assertEqual(becameUnpinned.pinned, false,
+      'Matched node should clear stale pinned state');
+    assertEqual(win.nodes[0], regular,
+      'First browser movable tab should become first tree tab');
+    assertEqual(win.nodes[1], becameUnpinned,
+      'Formerly pinned tab should move into movable order');
+  } finally {
+    api.windows.getAll = originalGetAll;
+  }
+});
+
+test('mergeOpenWindowsIntoTree inserts unmatched pinned tabs in pinned prefix', async () => {
+  const originalGetAll = api.windows.getAll;
+  try {
+    const bkgd = new Bkgd();
+    const tree = createTree(bkgd);
+    bkgd.tree = tree;
+
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 92,
+      loaded: true
+    });
+    const regular = await addChild(win, {
+      id: 'regular',
+      tabId: 111,
+      windowId: 92,
+      url: 'https://regular.example.com',
+      loaded: true
+    });
+
+    api.windows.getAll = async () => ([
+      {
+        id: 92,
+        focused: true,
+        tabs: [
+          {
+            id: 110,
+            index: 0,
+            pinned: true,
+            url: 'https://new-pinned.example.com',
+            title: 'New pinned',
+            active: true
+          },
+          {
+            id: 111,
+            index: 1,
+            pinned: false,
+            url: 'https://regular.example.com',
+            title: 'Regular',
+            active: false
+          }
+        ]
+      }
+    ]);
+
+    await bkgd.mergeOpenWindowsIntoTree();
+
+    const created = tree.getNodeByTabId(110);
+    assert(created, 'Should create node for unmatched pinned browser tab');
+    assertEqual(created.pinned, true, 'Created node should be pinned');
+    assertEqual(win.nodes[0], created,
+      'Unmatched pinned tab should insert before regular tabs');
+    assertEqual(win.nodes[1], regular,
+      'Regular tab should remain after new pinned tab');
+  } finally {
+    api.windows.getAll = originalGetAll;
+  }
+});
+
+test('mergeOpenWindowsIntoTree matches duplicate URLs by pinned state first', async () => {
+  const originalGetAll = api.windows.getAll;
+  try {
+    const bkgd = new Bkgd();
+    const tree = createTree(bkgd);
+    bkgd.tree = tree;
+
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 93,
+      loaded: true
+    });
+    const regular = await addChild(win, {
+      id: 'regular',
+      url: 'https://same.example.com',
+      loaded: false,
+      pinned: false
+    });
+    const pinned = await addChild(win, {
+      id: 'pinned',
+      url: 'https://same.example.com',
+      loaded: false,
+      pinned: true
+    });
+
+    api.windows.getAll = async () => ([
+      {
+        id: 93,
+        focused: true,
+        tabs: [
+          {
+            id: 120,
+            index: 0,
+            pinned: true,
+            url: 'https://same.example.com',
+            title: 'Pinned same',
+            active: false
+          },
+          {
+            id: 121,
+            index: 1,
+            pinned: false,
+            url: 'https://same.example.com',
+            title: 'Regular same',
+            active: true
+          }
+        ]
+      }
+    ]);
+
+    await bkgd.mergeOpenWindowsIntoTree();
+
+    assertEqual(pinned.tabId, 120,
+      'Pinned live tab should attach to saved pinned duplicate');
+    assertEqual(regular.tabId, 121,
+      'Unpinned live tab should attach to saved unpinned duplicate');
+    assertEqual(win.nodes[0], pinned,
+      'Pinned duplicate should move to pinned prefix');
+    assertEqual(win.nodes[1], regular,
+      'Regular duplicate should remain after pinned duplicate');
+  } finally {
+    api.windows.getAll = originalGetAll;
+  }
+});
+
+test('mergeOpenWindowsIntoTree prefers URL match before raw index fallback', async () => {
+  const originalGetAll = api.windows.getAll;
+  try {
+    const bkgd = new Bkgd();
+    const tree = createTree(bkgd);
+    bkgd.tree = tree;
+
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const first = await addChild(win, {
+      id: 'first',
+      url: 'https://example.com/a',
+      loaded: true
+    });
+    const second = await addChild(win, {
+      id: 'second',
+      url: 'https://example.com/b',
+      loaded: true
+    });
+
+    api.windows.getAll = async () => ([
+      {
+        id: 1,
+        focused: true,
+        tabs: [
+          {
+            id: 20,
+            index: 0,
+            windowId: 1,
+            url: 'https://example.com/b',
+            title: 'B',
+            pinned: false
+          },
+          {
+            id: 10,
+            index: 1,
+            windowId: 1,
+            url: 'https://example.com/a',
+            title: 'A',
+            pinned: false
+          }
+        ]
+      }
+    ]);
+
+    await bkgd.mergeOpenWindowsIntoTree();
+
+    assertEqual(second.tabId, 20,
+      'Live tab should bind by URL before same-index fallback');
+    assertEqual(first.tabId, 10,
+      'Other saved tab should still bind to its matching URL');
+  } finally {
+    api.windows.getAll = originalGetAll;
+  }
+});
+
+test('mergeOpenWindowsIntoTree preserves saved tree shape for linked tabs', async () => {
+  const originalGetAll = api.windows.getAll;
+  try {
+    const bkgd = new Bkgd();
+    const tree = createTree(bkgd);
+    bkgd.tree = tree;
+
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const group = await addChild(win, {
+      id: 'group',
+      label: 'Saved group'
+    });
+    const nested = await addChild(group, {
+      id: 'nested',
+      tabId: 10,
+      windowId: 1,
+      url: 'https://example.com/nested',
+      loaded: true
+    });
+    const sibling = await addChild(win, {
+      id: 'sibling',
+      tabId: 11,
+      windowId: 1,
+      url: 'https://example.com/sibling',
+      loaded: true
+    });
+
+    api.windows.getAll = async () => ([
+      {
+        id: 1,
+        focused: true,
+        tabs: [
+          {
+            id: 11,
+            index: 0,
+            windowId: 1,
+            url: 'https://example.com/sibling',
+            title: 'Sibling',
+            pinned: false
+          },
+          {
+            id: 10,
+            index: 1,
+            windowId: 1,
+            url: 'https://example.com/nested',
+            title: 'Nested',
+            pinned: false
+          }
+        ]
+      }
+    ]);
+
+    await bkgd.mergeOpenWindowsIntoTree();
+
+    assertEqual(win.nodes[0], group,
+      'Merge should not flatten saved group to match browser tab order');
+    assertEqual(group.nodes[0], nested,
+      'Nested linked tab should remain under its saved parent');
+    assertEqual(win.nodes[1], sibling,
+      'Sibling should remain in saved tree position');
+  } finally {
+    api.windows.getAll = originalGetAll;
+  }
+});
+
 test('runReconcile drops boring closed tabs', async () => {
   const originalGetAll = api.windows.getAll;
   try {
@@ -1536,6 +2557,44 @@ test('runReconcile drops boring closed tabs', async () => {
   }
 });
 
+test('runReconcile startup does not emit refresh before tree load', async () => {
+  const originalGetAll = api.windows.getAll;
+  const originalSendMessage = api.runtime.sendMessage;
+  try {
+    const bkgd = new Bkgd();
+    const tree = createTree(bkgd);
+    bkgd.tree = tree;
+
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    await addChild(win, {
+      id: 't1',
+      tabId: 10,
+      url: 'https://example.com',
+      loaded: true
+    });
+
+    const messages = [];
+    api.windows.getAll = async () => ([]);
+    api.runtime.sendMessage = async (msg) => {
+      messages.push(msg);
+      return {};
+    };
+
+    await runReconcile.call(bkgd, { reason: 'startup' });
+
+    assert(! messages.some((msg) => msg && msg.msg === 'tree_refreshAll'),
+      'Startup reconcile should not emit refresh before initial tree load');
+  } finally {
+    api.windows.getAll = originalGetAll;
+    api.runtime.sendMessage = originalSendMessage;
+  }
+});
+
 test('onTabMoved ignores no-op moves', async () => {
   const tree = createTree(null);
   const win = await addChild(tree.root, {
@@ -1564,6 +2623,1564 @@ test('onTabMoved ignores no-op moves', async () => {
 
   await tree.onTabMoved(10, { fromIndex: 0, toIndex: 0, windowId: 1 });
   assertEqual(moved, false, 'No-op move should not re-move tab');
+});
+
+test('onTabMoved updates tree without browser reorder feedback', async () => {
+  const originalGet = api.tabs.get;
+  const originalMove = api.tabs.move;
+  try {
+    const tree = createTree(null);
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    await addChild(win, {
+      id: 'first-pinned',
+      tabId: 10,
+      windowId: 1,
+      loaded: true,
+      pinned: true
+    });
+    const moved = await addChild(win, {
+      id: 'moved',
+      tabId: 11,
+      windowId: 1,
+      loaded: true,
+      pinned: true
+    });
+    await addChild(win, {
+      id: 'regular',
+      tabId: 12,
+      windowId: 1,
+      loaded: true
+    });
+
+    let browserMoveCalls = 0;
+    api.tabs.get = async (tabId) => ({
+      id: tabId,
+      windowId: 1,
+      pinned: true
+    });
+    api.tabs.move = async () => { browserMoveCalls += 1; };
+
+    await tree.onTabMoved(11, {
+      windowId: 1,
+      fromIndex: 1,
+      toIndex: 0
+    });
+
+    assertEqual(win.nodes[0], moved,
+      'Browser move should still update tree order');
+    assertEqual(browserMoveCalls, 0,
+      'Browser-originated move should not call tabs.move');
+  } finally {
+    api.tabs.get = originalGet;
+    api.tabs.move = originalMove;
+  }
+});
+
+test('onTabMoved ignores extension-generated reorder events', async () => {
+  const originalGet = api.tabs.get;
+  try {
+    const tree = createTree(null);
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const first = await addChild(win, {
+      id: 'first',
+      tabId: 10,
+      windowId: 1,
+      loaded: true
+    });
+    const moved = await addChild(win, {
+      id: 'moved',
+      tabId: 11,
+      windowId: 1,
+      loaded: true
+    });
+
+    let tabLookupCalls = 0;
+    api.tabs.get = async (tabId) => {
+      tabLookupCalls += 1;
+      return { id: tabId, windowId: 1, pinned: false };
+    };
+
+    tree.suppressTabMovedEvents(1, [11]);
+    await tree.onTabMoved(11, {
+      windowId: 1,
+      fromIndex: 1,
+      toIndex: 0
+    });
+
+    assertEqual(tabLookupCalls, 0,
+      'Suppressed extension move should not query browser tab state');
+    assertEqual(win.nodes[0], first,
+      'Suppressed extension move should not change tree order');
+    assertEqual(win.nodes[1], moved,
+      'Suppressed extension move should leave moved tab in tree position');
+  } finally {
+    api.tabs.get = originalGet;
+  }
+});
+
+test('failed tab reorder clears suppressed move events', async () => {
+  const originalQuery = api.tabs.query;
+  const originalMove = api.tabs.move;
+  const originalConsoleError = console.error;
+  try {
+    const tree = createTree({});
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    await addChild(win, {
+      id: 'first',
+      tabId: 10,
+      windowId: 1,
+      loaded: true
+    });
+    await addChild(win, {
+      id: 'second',
+      tabId: 11,
+      windowId: 1,
+      loaded: true
+    });
+
+    console.error = () => {};
+    api.tabs.query = async () => ([
+      { id: 10, index: 0, windowId: 1, pinned: false },
+      { id: 11, index: 1, windowId: 1, pinned: false }
+    ]);
+    api.tabs.move = async () => {
+      throw new Error('unexpected move failure');
+    };
+
+    await win.reorderAllTabsInThisWindow();
+
+    assertEqual(tree.isSuppressedTabMovedEvent(1, 10), false,
+      'Failed reorder should clear suppression for first tab');
+    assertEqual(tree.isSuppressedTabMovedEvent(1, 11), false,
+      'Failed reorder should clear suppression for second tab');
+  } finally {
+    console.error = originalConsoleError;
+    api.tabs.query = originalQuery;
+    api.tabs.move = originalMove;
+  }
+});
+
+test('onTabMoved moves only the browser tab node, not its children', async () => {
+  const originalGet = api.tabs.get;
+  const originalQuery = api.tabs.query;
+  const originalMove = api.tabs.move;
+  try {
+    const tree = createTree(null);
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const moved = await addChild(win, {
+      id: 'moved',
+      tabId: 10,
+      windowId: 1,
+      loaded: true
+    });
+    const child = await addChild(moved, {
+      id: 'child',
+      tabId: 11,
+      windowId: 1,
+      loaded: true
+    });
+    const sibling = await addChild(win, {
+      id: 'sibling',
+      tabId: 12,
+      windowId: 1,
+      loaded: true
+    });
+
+    let browserMoveCalls = 0;
+    api.tabs.get = async (tabId) => ({
+      id: tabId,
+      windowId: 1,
+      pinned: false
+    });
+    api.tabs.query = async () => ([
+      { id: 11, index: 0, windowId: 1, pinned: false },
+      { id: 12, index: 1, windowId: 1, pinned: false },
+      { id: 10, index: 2, windowId: 1, pinned: false }
+    ]);
+    api.tabs.move = async () => { browserMoveCalls += 1; };
+
+    await tree.onTabMoved(10, {
+      windowId: 1,
+      fromIndex: 0,
+      toIndex: 2
+    });
+
+    assertEqual(moved.nodes.length, 0,
+      'Moved browser tab node should not keep its children');
+    assertEqual(win.nodes[0], child,
+      'Former child should remain at the original flat position');
+    assertEqual(win.nodes[1], sibling,
+      'Existing sibling should remain before the moved tab');
+    assertEqual(win.nodes[2], moved,
+      'Moved tab should land at the browser-reported flat index');
+    assertEqual(browserMoveCalls, 0,
+      'Browser-originated move should not call tabs.move');
+  } finally {
+    api.tabs.get = originalGet;
+    api.tabs.query = originalQuery;
+    api.tabs.move = originalMove;
+  }
+});
+
+test('onTabMoved can insert moved parent between promoted children', async () => {
+  const originalGet = api.tabs.get;
+  const originalQuery = api.tabs.query;
+  try {
+    const tree = createTree(null);
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const moved = await addChild(win, {
+      id: 'a',
+      tabId: 10,
+      windowId: 1,
+      loaded: true
+    });
+    const childB = await addChild(moved, {
+      id: 'b',
+      tabId: 11,
+      windowId: 1,
+      loaded: true
+    });
+    const childC = await addChild(moved, {
+      id: 'c',
+      tabId: 12,
+      windowId: 1,
+      loaded: true
+    });
+    const siblingD = await addChild(win, {
+      id: 'd',
+      tabId: 13,
+      windowId: 1,
+      loaded: true
+    });
+
+    api.tabs.get = async (tabId) => ({
+      id: tabId,
+      windowId: 1,
+      pinned: false
+    });
+    api.tabs.query = async () => ([
+      { id: 11, index: 0, windowId: 1, pinned: false },
+      { id: 10, index: 1, windowId: 1, pinned: false },
+      { id: 12, index: 2, windowId: 1, pinned: false },
+      { id: 13, index: 3, windowId: 1, pinned: false }
+    ]);
+
+    await tree.onTabMoved(10, {
+      windowId: 1,
+      fromIndex: 0,
+      toIndex: 1
+    });
+
+    assertEqual(moved.nodes.length, 0,
+      'Moved parent tab should not keep promoted children');
+    assertEqual(win.nodes.map((node) => node.id).join(','), 'b,a,c,d',
+      'Browser order B,A,C,D should become sibling order B,A,C,D');
+    assertEqual(childB.parent, win, 'Child B should be promoted');
+    assertEqual(childC.parent, win, 'Child C should be promoted');
+    assertEqual(siblingD.parent, win, 'Sibling D should remain in window');
+  } finally {
+    api.tabs.get = originalGet;
+    api.tabs.query = originalQuery;
+  }
+});
+
+test('onTabMoved keeps moved parent nested after last promoted child', async () => {
+  const originalGet = api.tabs.get;
+  const originalQuery = api.tabs.query;
+  try {
+    const tree = createTree(null);
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const parentA = await addChild(win, {
+      id: 'a',
+      tabId: 10,
+      windowId: 1,
+      loaded: true
+    });
+    const childB = await addChild(parentA, {
+      id: 'b',
+      tabId: 11,
+      windowId: 1,
+      loaded: true
+    });
+    const movedC = await addChild(parentA, {
+      id: 'c',
+      tabId: 12,
+      windowId: 1,
+      loaded: true
+    });
+    const grandchildD = await addChild(movedC, {
+      id: 'd',
+      tabId: 13,
+      windowId: 1,
+      loaded: true
+    });
+    const grandchildE = await addChild(movedC, {
+      id: 'e',
+      tabId: 14,
+      windowId: 1,
+      loaded: true
+    });
+
+    api.tabs.get = async (tabId) => ({
+      id: tabId,
+      windowId: 1,
+      pinned: false
+    });
+    api.tabs.query = async () => ([
+      { id: 10, index: 0, windowId: 1, pinned: false },
+      { id: 11, index: 1, windowId: 1, pinned: false },
+      { id: 13, index: 2, windowId: 1, pinned: false },
+      { id: 14, index: 3, windowId: 1, pinned: false },
+      { id: 12, index: 4, windowId: 1, pinned: false }
+    ]);
+
+    await tree.onTabMoved(12, {
+      windowId: 1,
+      fromIndex: 2,
+      toIndex: 4
+    });
+
+    assertEqual(movedC.nodes.length, 0,
+      'Moved parent tab should not keep promoted children');
+    assertEqual(win.nodes.map((node) => node.id).join(','), 'a',
+      'Top-level window children should remain unchanged');
+    assertEqual(parentA.nodes.map((node) => node.id).join(','), 'b,d,e,c',
+      'Moved parent should remain nested under A after promoted children');
+    assertEqual(childB.parent, parentA, 'B should remain under A');
+    assertEqual(grandchildD.parent, parentA, 'D should be promoted under A');
+    assertEqual(grandchildE.parent, parentA, 'E should be promoted under A');
+    assertEqual(movedC.parent, parentA, 'C should remain under A');
+  } finally {
+    api.tabs.get = originalGet;
+    api.tabs.query = originalQuery;
+  }
+});
+
+test('onTabCreated places pinned tab among pinned siblings', async () => {
+  const originalQuery = api.tabs.query;
+  try {
+    const tree = createTree(null);
+    tree.reorderTabsOnCreate = false;
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const firstPinned = await addChild(win, {
+      id: 'first-pinned',
+      tabId: 10,
+      windowId: 1,
+      loaded: true,
+      pinned: true
+    });
+    const regular = await addChild(win, {
+      id: 'regular',
+      tabId: 12,
+      windowId: 1,
+      loaded: true
+    });
+
+    api.tabs.query = async () => ([
+      { id: 10, index: 0, windowId: 1, pinned: true },
+      { id: 11, index: 1, windowId: 1, pinned: true },
+      { id: 12, index: 2, windowId: 1, pinned: false }
+    ]);
+
+    await tree.onTabCreated({
+      id: 11,
+      index: 1,
+      windowId: 1,
+      pinned: true,
+      url: 'https://example.com/pinned-two',
+      title: 'Pinned two',
+      active: false
+    });
+
+    const created = tree.getNodeByTabId(11);
+    assert(created, 'Should create node for pinned tab');
+    assertEqual(created.pinned, true, 'Created node should be marked pinned');
+    assertEqual(win.nodes[0], firstPinned,
+      'Existing pinned tab should stay first');
+    assertEqual(win.nodes[1], created,
+      'New pinned tab should insert after existing pinned tab');
+    assertEqual(win.nodes[2], regular,
+      'Regular tab should stay after pinned tabs');
+  } finally {
+    api.tabs.query = originalQuery;
+  }
+});
+
+test('onTabMoved maps browser indexes after pinned tabs', async () => {
+  const originalGet = api.tabs.get;
+  const originalQuery = api.tabs.query;
+  try {
+    const tree = createTree(null);
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const pinned = await addChild(win, {
+      id: 'pinned',
+      tabId: 10,
+      windowId: 1,
+      url: 'https://example.com/pinned',
+      loaded: true,
+      pinned: true
+    });
+    const other = await addChild(win, {
+      id: 'other',
+      tabId: 12,
+      windowId: 1,
+      url: 'https://example.com/other',
+      loaded: true
+    });
+    const moved = await addChild(win, {
+      id: 'moved',
+      tabId: 11,
+      windowId: 1,
+      url: 'https://example.com/moved',
+      loaded: true
+    });
+
+    api.tabs.get = async (tabId) => ({
+      id: tabId,
+      windowId: 1,
+      pinned: false
+    });
+    api.tabs.query = async () => ([
+      { id: 10, index: 0, windowId: 1, pinned: true },
+      { id: 11, index: 1, windowId: 1, pinned: false },
+      { id: 12, index: 2, windowId: 1, pinned: false }
+    ]);
+
+    await tree.onTabMoved(11, {
+      windowId: 1,
+      fromIndex: 2,
+      toIndex: 1
+    });
+
+    assertEqual(win.nodes[0], pinned,
+      'Pinned tab should stay in the pinned prefix');
+    assertEqual(win.nodes[1], moved,
+      'Moved unpinned tab should use index after pinned prefix');
+    assertEqual(win.nodes[2], other,
+      'Other unpinned tab should follow moved tab');
+  } finally {
+    api.tabs.get = originalGet;
+    api.tabs.query = originalQuery;
+  }
+});
+
+test('onTabUpdated pinned fallback moves tab into pinned prefix', async () => {
+  const tree = createTree(null);
+  const win = await addChild(tree.root, {
+    id: 'w1',
+    type: 'window',
+    windowId: 1,
+    loaded: true
+  });
+  const regular = await addChild(win, {
+    id: 'regular',
+    tabId: 12,
+    windowId: 1,
+    loaded: true
+  });
+  const moved = await addChild(win, {
+    id: 'moved',
+    tabId: 11,
+    windowId: 1,
+    loaded: true,
+    pinned: false
+  });
+
+  await tree.onTabUpdated(11, { pinned: true }, {
+    id: 11,
+    windowId: 1,
+    index: 0,
+    pinned: true,
+    title: 'Pinned',
+    url: 'https://example.com/pinned'
+  });
+
+  assertEqual(moved.pinned, true, 'Tab should update to pinned');
+  assertEqual(win.nodes[0], moved,
+    'Pinned update should move tab into pinned prefix');
+  assertEqual(win.nodes[1], regular,
+    'Regular tab should follow pinned tab');
+});
+
+test('onTabUpdated unpinned fallback moves tab out of pinned prefix', async () => {
+  const originalQuery = api.tabs.query;
+  try {
+    const tree = createTree(null);
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const moved = await addChild(win, {
+      id: 'moved',
+      tabId: 10,
+      windowId: 1,
+      loaded: true,
+      pinned: true
+    });
+    const stillPinned = await addChild(win, {
+      id: 'still-pinned',
+      tabId: 11,
+      windowId: 1,
+      loaded: true,
+      pinned: true
+    });
+
+    api.tabs.query = async () => ([
+      { id: 11, index: 0, windowId: 1, pinned: true },
+      { id: 10, index: 1, windowId: 1, pinned: false }
+    ]);
+
+    await tree.onTabUpdated(10, { pinned: false }, {
+      id: 10,
+      windowId: 1,
+      index: 1,
+      pinned: false,
+      title: 'Unpinned',
+      url: 'https://example.com/unpinned'
+    });
+
+    assertEqual(moved.pinned, false, 'Tab should update to unpinned');
+    assertEqual(win.nodes[0], stillPinned,
+      'Remaining pinned tab should stay in pinned prefix');
+    assertEqual(win.nodes[1], moved,
+      'Unpinned update should move tab after pinned prefix');
+  } finally {
+    api.tabs.query = originalQuery;
+  }
+});
+
+test('onTabMoved reorders pinned tabs within pinned prefix', async () => {
+  const originalGet = api.tabs.get;
+  try {
+    const tree = createTree(null);
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const firstPinned = await addChild(win, {
+      id: 'first-pinned',
+      tabId: 10,
+      windowId: 1,
+      loaded: true,
+      pinned: true
+    });
+    const moved = await addChild(win, {
+      id: 'moved',
+      tabId: 11,
+      windowId: 1,
+      loaded: true,
+      pinned: true
+    });
+    await addChild(win, {
+      id: 'regular',
+      tabId: 12,
+      windowId: 1,
+      loaded: true
+    });
+
+    api.tabs.get = async (tabId) => ({
+      id: tabId,
+      windowId: 1,
+      pinned: true
+    });
+
+    await tree.onTabMoved(11, {
+      windowId: 1,
+      fromIndex: 1,
+      toIndex: 0
+    });
+
+    assertEqual(win.nodes[0], moved,
+      'Moved pinned tab should move within pinned prefix');
+    assertEqual(win.nodes[1], firstPinned,
+      'Previous first pinned tab should shift after moved tab');
+  } finally {
+    api.tabs.get = originalGet;
+  }
+});
+
+test('onTabMoved reorders pinned tabs right within pinned prefix', async () => {
+  const originalGet = api.tabs.get;
+  try {
+    const tree = createTree(null);
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const moved = await addChild(win, {
+      id: 'moved',
+      tabId: 10,
+      windowId: 1,
+      loaded: true,
+      pinned: true
+    });
+    const secondPinned = await addChild(win, {
+      id: 'second-pinned',
+      tabId: 11,
+      windowId: 1,
+      loaded: true,
+      pinned: true
+    });
+    const regular = await addChild(win, {
+      id: 'regular',
+      tabId: 12,
+      windowId: 1,
+      loaded: true
+    });
+
+    api.tabs.get = async (tabId) => ({
+      id: tabId,
+      windowId: 1,
+      pinned: true
+    });
+
+    await tree.onTabMoved(10, {
+      windowId: 1,
+      fromIndex: 0,
+      toIndex: 1
+    });
+
+    assertEqual(win.nodes[0], secondPinned,
+      'Second pinned tab should shift before moved pinned tab');
+    assertEqual(win.nodes[1], moved,
+      'Moved pinned tab should land at requested pinned index');
+    assertEqual(win.nodes[2], regular,
+      'Regular tab should remain after pinned tabs');
+  } finally {
+    api.tabs.get = originalGet;
+  }
+});
+
+test('onTabMoved moves unpinned tab out of pinned prefix', async () => {
+  const originalGet = api.tabs.get;
+  const originalQuery = api.tabs.query;
+  try {
+    const tree = createTree(null);
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const moved = await addChild(win, {
+      id: 'moved',
+      tabId: 10,
+      windowId: 1,
+      loaded: true,
+      pinned: true
+    });
+    const stillPinned = await addChild(win, {
+      id: 'still-pinned',
+      tabId: 11,
+      windowId: 1,
+      loaded: true,
+      pinned: true
+    });
+    const regular = await addChild(win, {
+      id: 'regular',
+      tabId: 12,
+      windowId: 1,
+      loaded: true
+    });
+
+    api.tabs.get = async (tabId) => ({
+      id: tabId,
+      windowId: 1,
+      pinned: false
+    });
+    api.tabs.query = async () => ([
+      { id: 11, index: 0, windowId: 1, pinned: true },
+      { id: 10, index: 1, windowId: 1, pinned: false },
+      { id: 12, index: 2, windowId: 1, pinned: false }
+    ]);
+
+    await tree.onTabMoved(10, {
+      windowId: 1,
+      fromIndex: 0,
+      toIndex: 1
+    });
+
+    assertEqual(moved.pinned, false,
+      'Moved node should refresh to unpinned state');
+    assertEqual(win.nodes[0], stillPinned,
+      'Remaining pinned tab should stay in pinned prefix');
+    assertEqual(win.nodes[1], moved,
+      'Unpinned tab should move after remaining pinned tabs');
+    assertEqual(win.nodes[2], regular,
+      'Regular tab should remain after moved tab');
+  } finally {
+    api.tabs.get = originalGet;
+    api.tabs.query = originalQuery;
+  }
+});
+
+test('onTabAttached corrects pinned index in same window', async () => {
+  const originalGet = api.tabs.get;
+  try {
+    const tree = createTree({ windowsLoading: [] });
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const moved = await addChild(win, {
+      id: 'moved',
+      tabId: 10,
+      windowId: 1,
+      loaded: true,
+      pinned: true
+    });
+    const secondPinned = await addChild(win, {
+      id: 'second-pinned',
+      tabId: 11,
+      windowId: 1,
+      loaded: true,
+      pinned: true
+    });
+
+    api.tabs.get = async (tabId) => ({
+      id: tabId,
+      windowId: 1,
+      pinned: true
+    });
+
+    await tree.onTabAttached(10, {
+      newWindowId: 1,
+      newPosition: 1
+    });
+
+    assertEqual(win.nodes[0], secondPinned,
+      'Second pinned tab should shift before moved tab');
+    assertEqual(win.nodes[1], moved,
+      'Attached pinned tab should move to requested same-window index');
+  } finally {
+    api.tabs.get = originalGet;
+  }
+});
+
+test('TreeStore onTabMoved maps browser indexes after pinned tabs', async () => {
+  const originalGet = api.tabs.get;
+  const originalQuery = api.tabs.query;
+  const originalIndexedDb = globalThis.indexedDB;
+  try {
+    globalThis.indexedDB = {
+      open: () => {
+        const request = {};
+        setTimeout(() => {
+          if (request.onsuccess) {
+            request.onsuccess({
+              target: {
+                result: {
+                  objectStoreNames: { contains: () => true }
+                }
+              }
+            });
+          }
+        }, 0);
+        return request;
+      }
+    };
+    const calls = [];
+    const bkgd = {
+      enqueueIntent: async (...args) => { calls.push(args); },
+      opsQueue: null
+    };
+    const tree = new TreeStore(bkgd);
+    tree.db = {
+      saveNode: async () => {},
+      deleteNode: async () => {}
+    };
+    bkgd.tree = tree;
+    tree.resolveTreeLoaded();
+
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    await addChild(win, {
+      id: 'pinned',
+      tabId: 10,
+      windowId: 1,
+      loaded: true,
+      pinned: true
+    });
+    const other = await addChild(win, {
+      id: 'other',
+      tabId: 12,
+      windowId: 1,
+      loaded: true
+    });
+    const moved = await addChild(win, {
+      id: 'moved',
+      tabId: 11,
+      windowId: 1,
+      loaded: true
+    });
+
+    api.tabs.get = async (tabId) => ({
+      id: tabId,
+      windowId: 1,
+      pinned: false
+    });
+    api.tabs.query = async () => ([
+      { id: 10, index: 0, windowId: 1, pinned: true },
+      { id: 11, index: 1, windowId: 1, pinned: false },
+      { id: 12, index: 2, windowId: 1, pinned: false }
+    ]);
+
+    await tree.onTabMoved(11, {
+      windowId: 1,
+      fromIndex: 2,
+      toIndex: 1
+    });
+
+    assertEqual(calls.length, 1, 'Should enqueue one move intent');
+    assertEqual(calls[0][0], 'ensureMoved', 'Should enqueue an ensureMoved op');
+    assertEqual(calls[0][1].nodeId, moved.id, 'Should move the requested tab');
+    assertEqual(calls[0][1].destParentId, win.id,
+      'Moved tab should target the window root');
+    assertEqual(calls[0][1].destIndex, other.indexOf(),
+      'Move destination should use the unpinned tab index');
+  } finally {
+    api.tabs.get = originalGet;
+    api.tabs.query = originalQuery;
+    globalThis.indexedDB = originalIndexedDb;
+  }
+});
+
+test('TreeStore onTabMoved ignores extension-generated reorder events', async () => {
+  const originalGet = api.tabs.get;
+  const originalIndexedDb = globalThis.indexedDB;
+  try {
+    globalThis.indexedDB = {
+      open: () => {
+        const request = {};
+        setTimeout(() => {
+          if (request.onsuccess) {
+            request.onsuccess({
+              target: {
+                result: {
+                  objectStoreNames: { contains: () => true }
+                }
+              }
+            });
+          }
+        }, 0);
+        return request;
+      }
+    };
+    const calls = [];
+    const bkgd = {
+      enqueueIntent: async (...args) => { calls.push(args); },
+      opsQueue: null
+    };
+    const tree = new TreeStore(bkgd);
+    tree.db = {
+      saveNode: async () => {},
+      deleteNode: async () => {}
+    };
+    bkgd.tree = tree;
+    tree.resolveTreeLoaded();
+
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const first = await addChild(win, {
+      id: 'first',
+      tabId: 10,
+      windowId: 1,
+      loaded: true
+    });
+    const moved = await addChild(win, {
+      id: 'moved',
+      tabId: 11,
+      windowId: 1,
+      loaded: true
+    });
+
+    let tabLookupCalls = 0;
+    api.tabs.get = async (tabId) => {
+      tabLookupCalls += 1;
+      return { id: tabId, windowId: 1, pinned: false };
+    };
+
+    tree.suppressTabMovedEvents(1, [11]);
+    await tree.onTabMoved(11, {
+      windowId: 1,
+      fromIndex: 1,
+      toIndex: 0
+    });
+
+    assertEqual(tabLookupCalls, 0,
+      'Suppressed extension move should not query browser tab state');
+    assertEqual(calls.length, 0,
+      'Suppressed extension move should not enqueue a move intent');
+    assertEqual(win.nodes[0], first,
+      'Suppressed extension move should not change tree order');
+    assertEqual(win.nodes[1], moved,
+      'Suppressed extension move should leave moved tab in tree position');
+  } finally {
+    api.tabs.get = originalGet;
+    globalThis.indexedDB = originalIndexedDb;
+  }
+});
+
+test('TreeStore onTabUpdated pinned fallback enqueues move', async () => {
+  const originalIndexedDb = globalThis.indexedDB;
+  try {
+    globalThis.indexedDB = {
+      open: () => {
+        const request = {};
+        setTimeout(() => {
+          if (request.onsuccess) {
+            request.onsuccess({
+              target: {
+                result: {
+                  objectStoreNames: { contains: () => true }
+                }
+              }
+            });
+          }
+        }, 0);
+        return request;
+      }
+    };
+    const calls = [];
+    const bkgd = {
+      enqueueIntent: async (...args) => { calls.push(args); },
+      opsQueue: null
+    };
+    const tree = new TreeStore(bkgd);
+    tree.db = {
+      saveNode: async () => {},
+      deleteNode: async () => {}
+    };
+    bkgd.tree = tree;
+    tree.resolveTreeLoaded();
+
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    await addChild(win, {
+      id: 'regular',
+      tabId: 12,
+      windowId: 1,
+      loaded: true
+    });
+    const moved = await addChild(win, {
+      id: 'moved',
+      tabId: 11,
+      windowId: 1,
+      loaded: true,
+      pinned: false
+    });
+
+    await tree.onTabUpdated(11, { pinned: true }, {
+      id: 11,
+      windowId: 1,
+      index: 0,
+      pinned: true,
+      title: 'Pinned',
+      url: 'https://example.com/pinned'
+    });
+
+    assertEqual(moved.pinned, true, 'Tab should update to pinned');
+    assertEqual(calls.length, 1, 'Should enqueue one move intent');
+    assertEqual(calls[0][0], 'ensureMoved', 'Should enqueue ensureMoved');
+    assertEqual(calls[0][1].nodeId, moved.id, 'Should move pinned tab');
+    assertEqual(calls[0][1].destParentId, win.id,
+      'Pinned tab should target window root');
+    assertEqual(calls[0][1].destIndex, 0,
+      'Pinned tab should target pinned prefix start');
+  } finally {
+    globalThis.indexedDB = originalIndexedDb;
+  }
+});
+
+test('TreeStore onTabMoved reorders pinned tabs within pinned prefix', async () => {
+  const originalGet = api.tabs.get;
+  const originalIndexedDb = globalThis.indexedDB;
+  try {
+    globalThis.indexedDB = {
+      open: () => {
+        const request = {};
+        setTimeout(() => {
+          if (request.onsuccess) {
+            request.onsuccess({
+              target: {
+                result: {
+                  objectStoreNames: { contains: () => true }
+                }
+              }
+            });
+          }
+        }, 0);
+        return request;
+      }
+    };
+    const calls = [];
+    const bkgd = {
+      enqueueIntent: async (...args) => { calls.push(args); },
+      opsQueue: null
+    };
+    const tree = new TreeStore(bkgd);
+    tree.db = {
+      saveNode: async () => {},
+      deleteNode: async () => {}
+    };
+    bkgd.tree = tree;
+    tree.resolveTreeLoaded();
+
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const firstPinned = await addChild(win, {
+      id: 'first-pinned',
+      tabId: 10,
+      windowId: 1,
+      loaded: true,
+      pinned: true
+    });
+    const moved = await addChild(win, {
+      id: 'moved',
+      tabId: 11,
+      windowId: 1,
+      loaded: true,
+      pinned: true
+    });
+    await addChild(win, {
+      id: 'regular',
+      tabId: 12,
+      windowId: 1,
+      loaded: true
+    });
+
+    api.tabs.get = async (tabId) => ({
+      id: tabId,
+      windowId: 1,
+      pinned: true
+    });
+
+    await tree.onTabMoved(11, {
+      windowId: 1,
+      fromIndex: 1,
+      toIndex: 0
+    });
+
+    assertEqual(calls.length, 1, 'Should enqueue one move intent');
+    assertEqual(calls[0][0], 'ensureMoved', 'Should enqueue an ensureMoved op');
+    assertEqual(calls[0][1].nodeId, moved.id, 'Should move the pinned tab');
+    assertEqual(calls[0][1].destParentId, win.id,
+      'Pinned tab should stay under the same window');
+    assertEqual(calls[0][1].destIndex, firstPinned.indexOf(),
+      'Pinned tab should target the requested pinned index');
+    assertEqual(calls[0][1].skipTabReorder, true,
+      'Browser-originated move should not reorder browser tabs again');
+  } finally {
+    api.tabs.get = originalGet;
+    globalThis.indexedDB = originalIndexedDb;
+  }
+});
+
+test('TreeStore onTabMoved reorders pinned tabs right within pinned prefix', async () => {
+  const originalGet = api.tabs.get;
+  const originalIndexedDb = globalThis.indexedDB;
+  try {
+    globalThis.indexedDB = {
+      open: () => {
+        const request = {};
+        setTimeout(() => {
+          if (request.onsuccess) {
+            request.onsuccess({
+              target: {
+                result: {
+                  objectStoreNames: { contains: () => true }
+                }
+              }
+            });
+          }
+        }, 0);
+        return request;
+      }
+    };
+    const calls = [];
+    const bkgd = {
+      enqueueIntent: async (...args) => { calls.push(args); },
+      opsQueue: null
+    };
+    const tree = new TreeStore(bkgd);
+    tree.db = {
+      saveNode: async () => {},
+      deleteNode: async () => {}
+    };
+    bkgd.tree = tree;
+    tree.resolveTreeLoaded();
+
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const moved = await addChild(win, {
+      id: 'moved',
+      tabId: 10,
+      windowId: 1,
+      loaded: true,
+      pinned: true
+    });
+    const secondPinned = await addChild(win, {
+      id: 'second-pinned',
+      tabId: 11,
+      windowId: 1,
+      loaded: true,
+      pinned: true
+    });
+    await addChild(win, {
+      id: 'regular',
+      tabId: 12,
+      windowId: 1,
+      loaded: true
+    });
+
+    api.tabs.get = async (tabId) => ({
+      id: tabId,
+      windowId: 1,
+      pinned: true
+    });
+
+    await tree.onTabMoved(10, {
+      windowId: 1,
+      fromIndex: 0,
+      toIndex: 1
+    });
+
+    assertEqual(calls.length, 1, 'Should enqueue one move intent');
+    assertEqual(calls[0][0], 'ensureMoved', 'Should enqueue an ensureMoved op');
+    assertEqual(calls[0][1].nodeId, moved.id, 'Should move the pinned tab');
+    assertEqual(calls[0][1].destParentId, win.id,
+      'Pinned tab should stay under the same window');
+    assertEqual(calls[0][1].destIndex, secondPinned.indexOf() + 1,
+      'Pinned tab should target the position after the next pinned tab');
+  } finally {
+    api.tabs.get = originalGet;
+    globalThis.indexedDB = originalIndexedDb;
+  }
+});
+
+test('TreeStore onTabMoved moves unpinned tab out of pinned prefix', async () => {
+  const originalGet = api.tabs.get;
+  const originalQuery = api.tabs.query;
+  const originalIndexedDb = globalThis.indexedDB;
+  try {
+    globalThis.indexedDB = {
+      open: () => {
+        const request = {};
+        setTimeout(() => {
+          if (request.onsuccess) {
+            request.onsuccess({
+              target: {
+                result: {
+                  objectStoreNames: { contains: () => true }
+                }
+              }
+            });
+          }
+        }, 0);
+        return request;
+      }
+    };
+    const calls = [];
+    const bkgd = {
+      enqueueIntent: async (...args) => { calls.push(args); },
+      opsQueue: null
+    };
+    const tree = new TreeStore(bkgd);
+    tree.db = {
+      saveNode: async () => {},
+      deleteNode: async () => {}
+    };
+    bkgd.tree = tree;
+    tree.resolveTreeLoaded();
+
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const moved = await addChild(win, {
+      id: 'moved',
+      tabId: 10,
+      windowId: 1,
+      loaded: true,
+      pinned: true
+    });
+    const stillPinned = await addChild(win, {
+      id: 'still-pinned',
+      tabId: 11,
+      windowId: 1,
+      loaded: true,
+      pinned: true
+    });
+    await addChild(win, {
+      id: 'regular',
+      tabId: 12,
+      windowId: 1,
+      loaded: true
+    });
+
+    api.tabs.get = async (tabId) => ({
+      id: tabId,
+      windowId: 1,
+      pinned: false
+    });
+    api.tabs.query = async () => ([
+      { id: 11, index: 0, windowId: 1, pinned: true },
+      { id: 10, index: 1, windowId: 1, pinned: false },
+      { id: 12, index: 2, windowId: 1, pinned: false }
+    ]);
+
+    await tree.onTabMoved(10, {
+      windowId: 1,
+      fromIndex: 0,
+      toIndex: 1
+    });
+
+    assertEqual(moved.pinned, false,
+      'Moved node should refresh to unpinned state');
+    assertEqual(calls.length, 1, 'Should enqueue one move intent');
+    assertEqual(calls[0][1].nodeId, moved.id, 'Should move the unpinned tab');
+    assertEqual(calls[0][1].destParentId, win.id,
+      'Moved tab should stay under same window');
+    assertEqual(calls[0][1].destIndex, stillPinned.indexOf() + 1,
+      'Moved tab should target the position after remaining pinned tabs');
+  } finally {
+    api.tabs.get = originalGet;
+    api.tabs.query = originalQuery;
+    globalThis.indexedDB = originalIndexedDb;
+  }
+});
+
+test('TreeStore onTabAttached moves pinned tabs between windows', async () => {
+  const originalGet = api.tabs.get;
+  const originalIndexedDb = globalThis.indexedDB;
+  try {
+    globalThis.indexedDB = {
+      open: () => {
+        const request = {};
+        setTimeout(() => {
+          if (request.onsuccess) {
+            request.onsuccess({
+              target: {
+                result: {
+                  objectStoreNames: { contains: () => true }
+                }
+              }
+            });
+          }
+        }, 0);
+        return request;
+      }
+    };
+    const calls = [];
+    const bkgd = {
+      enqueueIntent: async (...args) => { calls.push(args); },
+      windowsLoading: [],
+      opsQueue: null
+    };
+    const tree = new TreeStore(bkgd);
+    tree.db = {
+      saveNode: async () => {},
+      deleteNode: async () => {}
+    };
+    bkgd.tree = tree;
+    tree.resolveTreeLoaded();
+
+    const oldWin = await addChild(tree.root, {
+      id: 'old-win',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const newWin = await addChild(tree.root, {
+      id: 'new-win',
+      type: 'window',
+      windowId: 2,
+      loaded: true
+    });
+    const existingPinned = await addChild(newWin, {
+      id: 'existing-pinned',
+      tabId: 20,
+      windowId: 2,
+      loaded: true,
+      pinned: true
+    });
+    await addChild(newWin, {
+      id: 'regular',
+      tabId: 21,
+      windowId: 2,
+      loaded: true
+    });
+    const pinned = await addChild(oldWin, {
+      id: 'pinned',
+      tabId: 10,
+      windowId: 1,
+      loaded: true,
+      pinned: true
+    });
+
+    api.tabs.get = async (tabId) => ({
+      id: tabId,
+      windowId: 2,
+      pinned: true
+    });
+
+    await tree.onTabAttached(10, {
+      newWindowId: 2,
+      newPosition: 1
+    });
+
+    assertEqual(calls.length, 1, 'Should enqueue one move intent');
+    assertEqual(calls[0][0], 'ensureMoved', 'Should enqueue an ensureMoved op');
+    assertEqual(calls[0][1].nodeId, pinned.id, 'Should move attached pinned tab');
+    assertEqual(calls[0][1].destParentId, newWin.id,
+      'Pinned tab should move under the new window');
+    assertEqual(calls[0][1].destIndex, existingPinned.indexOf() + 1,
+      'Pinned tab should insert after existing pinned tabs');
+  } finally {
+    api.tabs.get = originalGet;
+    globalThis.indexedDB = originalIndexedDb;
+  }
+});
+
+test('TreeStore onTabAttached corrects pinned index in same window', async () => {
+  const originalGet = api.tabs.get;
+  const originalIndexedDb = globalThis.indexedDB;
+  try {
+    globalThis.indexedDB = {
+      open: () => {
+        const request = {};
+        setTimeout(() => {
+          if (request.onsuccess) {
+            request.onsuccess({
+              target: {
+                result: {
+                  objectStoreNames: { contains: () => true }
+                }
+              }
+            });
+          }
+        }, 0);
+        return request;
+      }
+    };
+    const calls = [];
+    const bkgd = {
+      enqueueIntent: async (...args) => { calls.push(args); },
+      windowsLoading: [],
+      opsQueue: null
+    };
+    const tree = new TreeStore(bkgd);
+    tree.db = {
+      saveNode: async () => {},
+      deleteNode: async () => {}
+    };
+    bkgd.tree = tree;
+    tree.resolveTreeLoaded();
+
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const moved = await addChild(win, {
+      id: 'moved',
+      tabId: 10,
+      windowId: 1,
+      loaded: true,
+      pinned: true
+    });
+    const secondPinned = await addChild(win, {
+      id: 'second-pinned',
+      tabId: 11,
+      windowId: 1,
+      loaded: true,
+      pinned: true
+    });
+
+    api.tabs.get = async (tabId) => ({
+      id: tabId,
+      windowId: 1,
+      pinned: true
+    });
+
+    await tree.onTabAttached(10, {
+      newWindowId: 1,
+      newPosition: 1
+    });
+
+    assertEqual(calls.length, 1, 'Should enqueue one move intent');
+    assertEqual(calls[0][1].nodeId, moved.id, 'Should move attached pinned tab');
+    assertEqual(calls[0][1].destParentId, win.id,
+      'Pinned tab should stay under same window');
+    assertEqual(calls[0][1].destIndex, secondPinned.indexOf() + 1,
+      'Pinned tab should target requested same-window pinned index');
+  } finally {
+    api.tabs.get = originalGet;
+    globalThis.indexedDB = originalIndexedDb;
+  }
+});
+
+test('TreeStore onTabAttached inserts first unpinned tab after pinned prefix', async () => {
+  const originalGet = api.tabs.get;
+  const originalQuery = api.tabs.query;
+  const originalIndexedDb = globalThis.indexedDB;
+  try {
+    globalThis.indexedDB = {
+      open: () => {
+        const request = {};
+        setTimeout(() => {
+          if (request.onsuccess) {
+            request.onsuccess({
+              target: {
+                result: {
+                  objectStoreNames: { contains: () => true }
+                }
+              }
+            });
+          }
+        }, 0);
+        return request;
+      }
+    };
+    const calls = [];
+    const bkgd = {
+      enqueueIntent: async (...args) => { calls.push(args); },
+      windowsLoading: [],
+      opsQueue: null
+    };
+    const tree = new TreeStore(bkgd);
+    tree.db = {
+      saveNode: async () => {},
+      deleteNode: async () => {}
+    };
+    bkgd.tree = tree;
+    tree.resolveTreeLoaded();
+
+    const oldWin = await addChild(tree.root, {
+      id: 'old-win',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const newWin = await addChild(tree.root, {
+      id: 'new-win',
+      type: 'window',
+      windowId: 2,
+      loaded: true
+    });
+    const existingPinned = await addChild(newWin, {
+      id: 'existing-pinned',
+      tabId: 20,
+      windowId: 2,
+      loaded: true,
+      pinned: true
+    });
+    const moved = await addChild(oldWin, {
+      id: 'moved',
+      tabId: 10,
+      windowId: 1,
+      loaded: true,
+      pinned: false
+    });
+
+    api.tabs.get = async (tabId) => ({
+      id: tabId,
+      windowId: 2,
+      pinned: false
+    });
+    api.tabs.query = async () => ([
+      { id: 20, index: 0, windowId: 2, pinned: true },
+      { id: 10, index: 1, windowId: 2, pinned: false }
+    ]);
+
+    await tree.onTabAttached(10, {
+      newWindowId: 2,
+      newPosition: 1
+    });
+
+    assertEqual(calls.length, 1, 'Should enqueue one move intent');
+    assertEqual(calls[0][0], 'ensureMoved', 'Should enqueue an ensureMoved op');
+    assertEqual(calls[0][1].nodeId, moved.id, 'Should move attached tab');
+    assertEqual(calls[0][1].destParentId, newWin.id,
+      'Attached tab should move under the new window');
+    assertEqual(calls[0][1].destIndex, existingPinned.indexOf() + 1,
+      'First unpinned tab should insert after the pinned prefix');
+  } finally {
+    api.tabs.get = originalGet;
+    api.tabs.query = originalQuery;
+    globalThis.indexedDB = originalIndexedDb;
+  }
 });
 
 test('serializeNodes includes window geometry fields', async () => {

@@ -34,6 +34,11 @@ export class Node {
     this.expanded = true;
     this.loaded = false;
     this.active = false;
+    this.pinned = false;
+    // Transient restore guard; not persisted.  Prevents early browser events
+    // from clearing a saved pinned flag before pin restoration completes.
+    this.pinRestorePending = false;
+    this.pinRestorePendingAt = 0;
     this.wasLoaded = false;
     this.marked = false;
     // checkbox: task completion and other task statuses
@@ -781,6 +786,7 @@ export class Node {
     if ([
       'userAction',
       'onTabCreated', 'onTabUpdated', 'onTabReplaced',
+      'onTabMoved', 'onTabAttached',
       'onWindowCreated', 'onWindowFocusChanged'
     ].includes(args.reason))
       await emit('tree_nodeChanged',
@@ -1212,7 +1218,8 @@ export class Node {
       const hasLoadedDesc = this.hasLoadedTabsDeep
         ? this.hasLoadedTabsDeep()
         : this.hasLoadedTabs();
-      if (('moveTo' !== args.reason)
+      if ((args.skipTabReorder !== true)
+        && ('moveTo' !== args.reason)
         && (this.isLoaded() || hasLoadedDesc)
         && (! this.isWindow())
       ) {
@@ -1263,7 +1270,9 @@ export class Node {
           && nextWindow
           && (prevWindow !== nextWindow)
         );
-        await destParent.reorderAllTabsInThisWindow({ force: windowChanged });
+        if (this.tree.bkgd) {
+          await destParent.reorderAllTabsInThisWindow({ force: windowChanged });
+        }
       }
 
       // update the tab's openerTabId if possible
@@ -1558,9 +1567,19 @@ export class Node {
           debug(`Node.reorderAllTabsInThisWindow():`, tabIds);
 
           // attempt to reorder the tabs
-          if (tabIds.length > 0)
-            await api.tabs.move(tabIds,
-              { index: firstMovableIndex, windowId: windowNode.windowId });
+          if (tabIds.length > 0) {
+            this.tree.suppressTabMovedEvents(windowNode.windowId, tabIds);
+            try {
+              await api.tabs.move(tabIds,
+                { index: firstMovableIndex, windowId: windowNode.windowId });
+            } catch (err) {
+              this.tree.clearSuppressedTabMovedEvents(
+                windowNode.windowId,
+                tabIds
+              );
+              throw err;
+            }
+          }
           debug('tab reorder success');
           success = true;
           tries ++;
