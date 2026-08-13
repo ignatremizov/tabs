@@ -50,6 +50,7 @@ active/
 # other build artifacts
 coverage/
 ignore/
+.playwright-cli/
 
 # Project-specific
 todo.otl
