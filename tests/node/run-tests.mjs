@@ -603,6 +603,144 @@ test('TreeStore onTabRemoved honors tabClosedReason for manual unload', async ()
   }
 });
 
+test('TreeStore restores Firefox tabs by session identity in reverse order', async () => {
+  const originalIndexedDb = globalThis.indexedDB;
+  const originalSessions = api.sessions;
+  try {
+    globalThis.indexedDB = {
+      open: () => {
+        const request = {};
+        setTimeout(() => {
+          if (request.onsuccess) {
+            request.onsuccess({
+              target: {
+                result: {
+                  objectStoreNames: { contains: () => true }
+                }
+              }
+            });
+          }
+        }, 0);
+        return request;
+      }
+    };
+
+    const bkgd = {
+      nodesLoading: [],
+      windowsLoading: [],
+      idGen: { newId: () => 'unused' }
+    };
+    const tree = new TreeStore(bkgd);
+    tree.db = {
+      saveNode: async () => {},
+      deleteNode: async () => {}
+    };
+    bkgd.tree = tree;
+
+    const win = await addChild(tree.root, {
+      id: 'saved-window',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const pinned = await addChild(win, {
+      id: 'pinned-gmail',
+      tabId: 10,
+      windowId: 1,
+      url: 'https://mail.google.com/',
+      loaded: true,
+      pinned: true
+    });
+    const first = await addChild(win, {
+      id: 'first-duplicate',
+      tabId: 11,
+      windowId: 1,
+      url: 'https://example.com/duplicate',
+      loaded: true
+    });
+    const second = await addChild(win, {
+      id: 'second-duplicate',
+      tabId: 12,
+      windowId: 1,
+      url: 'https://example.com/duplicate',
+      loaded: true
+    });
+
+    const tabValues = new Map([
+      [20, pinned.id],
+      [21, first.id],
+      [22, second.id]
+    ]);
+    const windowValues = new Map([[9, win.id]]);
+    api.sessions = {
+      getTabValue: async (tabId) => tabValues.get(tabId),
+      setTabValue: async (tabId, key, nodeId) => {
+        tabValues.set(tabId, nodeId);
+      },
+      getWindowValue: async (windowId) => windowValues.get(windowId),
+      setWindowValue: async (windowId, key, nodeId) => {
+        windowValues.set(windowId, nodeId);
+      }
+    };
+
+    const restoredWindow = await tree.onWindowCreated({
+      id: 9,
+      width: 1000,
+      height: 700,
+      left: 10,
+      top: 20
+    }, { reason: 'onWindowCreated' });
+    assertEqual(restoredWindow, win,
+      'Restored window should reuse its saved node');
+
+    // Firefox can emit restored tab creation events in reverse strip order,
+    // with only about:blank available at creation time.
+    await tree.onTabCreated({
+      id: 22,
+      index: 2,
+      windowId: 9,
+      pinned: false,
+      url: 'about:blank',
+      title: 'example.com/duplicate'
+    });
+    await tree.onTabCreated({
+      id: 21,
+      index: 1,
+      windowId: 9,
+      pinned: false,
+      url: 'about:blank',
+      title: 'example.com/duplicate'
+    });
+    await tree.onTabCreated({
+      id: 20,
+      index: 0,
+      windowId: 9,
+      pinned: true,
+      url: 'about:blank',
+      title: 'mail.google.com'
+    });
+
+    assertEqual(tree.root.nodes.length, 1,
+      'Restore should not create a duplicate window row');
+    assertEqual(win.nodes.length, 3,
+      'Restore should not create duplicate tab rows');
+    assertEqual(win.nodes[0], pinned,
+      'Pinned first tab should keep its saved tree position');
+    assertEqual(win.nodes[1], first,
+      'First duplicate URL should keep its saved identity');
+    assertEqual(win.nodes[2], second,
+      'Second duplicate URL should keep its saved identity');
+    assertEqual(pinned.tabId, 20, 'Pinned tab should receive its new tab ID');
+    assertEqual(first.tabId, 21, 'First tab should receive its new tab ID');
+    assertEqual(second.tabId, 22, 'Second tab should receive its new tab ID');
+    assertEqual(pinned.pinned, true, 'Pinned state should survive restore');
+  } finally {
+    globalThis.indexedDB = originalIndexedDb;
+    if (undefined === originalSessions) delete api.sessions;
+    else api.sessions = originalSessions;
+  }
+});
+
 test('TreeStore userAction load bypasses ops queue', async () => {
   const originalIndexedDb = globalThis.indexedDB;
   const calls = [];
@@ -781,7 +919,9 @@ test('TreeStore userAction delete bypasses ops queue', async () => {
 
     const bkgd = {
       enqueueIntent: async (...args) => { calls.push(args); },
-      ensureDeleted: async () => { calls.push(['ensureDeleted']); }
+      ensureDeleted: async (payload) => {
+        calls.push(['ensureDeleted', payload]);
+      }
     };
     const tree = new TreeStore(bkgd);
     tree.db = {
@@ -794,13 +934,60 @@ test('TreeStore userAction delete bypasses ops queue', async () => {
 
     await tree.tree_nodeDeleted({
       nodeId: 'n1',
-      actionReason: 'userAction'
+      actionReason: 'userAction',
+      mode: 'promoteKids'
     });
 
     assertEqual(calls.length, 1, 'Should only call ensureDeleted');
     assertEqual(calls[0][0], 'ensureDeleted', 'Should bypass enqueue for userAction');
+    assertEqual(calls[0][1].mode, 'promoteKids',
+      'Should preserve atomic promote-delete mode');
   } finally {
     globalThis.indexedDB = originalIndexedDb;
+  }
+});
+
+test('ensureDeleted atomically promotes children before deleting wrapper', async () => {
+  const originalSendMessage = api.runtime.sendMessage;
+  const messages = [];
+  try {
+    api.runtime.sendMessage = async (msg) => {
+      messages.push(msg);
+      return {};
+    };
+    const bkgd = new Bkgd();
+    const tree = createTree(bkgd);
+    bkgd.tree = tree;
+
+    const before = await addChild(tree.root, { id: 'before' });
+    const wrapper = await addChild(tree.root, {
+      id: 'restore',
+      label: 'Recovered backup'
+    });
+    const first = await addChild(wrapper, { id: 'first' });
+    const nested = await addChild(wrapper, { id: 'nested' });
+    const grandchild = await addChild(nested, { id: 'grandchild' });
+    const after = await addChild(tree.root, { id: 'after' });
+
+    await bkgd.ensureDeleted({
+      nodeId: wrapper.id,
+      reason: 'userAction',
+      mode: 'promoteKids'
+    });
+
+    assertEqual(tree.root.nodes.length, 4,
+      'Wrapper should be replaced by its two children');
+    assertEqual(tree.root.nodes[0], before, 'Previous sibling should remain');
+    assertEqual(tree.root.nodes[1], first, 'First child should be promoted');
+    assertEqual(tree.root.nodes[2], nested, 'Second child should be promoted');
+    assertEqual(tree.root.nodes[3], after, 'Following sibling should remain');
+    assertEqual(nested.nodes[0], grandchild,
+      'Promoted branch descendants should survive');
+    assert(! tree.nodes[wrapper.id], 'Wrapper should be deleted from cache');
+    assertEqual(messages.length, 0,
+      'Background atomic apply should not rebroadcast partial operations');
+  } finally {
+    api.runtime.sendMessage = originalSendMessage;
   }
 });
 
@@ -2390,6 +2577,86 @@ test('mergeOpenWindowsIntoTree matches duplicate URLs by pinned state first', as
       'Pinned duplicate should move to pinned prefix');
     assertEqual(win.nodes[1], regular,
       'Regular duplicate should remain after pinned duplicate');
+  } finally {
+    api.windows.getAll = originalGetAll;
+  }
+});
+
+test('mergeOpenWindowsIntoTree consumes duplicate URL candidates once', async () => {
+  const originalGetAll = api.windows.getAll;
+  try {
+    const bkgd = new Bkgd();
+    const tree = createTree(bkgd);
+    bkgd.tree = tree;
+
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 94,
+      loaded: true
+    });
+    const first = await addChild(win, {
+      id: 'first',
+      url: 'https://same.example.com',
+      loaded: false
+    });
+    const second = await addChild(win, {
+      id: 'second',
+      url: 'https://same.example.com',
+      loaded: false
+    });
+    tree.getWindowNodeFromSession = async (windowId) => {
+      return windowId === 94 ? win : null;
+    };
+    tree.getTabNodeFromSession = async (tabId) => {
+      if (tabId === 131) return second;
+      if (tabId === 132) return first;
+      return null;
+    };
+
+    api.windows.getAll = async () => ([
+      {
+        id: 94,
+        focused: true,
+        tabs: [
+          {
+            id: 130,
+            index: 0,
+            pinned: true,
+            url: 'https://mail.google.com/',
+            title: 'Pinned Gmail',
+            active: false
+          },
+          {
+            id: 131,
+            index: 1,
+            pinned: false,
+            url: 'https://same.example.com',
+            title: 'First duplicate',
+            active: true
+          },
+          {
+            id: 132,
+            index: 2,
+            pinned: false,
+            url: 'https://same.example.com',
+            title: 'Second duplicate',
+            active: false
+          }
+        ]
+      }
+    ]);
+
+    await bkgd.mergeOpenWindowsIntoTree();
+
+    assertEqual(first.tabId, 132,
+      'First saved duplicate should follow its Firefox session identity');
+    assertEqual(second.tabId, 131,
+      'Second saved duplicate should follow its Firefox session identity');
+    assert(first.tabId !== second.tabId,
+      'Duplicate URLs should consume distinct saved candidates');
+    assertEqual(win.getLoadedAndUnloadedTabs().length, 3,
+      'Only the unmatched pinned Gmail tab should create a row');
   } finally {
     api.windows.getAll = originalGetAll;
   }

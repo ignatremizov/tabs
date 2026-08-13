@@ -470,6 +470,7 @@ export class NodeView extends Node {
     if (oldParent) oldParent.$refreshAncestry();
     // move the cursor to a new valid node if necessary
     if (newCursor) this.tree.setCursor(newCursor);
+    return changed;
   }
 
   async addChild (index, details, ...extra) {

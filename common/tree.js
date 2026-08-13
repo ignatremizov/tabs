@@ -1489,15 +1489,18 @@ export class Tree {
       // Node was already removed locally, ignore duplicate delete.
       return;
     }
-    // un-cache and delete it
-    delete this.nodes[nodeId];
-
     msg.reason = 'tree_nodeDeleted';
 
-    //return await node.deleteSelf(msg);
     let result;
     try {
-      result = await node.deleteSelf(msg);
+      if ('promoteKids' === msg.mode) {
+        result = await node.deleteSelfAndPromoteKids({
+          ...msg,
+          emit: false
+        });
+      } else {
+        result = await node.deleteSelf(msg);
+      }
     } catch (err) {
       error(`tree_nodeDeleted() error`, err);
     }

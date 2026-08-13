@@ -2888,6 +2888,54 @@
         return { before, after };
       });
 
+      test('delete root restore wrapper emits one atomic promote-delete', async () => {
+        const view = createView();
+        const wrapper = await addChild(view.root, {
+          id: 'restore',
+          label: 'Recovered backup',
+          expanded: true
+        });
+        const first = await addChild(wrapper, {
+          id: 'c0',
+          label: 'First child'
+        });
+        for (let i = 1; i < 200; i += 1) {
+          await addChild(wrapper, {
+            id: `c${i}`,
+            label: `Child ${i}`
+          });
+        }
+        const { api } = await import('../api.js');
+        const originalSendMessage = api.runtime.sendMessage;
+        const messages = [];
+        api.runtime.sendMessage = async (msg) => {
+          messages.push({ ...msg });
+          return {};
+        };
+        try {
+          view.cursor = wrapper;
+          await view.action_deleteNode({ type: 'command' });
+        } finally {
+          api.runtime.sendMessage = originalSendMessage;
+        }
+
+        const treeMessages = messages.filter((msg) =>
+          msg.msg && msg.msg.startsWith('tree_')
+        );
+        assertEqual(view.root.nodes.length, 200,
+          'Every restored child should survive at root');
+        assertEqual(view.root.nodes[0], first,
+          'Promoted children should preserve order');
+        assertEqual(treeMessages.length, 1,
+          'Unwrap should broadcast one atomic tree operation');
+        assertEqual(treeMessages[0].msg, 'tree_nodeDeleted',
+          'Atomic operation should use the delete message');
+        assertEqual(treeMessages[0].mode, 'promoteKids',
+          'Delete message should instruct receivers to promote children');
+        assert(! messages.some((msg) => msg.msg === 'tree_nodeMoved'),
+          'Unwrap must not race per-child moves against parent deletion');
+      });
+
       test('delete collapsed label removes subtree', async () => {
         const view = createView();
         const label = await addChild(view.root, { id: 'l1', label: 'Group', expanded: false });

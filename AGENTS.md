@@ -311,7 +311,7 @@ Stored in `chrome.storage.local`:
 
 ## Extension Permissions
 
-From `manifest.json`:
+From the browser manifests:
 
 | Permission | Purpose |
 |-----------|---------|
@@ -319,6 +319,7 @@ From `manifest.json`:
 | `storage` | Persist settings |
 | `downloads` | Save backup files |
 | `tabs` | Monitor and control browser tabs |
+| `sessions` (Firefox) | Preserve tree identity across tab/window restore |
 | `alarms` | Schedule periodic backups |
 | `favicon` | Display tab favicons |
 

@@ -17,6 +17,8 @@ export class TreeStore extends Tree {
     super(NodeStore);
     this.bkgd = bkgd;
     this.needsTutorial = false;
+    this.tabNodeSessionKey = 'tktstoTabNodeId';
+    this.windowNodeSessionKey = 'tktstoWindowNodeId';
     this.db = new IDB();
     this.db.init();
   }
@@ -25,6 +27,180 @@ export class TreeStore extends Tree {
     super.init();
     // load the nodes from storage
     await this.loadTreeFromDB();
+  }
+
+  async getSessionNode (browserId, key, expectedType) {
+    const getter = expectedType === 'window'
+      ? api.sessions && api.sessions.getWindowValue
+      : api.sessions && api.sessions.getTabValue;
+    if (! getter || (undefined === browserId) || (null === browserId)) {
+      return null;
+    }
+
+    let nodeId;
+    try {
+      nodeId = await getter.call(api.sessions, browserId, key);
+    } catch (err) {
+      debug(`TreeStore.getSessionNode(${browserId}) failed: ${err}`);
+      return null;
+    }
+    const node = this.nodes[nodeId];
+    if (! node) return null;
+    if (expectedType === 'window') return node.isWindow() ? node : null;
+    return node.isWindow() ? null : node;
+  }
+
+  async getTabNodeFromSession (tabId) {
+    return await this.getSessionNode(
+      tabId,
+      this.tabNodeSessionKey,
+      'tab'
+    );
+  }
+
+  async getWindowNodeFromSession (windowId) {
+    return await this.getSessionNode(
+      windowId,
+      this.windowNodeSessionKey,
+      'window'
+    );
+  }
+
+  async rememberTabNode (node, tabId = node && node.tabId) {
+    if (! node || node.isWindow() || (! api.sessions)
+      || (! api.sessions.setTabValue)
+      || (undefined === tabId) || (null === tabId)) {
+      return;
+    }
+    try {
+      await api.sessions.setTabValue(
+        tabId,
+        this.tabNodeSessionKey,
+        node.id
+      );
+    } catch (err) {
+      debug(`TreeStore.rememberTabNode(${tabId}) failed: ${err}`);
+    }
+  }
+
+  async rememberWindowNode (node, windowId = node && node.windowId) {
+    if (! node || (! node.isWindow()) || (! api.sessions)
+      || (! api.sessions.setWindowValue)
+      || (undefined === windowId) || (null === windowId)) {
+      return;
+    }
+    try {
+      await api.sessions.setWindowValue(
+        windowId,
+        this.windowNodeSessionKey,
+        node.id
+      );
+    } catch (err) {
+      debug(`TreeStore.rememberWindowNode(${windowId}) failed: ${err}`);
+    }
+  }
+
+  async onWindowCreated (window, args = {}) {
+    const savedWindowNode = await this.getWindowNodeFromSession(window.id);
+    let alreadyOpen = false;
+    if (savedWindowNode
+      && (undefined !== savedWindowNode.windowId)
+      && (null !== savedWindowNode.windowId)
+      && (savedWindowNode.windowId !== window.id)) {
+      const boundNode = await this.getWindowNodeFromSession(
+        savedWindowNode.windowId
+      );
+      alreadyOpen = boundNode === savedWindowNode;
+    }
+    if (savedWindowNode && (! alreadyOpen)) {
+      debug(`TreeStore.onWindowCreated(): restoring nodeId=${savedWindowNode.id}`);
+      await savedWindowNode.setTabFields({
+        type: 'window',
+        windowId: window.id,
+        loaded: true,
+        geometry: [window.width, window.height, window.left, window.top]
+      }, { reason: args.reason || 'onWindowCreated' });
+      await this.rememberWindowNode(savedWindowNode, window.id);
+      return savedWindowNode;
+    }
+
+    const windowNode = await super.onWindowCreated(window, args);
+    await this.rememberWindowNode(windowNode, window.id);
+    return windowNode;
+  }
+
+  async onTabCreated (tab) {
+    const savedTabNode = await this.getTabNodeFromSession(tab.id);
+    if (savedTabNode) {
+      // A duplicated live tab may inherit session values.  Only reclaim the
+      // saved node when its previous binding does not still identify a live
+      // tab carrying the same node ID.
+      let alreadyOpen = false;
+      if ((undefined !== savedTabNode.tabId)
+        && (null !== savedTabNode.tabId)
+        && (savedTabNode.tabId !== tab.id)) {
+        const boundNode = await this.getTabNodeFromSession(savedTabNode.tabId);
+        alreadyOpen = boundNode === savedTabNode;
+      }
+
+      if (! alreadyOpen) {
+        debug(`TreeStore.onTabCreated(): restoring nodeId=${savedTabNode.id}`);
+        const savedWindowNode = savedTabNode.getWindowNode(false);
+        let windowNode = this.root.getWindowId(tab.windowId);
+        if (! windowNode && savedWindowNode) {
+          await savedWindowNode.setTabFields({
+            type: 'window',
+            windowId: tab.windowId,
+            loaded: true
+          }, { reason: 'onWindowCreated' });
+          windowNode = savedWindowNode;
+          await this.rememberWindowNode(windowNode, tab.windowId);
+        }
+
+        const preserveSavedPinned = savedTabNode.pinned && (! tab.pinned);
+        if (preserveSavedPinned) {
+          savedTabNode.pinRestorePending = true;
+          savedTabNode.pinRestorePendingAt = Date.now();
+        } else if (tab.pinned) {
+          savedTabNode.pinRestorePending = false;
+          savedTabNode.pinRestorePendingAt = 0;
+        }
+
+        await savedTabNode.setTabFields({
+          tabId: tab.id,
+          windowId: tab.windowId,
+          loaded: true,
+          discarded: tab.discarded,
+          frozen: tab.frozen,
+          hidden: tab.hidden,
+          incognito: tab.incognito,
+          pinned: Boolean(tab.pinned || savedTabNode.pinned)
+        }, { reason: 'onTabCreated' });
+
+        if (windowNode && savedWindowNode
+          && (windowNode !== savedWindowNode)) {
+          const dest = await this.getBrowserEventTabDestination(
+            savedTabNode,
+            windowNode,
+            tab.index,
+            Boolean(tab.pinned)
+          );
+          await savedTabNode.moveTo(dest.destParent, dest.destIndex, {
+            reason: 'onTabAttached',
+            emit: false,
+            skipTabReorder: true
+          });
+        }
+
+        await this.rememberTabNode(savedTabNode, tab.id);
+        return savedTabNode;
+      }
+    }
+
+    await super.onTabCreated(tab);
+    const tabNode = this.getNodeByTabId(tab.id);
+    await this.rememberTabNode(tabNode, tab.id);
+    return tabNode;
   }
 
   async loadTreeFromDB () {
@@ -198,6 +374,7 @@ export class TreeStore extends Tree {
       reason: actionReason,
       when: msg.when
     };
+    if (undefined !== msg.mode) payload.mode = msg.mode;
     if ('userAction' === actionReason) {
       await this.bkgd.ensureDeleted(payload);
       return { result: 'ok immediate' };

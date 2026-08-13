@@ -347,6 +347,10 @@ export class Bkgd {
       when: payload.when
     };
     if ('promoteKids' === payload.mode) {
+      // The originating view and any sibling views apply the same atomic
+      // message themselves.  Persist the background transition without
+      // rebroadcasting per-child moves or a second delete.
+      args.emit = false;
       return await node.deleteSelfAndPromoteKids(args);
     }
     return await node.deleteSelf(args);
@@ -655,12 +659,21 @@ export class Bkgd {
     const attachedNodeIds = new Set();
     for (const window of windows) {
       debug(`Window ID: ${window.id}`);
-      // Prefer an already-loaded exact windowId match within the same session.
-      let winNode = this.tree.root.getWindowId(window.id);
+      // Firefox session values survive restored browser IDs, so consult them
+      // before stale numeric IDs or URL-based matching.
+      let winNode = null;
+      let matchedBySession = false;
+      if (this.tree.getWindowNodeFromSession) {
+        winNode = await this.tree.getWindowNodeFromSession(window.id);
+        matchedBySession = Boolean(winNode);
+      }
+      // Otherwise prefer an already-loaded exact windowId match within the
+      // same browser session.
+      if (! winNode) winNode = this.tree.root.getWindowId(window.id);
       if (winNode && attachedNodeIds.has(winNode.id)) {
         winNode = null;
       }
-      if (winNode) {
+      if (winNode && (! matchedBySession)) {
         const hasLoadedDesc = winNode.hasLoadedTabsDeep
           ? winNode.hasLoadedTabsDeep()
           : winNode.hasLoadedTabs();
@@ -687,6 +700,9 @@ export class Bkgd {
           { reason: 'mergeOpenWindowsIntoTree' }
         );
       }
+      if (this.tree.rememberWindowNode) {
+        await this.tree.rememberWindowNode(winNode, window.id);
+      }
       // mark this winNode as actually attached to a real window
       attached.push({ winNode, window });
       attachedNodeIds.add(winNode.id);
@@ -710,6 +726,7 @@ export class Bkgd {
     }
 
     // attach tabs now
+    const claimedTabNodeIds = new Set();
     for (const obj of attached) {
       const winNode = obj.winNode;
       const window = obj.window;
@@ -722,8 +739,15 @@ export class Bkgd {
         debug(`Tab ID: ${tab.id}, URL: ${tab.url}`, tab);
         const tabUrl = this.tree.getTabPendingUrl(tab);
         const localTabList = winNode.getLoadedAndUnloadedTabs();
-        const localPinnedTabList = localTabList.filter((node) => node.pinned);
-        const localMovableTabList = localTabList.filter((node) => ! node.pinned);
+        const availableTabList = localTabList.filter(
+          (node) => ! claimedTabNodeIds.has(node.id)
+        );
+        const localPinnedTabList = localTabList.filter(
+          (node) => node.pinned
+        );
+        const localMovableTabList = localTabList.filter(
+          (node) => ! node.pinned
+        );
         const getTabDestination = (tabNode = null) => {
           // Startup merge receives browser indexes, where pinned tabs occupy a
           // fixed prefix.  Convert those indexes into the correct tree sibling
@@ -748,23 +772,37 @@ export class Bkgd {
         // detect whether tab is already in tree
         // (it usually should be, since findMatchingWindow() attaches tabIds)
         const attachedTabNode = this.tree.getNodeByTabId(tab.id);
-        let tabNode = localTabList.find((node) => node.tabId === tab.id);
+        let sessionTabNode = null;
+        if (this.tree.getTabNodeFromSession) {
+          sessionTabNode = await this.tree.getTabNodeFromSession(tab.id);
+        }
+        let tabNode = null;
+        if (sessionTabNode
+          && (! claimedTabNodeIds.has(sessionTabNode.id))) {
+          tabNode = sessionTabNode;
+        }
+        if (! tabNode) {
+          tabNode = availableTabList.find(
+            (node) => node.tabId === tab.id
+          );
+        }
         if ((! tabNode)
           && attachedTabNode
+          && (! claimedTabNodeIds.has(attachedTabNode.id))
           && (attachedTabNode.getWindowNode(false) === winNode)) {
           tabNode = attachedTabNode;
         }
         if (! tabNode) {
           // Try same-pinned-state URL matches before generic URL matches.  This
           // avoids swapping saved pinned/unpinned duplicates with identical URLs.
-          const localUrlMatches = localTabList.filter((node) =>
+          const localUrlMatches = availableTabList.filter((node) =>
             node.url === tabUrl && (node.pinned === Boolean(tab.pinned)));
           if (localUrlMatches.length > 0) {
             tabNode = this.tree.choosePreferredTabNode(localUrlMatches);
           }
         }
         if (! tabNode) {
-          const localUrlMatches = localTabList.filter((node) =>
+          const localUrlMatches = availableTabList.filter((node) =>
             { return node.url === tabUrl; });
           if (localUrlMatches.length > 0) {
             tabNode = this.tree.choosePreferredTabNode(localUrlMatches);
@@ -776,7 +814,9 @@ export class Bkgd {
           && (tab.index >= 0)
           && (tab.index < localPinnedTabList.length)) {
           const indexCandidate = localPinnedTabList[tab.index];
-          if (indexCandidate && (! indexCandidate.isWindow())) {
+          if (indexCandidate
+            && (! claimedTabNodeIds.has(indexCandidate.id))
+            && (! indexCandidate.isWindow())) {
             tabNode = indexCandidate;
           }
         }
@@ -787,12 +827,18 @@ export class Bkgd {
           const indexCandidate = localMovableTabList[
             tab.index - pinnedPrefixCount
           ];
-          if (indexCandidate && (! indexCandidate.isWindow())) {
+          if (indexCandidate
+            && (! claimedTabNodeIds.has(indexCandidate.id))
+            && (! indexCandidate.isWindow())) {
             tabNode = indexCandidate;
           }
         }
-        if (! tabNode) tabNode = attachedTabNode;
+        if ((! tabNode) && attachedTabNode
+          && (! claimedTabNodeIds.has(attachedTabNode.id))) {
+          tabNode = attachedTabNode;
+        }
         if (tabNode) {
+          claimedTabNodeIds.add(tabNode.id);
           const prevWindowNode = tabNode.getWindowNode(false);
           const prevPinned = tabNode.pinned;
           const changes = {};
@@ -857,6 +903,9 @@ export class Bkgd {
               });
             }
           }
+          if (this.tree.rememberTabNode) {
+            await this.tree.rememberTabNode(tabNode, tab.id);
+          }
           continue;
         }
         // if not, add new tab to the tree
@@ -873,7 +922,7 @@ export class Bkgd {
             warn(`tab ${tab.id} has openerTabId ${tab.openerTabId} but no parent found`);
           }
         }
-        await destParent.addChild(destIndex, {
+        const newTabNode = await destParent.addChild(destIndex, {
           windowId: window.id,
           tabId: tab.id,
           title: tab.title,
@@ -888,6 +937,10 @@ export class Bkgd {
           pinned: Boolean(tab.pinned),
           atime: tab.lastAccessed
           }, { reason: 'mergeOpenWindowsIntoTree' });
+        claimedTabNodeIds.add(newTabNode.id);
+        if (this.tree.rememberTabNode) {
+          await this.tree.rememberTabNode(newTabNode, tab.id);
+        }
       }
     }
 

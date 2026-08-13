@@ -139,6 +139,22 @@ export class Node {
     // root should refuse to delete itself
     if (this.isRoot()) return;
 
+    // A promote followed by a delete is one logical operation.  Sending a
+    // tree_nodeMoved message per child lets another extension context apply
+    // the parent deletion before all moves finish, recursively deleting kids
+    // which were meant to survive.  Views broadcast one atomic promote-delete
+    // message instead; each receiver performs the same local transition.
+    const atomicBroadcast = (
+      (args.emit !== false)
+      && ('userAction' === args.reason)
+      && this.tree
+      && (! this.tree.bkgd)
+    );
+    const operationArgs = atomicBroadcast
+      ? { ...args, emit: false }
+      : args;
+    const nodeId = this.id;
+
     // if the tab was already closed, remove its tab ID
     // so we won't try to sort it in the tab bar
     if ('onTabRemoved' === args.reason) this.tabId = null;
@@ -147,10 +163,19 @@ export class Node {
     // the tabs will need a new window... maybe just refuse the request?
 
     // take care of the kids first
-    await this.promoteKids(args);
+    await this.promoteKids(operationArgs);
 
     // remove this node from its parent
-    await this.deleteSelf(args);
+    const changed = await this.deleteSelf(operationArgs);
+    if (atomicBroadcast && changed) {
+      await emit('tree_nodeDeleted', {
+        nodeId,
+        mode: 'promoteKids',
+        when: this.mtime,
+        actionReason: args.reason
+      });
+    }
+    return changed;
   }
 
   async promoteKids (args) {
