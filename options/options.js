@@ -110,9 +110,6 @@ function initBehaviorForm () {
   const $reconcileIntervalMinutes = document.getElementById(
     'reconcileIntervalMinutes'
   );
-  const $opsBacklogWarnThreshold = document.getElementById(
-    'opsBacklogWarnThreshold'
-  );
   api.storage.local.get({
     defaultViewScope: 'auto',
     openWindowOnRootMove: false,
@@ -123,8 +120,7 @@ function initBehaviorForm () {
     moveUpIntoExpandedSibling: true,
     dropTextNoteMode: 'prepend',
     nodesPerPage: 20,
-    reconcileIntervalMinutes: 5,
-    opsBacklogWarnThreshold: 50
+    reconcileIntervalMinutes: 5
   }).then((result) => {
     $defaultViewScope.value = result.defaultViewScope;
     $openWindowOnRootMove.checked = result.openWindowOnRootMove;
@@ -140,7 +136,6 @@ function initBehaviorForm () {
     $dropTextNoteMode.value = result.dropTextNoteMode;
     $nodesPerPage.value = result.nodesPerPage;
     $reconcileIntervalMinutes.value = result.reconcileIntervalMinutes;
-    $opsBacklogWarnThreshold.value = result.opsBacklogWarnThreshold;
   });
   $defaultViewScope.addEventListener('change', () => {
     api.storage.local.set({
@@ -209,18 +204,6 @@ function initBehaviorForm () {
     }, 1000);
   });
 
-  let backlogDebounce;
-  $opsBacklogWarnThreshold.addEventListener('input', () => {
-    clearTimeout(backlogDebounce);
-    backlogDebounce = setTimeout(() => {
-      const threshold = parseInt($opsBacklogWarnThreshold.value, 10);
-      if (isNaN(threshold) || threshold < 0 || threshold > 10000) {
-        warn('User entered invalid data into opsBacklogWarnThreshold');
-        return;
-      }
-      api.storage.local.set({ opsBacklogWarnThreshold: threshold });
-    }, 1000);
-  });
 }
 
 function initAppearanceForm () {

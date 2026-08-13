@@ -19,7 +19,6 @@ import {
 import { IdGenerator } from '/common/id-generator.js';
 import * as sidepanel from './sidepanel.js';
 import { TreeStore } from './treestore.js';
-import { OpsQueue } from '/bkgd/ops.js';
 import { base32encode } from '/common/base32.js';
 import { createNewUserTutorialNodes } from '/bkgd/new-user.js';
 import { runReconcile } from '/bkgd/reconcile.js';
@@ -33,14 +32,10 @@ export class Bkgd {
     this.configLoaded = new Promise(resolve => {
       this.resolveConfigLoaded = resolve;
     });
-    this.treeDbLoaded = new Promise(resolve => {
-      this.resolveTreeDbLoaded = resolve;
-    });
     this.treeLoaded = new Promise(resolve => {
       this.resolveTreeLoaded = resolve;
     });
     this.backupQueued = false;
-    this.bootStartedAt = Date.now();
 
     // queues for saved nodes which are in the process of being loaded
     // (empty except during brief moments before browser opens stuff)
@@ -52,23 +47,6 @@ export class Bkgd {
     this.reconcileAlarmName = 'periodicReconcile';
     this.reconcileIntervalMinutes = 5;
     this.reconcileInFlight = false;
-
-    // ops queue processor state
-    this.opsQueue = null;
-    this.opsProcessing = false;
-    this.opsProcessingRequested = false;
-    this.opsProcessingTimer = null;
-    this.opsPruneAt = 0;
-    this.opsPruneIntervalMs = 5 * 60 * 1000;
-    this.opsPruneMaxAgeMs = 7 * 24 * 60 * 60 * 1000;
-    this.opsPruneLimit = 500;
-
-    // reconcile dirty hint state
-    this.reconcileDirtyAt = 0;
-
-    // ops backlog warning
-    this.opsBacklogWarnThreshold = 50;
-    this.opsBacklogWarnedAt = 0;
   }
 
   init () {
@@ -102,13 +80,10 @@ export class Bkgd {
       this.resolveConfigLoaded();  // let listeners know the config is ready
 
       this.tree = new TreeStore(this);
-      this.opsQueue = new OpsQueue(this.tree.db);
       // give the tree a link to the bkgd object
       this.tree.bkgd = this;
       //  actually load the tree from storage
       this.tree.init().then(async () => {
-        debug('Bkgd.resolveTreeDbLoaded()');
-        this.resolveTreeDbLoaded();  // let listeners know the IDB is loaded
         this.idGen.cache = this.tree.nodes;
         // grab all the open windows and tabs, and put them in the tree
         await this.mergeOpenWindowsIntoTree();
@@ -116,131 +91,33 @@ export class Bkgd {
         if (this.tree.needsTutorial) {
           createNewUserTutorialNodes(this.tree);
         }
-        await this.purgeStaleBrowserEventMoveOps();
         await runReconcile.call(this, { reason: 'startup' });
         // tree is ready to use
         debug('Bkgd.resolveTreeLoaded()');
         this.resolveTreeLoaded();  // let listeners know the tree is loaded
         this.tree.resolveTreeLoaded();
-        this.scheduleOpsProcessing();
       });
     });
 
   }
 
-  async enqueueIntent (name, payload, source = 'unknown') {
-    await this.treeDbLoaded;
-    if (! this.opsQueue) {
-      if (! this.tree || ! this.tree.db) {
-        throw new Error('OpsQueue requires initialized tree db');
-      }
-      this.opsQueue = new OpsQueue(this.tree.db);
+  async applyTreeMutation (name, payload = {}) {
+    if ('ensureLoaded' === name) {
+      return this.ensureLoaded(payload);
     }
-    const record = await this.opsQueue.enqueue({
-      name,
-      source,
-      payload
-    });
-    this.scheduleOpsProcessing();
-    return record;
+    if ('ensureUnloaded' === name) {
+      return this.ensureUnloaded(payload);
+    }
+    if ('ensureMoved' === name) {
+      return this.ensureMoved(payload);
+    }
+    if ('ensureDeleted' === name) {
+      return this.ensureDeleted(payload);
+    }
+    throw new Error(`Unknown tree mutation: ${name}`);
   }
 
-  scheduleOpsProcessing () {
-    if (this.opsProcessing) {
-      this.opsProcessingRequested = true;
-      return;
-    }
-    if (this.opsProcessingTimer) return;
-    this.opsProcessingTimer = setTimeout(() => {
-      this.opsProcessingTimer = null;
-      this.processOpsQueue();
-    }, 0);
-  }
-
-  async processOpsQueue (opts = {}) {
-    const budgetMs = Number.isFinite(opts.budgetMs) ? opts.budgetMs : 50;
-    const batchLimit = Number.isFinite(opts.batchLimit) ? opts.batchLimit : 10;
-    const maxRetries = Number.isFinite(opts.maxRetries) ? opts.maxRetries : 3;
-    const retryDelayMs = Number.isFinite(opts.retryDelayMs) ? opts.retryDelayMs : 1000;
-    const runningStaleMs = Number.isFinite(opts.runningStaleMs)
-      ? opts.runningStaleMs
-      : 30000;
-
-    if (this.opsProcessing) {
-      this.opsProcessingRequested = true;
-      return;
-    }
-    this.opsProcessing = true;
-    this.opsProcessingRequested = false;
-    let processed = 0;
-    const start = performance.now();
-    try {
-      while ((performance.now() - start) < budgetMs) {
-        const ops = await this.opsQueue.claimNextOps(batchLimit);
-        if (ops.length === 0) {
-          // Try to recover stuck ops before giving up
-          const requeuedFailed = await this.opsQueue.requeueFailedOps({
-            limit: batchLimit,
-            maxRetries,
-            minAgeMs: retryDelayMs
-          });
-          const requeuedStale = await this.opsQueue.requeueStaleRunningOps({
-            limit: batchLimit,
-            minAgeMs: runningStaleMs
-          });
-          if (! requeuedFailed && ! requeuedStale) break;
-          continue;
-        }
-        for (const op of ops) {
-          if ((performance.now() - start) >= budgetMs) {
-            this.opsProcessingRequested = true;
-            break;
-          }
-          try {
-            await this.executeOp(op);
-            await this.opsQueue.markDone(op.opId);
-            processed += 1;
-          } catch (err) {
-            await this.opsQueue.markFailed(op.opId, err);
-          }
-        }
-        if (this.opsProcessingRequested) break;
-      }
-    } finally {
-      this.opsProcessing = false;
-    }
-
-    if (processed > 0) {
-      await this.markReconcileDirty('opsBatch');
-    }
-    await this.maybeWarnOpsBacklog();
-    await this.maybePruneOpsQueue();
-
-    if (this.opsProcessingRequested) {
-      this.scheduleOpsProcessing();
-    }
-  }
-
-  async executeOp (op) {
-    if (! op || ! op.name) {
-      throw new Error('executeOp requires op name');
-    }
-    if ('ensureLoaded' === op.name) {
-      return this.ensureLoaded(op.payload || {}, op);
-    }
-    if ('ensureUnloaded' === op.name) {
-      return this.ensureUnloaded(op.payload || {}, op);
-    }
-    if ('ensureMoved' === op.name) {
-      return this.ensureMoved(op.payload || {}, op);
-    }
-    if ('ensureDeleted' === op.name) {
-      return this.ensureDeleted(op.payload || {}, op);
-    }
-    throw new Error(`Unknown op name: ${op.name}`);
-  }
-
-  async ensureLoaded (payload, op) {
+  async ensureLoaded (payload) {
     const node = this.tree.nodes[payload.nodeId];
     if (! node) return;
     const shouldLoad = node.isUnloadedTab() || node.isUnloadedWindow();
@@ -253,7 +130,7 @@ export class Bkgd {
     return await node.load(args);
   }
 
-  async ensureUnloaded (payload, op) {
+  async ensureUnloaded (payload) {
     const node = this.tree.nodes[payload.nodeId];
     if (! node) return;
     if ((undefined === node.tabId) && (undefined !== payload.tabId)) {
@@ -284,7 +161,7 @@ export class Bkgd {
     return await node.unload(args);
   }
 
-  async ensureMoved (payload, op) {
+  async ensureMoved (payload) {
     const node = this.tree.nodes[payload.nodeId];
     let destParent = this.tree.nodes[payload.destParentId];
     if (! node || ! destParent) return;
@@ -327,19 +204,18 @@ export class Bkgd {
     if (node.parent === destParent && node.indexOf() === destIndex) {
       return;
     }
-    if (this.tree.applyMoveForIntent) {
-      return await this.tree.applyMoveForIntent(
+    if (this.tree.applyMove) {
+      return await this.tree.applyMove(
         node,
         destParent,
         destIndex,
-        args,
-        op
+        args
       );
     }
     return await node.moveTo(destParent, destIndex, args);
   }
 
-  async ensureDeleted (payload, op) {
+  async ensureDeleted (payload) {
     const node = this.tree.nodes[payload.nodeId];
     if (! node || node.isRoot()) return;
     const args = {
@@ -354,107 +230,6 @@ export class Bkgd {
       return await node.deleteSelfAndPromoteKids(args);
     }
     return await node.deleteSelf(args);
-  }
-
-  async markReconcileDirty (source) {
-    const now = Date.now();
-    this.reconcileDirtyAt = now;
-    await api.storage.local.set({
-      reconcileDirtyAt: now,
-      reconcileDirtySource: source || 'unknown'
-    });
-  }
-
-  async maybeWarnOpsBacklog () {
-    if (! this.opsQueue) return;
-    const threshold = this.opsBacklogWarnThreshold;
-    if (! threshold || threshold <= 0) return;
-    const pending = await this.opsQueue.countPendingOps();
-    if (pending < threshold) return;
-    const now = Date.now();
-    const minIntervalMs = 5 * 60 * 1000;
-    if ((now - this.opsBacklogWarnedAt) < minIntervalMs) return;
-    this.opsBacklogWarnedAt = now;
-    emit('treeview_status', {
-      status: `Ops backlog: ${pending} pending tasks (consider keeping one view open)`,
-      severity: 'warn'
-    });
-  }
-
-  isOpTargetMissing (op) {
-    if (! op || ! op.payload || ! this.tree) return false;
-    const nodeId = op.payload.nodeId;
-    if (nodeId && ! this.tree.nodes[nodeId]) return true;
-    if ('ensureMoved' === op.name) {
-      const destParentId = op.payload.destParentId;
-      if (destParentId && ! this.tree.nodes[destParentId]) return true;
-    }
-    return false;
-  }
-
-  async pruneMissingOps ({ limit = 500 } = {}) {
-    if (! this.opsQueue) return 0;
-    await this.treeLoaded;
-    let removed = 0;
-    const enforceLimit = Number.isFinite(limit) && (limit > 0);
-    const states = ['pending', 'running', 'failed', 'done'];
-    for (const state of states) {
-      if (enforceLimit && (removed >= limit)) break;
-      const batchLimit = enforceLimit ? (limit - removed) : 0;
-      const ops = await this.opsQueue.listOpsByState(state, batchLimit);
-      for (const op of ops) {
-        if (enforceLimit && (removed >= limit)) break;
-        if (! this.isOpTargetMissing(op)) continue;
-        await this.opsQueue.db.deleteOp(op.opId);
-        removed += 1;
-      }
-    }
-    return removed;
-  }
-
-  async purgeStaleBrowserEventMoveOps ({ limit = 0 } = {}) {
-    if (! this.opsQueue) return 0;
-    const states = ['pending', 'running', 'failed'];
-    const bootStartedAt = this.bootStartedAt || Date.now();
-    const enforceLimit = Number.isFinite(limit) && (limit > 0);
-    let removed = 0;
-    for (const state of states) {
-      if (enforceLimit && (removed >= limit)) break;
-      const batchLimit = enforceLimit ? (limit - removed) : 0;
-      const ops = await this.opsQueue.listOpsByState(state, batchLimit);
-      for (const op of ops) {
-        if (enforceLimit && (removed >= limit)) break;
-        if (op.source !== 'browserEvent') continue;
-        if (op.name !== 'ensureMoved') continue;
-        if ((op.createdAt || 0) >= bootStartedAt) continue;
-        await this.opsQueue.db.deleteOp(op.opId);
-        removed += 1;
-      }
-    }
-    if (removed > 0) {
-      debug(`purgeStaleBrowserEventMoveOps: removed ${removed} stale ops`);
-    }
-    return removed;
-  }
-
-  async maybePruneOpsQueue (opts = {}) {
-    if (! this.opsQueue) return 0;
-    const intervalMs = Number.isFinite(opts.intervalMs)
-      ? opts.intervalMs
-      : this.opsPruneIntervalMs;
-    if (! Number.isFinite(intervalMs) || intervalMs <= 0) return 0;
-    const now = Date.now();
-    if ((now - this.opsPruneAt) < intervalMs) return 0;
-    const maxAgeMs = Number.isFinite(opts.maxAgeMs)
-      ? opts.maxAgeMs
-      : this.opsPruneMaxAgeMs;
-    const limit = Number.isFinite(opts.limit)
-      ? opts.limit
-      : this.opsPruneLimit;
-    const removedDone = await this.opsQueue.pruneDoneOps({ maxAgeMs, limit });
-    const removedMissing = await this.pruneMissingOps({ limit });
-    this.opsPruneAt = now;
-    return removedDone + removedMissing;
   }
 
   initConnectListener () {
@@ -537,11 +312,9 @@ export class Bkgd {
 
   async initBackgroundConfig () {
     const result = await api.storage.local.get({
-      reconcileIntervalMinutes: this.reconcileIntervalMinutes,
-      opsBacklogWarnThreshold: this.opsBacklogWarnThreshold
+      reconcileIntervalMinutes: this.reconcileIntervalMinutes
     });
     this.reconcileIntervalMinutes = result.reconcileIntervalMinutes;
-    this.opsBacklogWarnThreshold = result.opsBacklogWarnThreshold;
     await this.initReconcileAlarm(true);
   }
 
@@ -633,9 +406,6 @@ export class Bkgd {
       if (undefined !== changes.reconcileIntervalMinutes) {
         this.reconcileIntervalMinutes = changes.reconcileIntervalMinutes.newValue;
         this.initReconcileAlarm(true);
-      }
-      if (undefined !== changes.opsBacklogWarnThreshold) {
-        this.opsBacklogWarnThreshold = changes.opsBacklogWarnThreshold.newValue;
       }
     }
   }
@@ -1238,41 +1008,6 @@ export class Bkgd {
     return response;
   }
 
-  async bkgd_pruneOps (msg) {
-    await this.treeDbLoaded;
-    if (! this.opsQueue) {
-      this.opsQueue = new OpsQueue(this.tree.db);
-    }
-    const maxAgeMs = Number.isFinite(msg && msg.maxAgeMs)
-      ? msg.maxAgeMs
-      : this.opsPruneMaxAgeMs;
-    const limit = Number.isFinite(msg && msg.limit)
-      ? msg.limit
-      : this.opsPruneLimit;
-    const pruneMissing = (msg && (undefined !== msg.pruneMissing))
-      ? Boolean(msg.pruneMissing)
-      : true;
-    const removedDone = await this.opsQueue.pruneDoneOps({ maxAgeMs, limit });
-    const removedMissing = pruneMissing
-      ? await this.pruneMissingOps({ limit })
-      : 0;
-    this.opsPruneAt = Date.now();
-    return {
-      removed: removedDone + removedMissing,
-      removedDone,
-      removedMissing
-    };
-  }
-
-  async bkgd_clearOps (msg) {
-    await this.treeDbLoaded;
-    if (! this.opsQueue) {
-      this.opsQueue = new OpsQueue(this.tree.db);
-    }
-    const removed = await this.opsQueue.clearAllOps();
-    return { removed };
-  }
-
   async bkgd_generateTutorial (msg) {
     await this.treeLoaded;
     let parentNode = this.tree.root;
@@ -1325,13 +1060,13 @@ export class Bkgd {
         { type: 'window' },
         { reason: 'bkgd_loadSavedNode:autoWindow' });
       // move current node as child of window node
-      await this.enqueueIntent('ensureMoved', {
+      await this.applyTreeMutation('ensureMoved', {
         nodeId: wrapNode.id,
         destParentId: windowNode.id,
         destIndex: 0,
         reason: 'bkgd_loadSavedNode:autoWindow',
         prevParentId: parentNode ? parentNode.id : null
-      }, 'bkgd');
+      });
     }
     // - if window not loaded, push window node to be loaded
     let needsWindow = false;
@@ -1534,13 +1269,13 @@ export class Bkgd {
         }
         const labelNode = await parent.addChild(node.indexOf(), labelDetails,
           { reason: 'userAction' });
-        await this.enqueueIntent('ensureMoved', {
+        await this.applyTreeMutation('ensureMoved', {
           nodeId: node.id,
           destParentId: labelNode.id,
           destIndex: 0,
           reason: 'userAction',
           prevParentId: parent.id
-        }, 'bkgd');
+        });
         if (node.label || node.note) {
           await node.setNotes('', '', { reason: 'userAction' });
         }
@@ -1589,13 +1324,13 @@ export class Bkgd {
     if (! parent) return { error: 'bkgd_wrapNodeInWindow(): no parent' };
     const windowNode = await parent.addChild(node.indexOf(), { type: 'window' },
       { reason: 'userAction' });
-    await this.enqueueIntent('ensureMoved', {
+    await this.applyTreeMutation('ensureMoved', {
       nodeId: node.id,
       destParentId: windowNode.id,
       destIndex: 0,
       reason: 'userAction',
       prevParentId: parent.id
-    }, 'bkgd');
+    });
     const openTabs = (
       node.isLoaded()
       || (node.hasLoadedTabsDeep
@@ -2139,10 +1874,10 @@ export class Bkgd {
       //  that probably means there isn't one and we should do nothing)
     }
     if (! tabNode) { return; }
-    return this.enqueueIntent('ensureUnloaded', {
+    return this.applyTreeMutation('ensureUnloaded', {
       nodeId: tabNode.id,
       reason: 'userAction'
-    }, 'bkgd');
+    });
   }
 
   command_unmarkAll (tab) {

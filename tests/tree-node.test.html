@@ -1282,7 +1282,7 @@
           tree.nextId = 0;
           tree.bkgd = bkgd;
           bkgd.tree = tree;
-          bkgd.enqueueIntent = async () => {};
+          bkgd.applyTreeMutation = async () => {};
           bkgd.resolveTreeLoaded();
           tree.resolveTreeLoaded();
 
@@ -1343,7 +1343,7 @@
           tree.nextId = 0;
           tree.bkgd = bkgd;
           bkgd.tree = tree;
-          bkgd.enqueueIntent = async () => {};
+          bkgd.applyTreeMutation = async () => {};
           bkgd.resolveTreeLoaded();
           tree.resolveTreeLoaded();
 

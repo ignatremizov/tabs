@@ -62,7 +62,6 @@ let Bkgd;
 let Tree;
 let TreeStore;
 let Node;
-let OpsQueue;
 let runReconcile;
 let TestNode;
 
@@ -78,57 +77,6 @@ async function addChild(parent, details) {
   return await parent.addChild(index, details, { reason: 'test' });
 }
 
-class FakeOpsDb {
-  constructor () {
-    this.ops = new Map();
-  }
-
-  async enqueueOp (op) {
-    this.ops.set(op.opId, { ...op });
-  }
-
-  async loadOp (opId) {
-    const op = this.ops.get(opId);
-    return op ? { ...op } : null;
-  }
-
-  async saveOp (op) {
-    this.ops.set(op.opId, { ...op });
-  }
-
-  async updateOp (opId, updates) {
-    const existing = this.ops.get(opId);
-    if (! existing) return null;
-    const updated = { ...existing, ...updates };
-    this.ops.set(opId, { ...updated });
-    return updated;
-  }
-
-  async listPendingOps (limit = 10) {
-    const pending = [...this.ops.values()]
-      .filter((op) => op.state === 'pending')
-      .sort((a, b) => a.createdAt - b.createdAt);
-    return pending.slice(0, limit).map((op) => ({ ...op }));
-  }
-
-  async listOpsByState (state, limit = 10) {
-    const filtered = [...this.ops.values()]
-      .filter((op) => op.state === state)
-      .sort((a, b) => a.createdAt - b.createdAt);
-    if (Number.isFinite(limit) && (limit > 0)) {
-      return filtered.slice(0, limit).map((op) => ({ ...op }));
-    }
-    return filtered.map((op) => ({ ...op }));
-  }
-
-  async countOpsByState (state) {
-    return [...this.ops.values()].filter((op) => op.state === state).length;
-  }
-
-  async deleteOp (opId) {
-    this.ops.delete(opId);
-  }
-}
 
 test('emit reports failure via hook', async () => {
   const originalSendMessage = api.runtime.sendMessage;
@@ -159,385 +107,19 @@ test('emit reports failure via hook', async () => {
   }
 });
 
-test('OpsQueue enqueue stores pending op record', async () => {
-  const db = new FakeOpsDb();
-  const queue = new OpsQueue(db, { idGen: { newId: () => 'op-1' } });
-  const record = await queue.enqueue({
-    name: 'ensureLoaded',
-    source: 'view',
-    payload: { nodeId: 'n1' }
-  });
-  assertEqual(record.opId, 'op-1', 'Should assign deterministic opId');
-  assertEqual(record.state, 'pending', 'Should default to pending state');
-  assertEqual(record.type, 'intent', 'Should default to intent type');
-  assertEqual(record.source, 'view', 'Should keep provided source');
-  assert(record.createdAt <= record.updatedAt, 'updatedAt should be >= createdAt');
-  assertEqual(db.ops.get('op-1').name, 'ensureLoaded', 'Should persist op record');
-});
-
-test('OpsQueue claimNextOps marks oldest pending as running', async () => {
-  const db = new FakeOpsDb();
-  db.ops.set('op-a', {
-    opId: 'op-a',
-    state: 'pending',
-    createdAt: 1,
-    updatedAt: 1
-  });
-  db.ops.set('op-b', {
-    opId: 'op-b',
-    state: 'pending',
-    createdAt: 2,
-    updatedAt: 2
-  });
-  db.ops.set('op-c', {
-    opId: 'op-c',
-    state: 'done',
-    createdAt: 0,
-    updatedAt: 0
-  });
-
-  const queue = new OpsQueue(db, { idGen: { newId: () => 'op-x' } });
-  const claimed = await queue.claimNextOps(1);
-  assertEqual(claimed.length, 1, 'Should claim one op');
-  assertEqual(claimed[0].opId, 'op-a', 'Should claim oldest pending op');
-  assertEqual(db.ops.get('op-a').state, 'running', 'Should mark op running');
-  assertEqual(db.ops.get('op-b').state, 'pending', 'Should keep other pending');
-});
-
-test('OpsQueue markFailed increments retry and preserves error', async () => {
-  const db = new FakeOpsDb();
-  db.ops.set('op-fail', {
-    opId: 'op-fail',
-    state: 'running',
-    createdAt: 1,
-    updatedAt: 1,
-    retryCount: 0
-  });
-  const queue = new OpsQueue(db, { idGen: { newId: () => 'op-x' } });
-  await queue.markFailed('op-fail', new Error('boom'));
-  const updated = db.ops.get('op-fail');
-  assertEqual(updated.state, 'failed', 'Should mark failed');
-  assertEqual(updated.lastError, 'boom', 'Should store lastError message');
-  assertEqual(updated.retryCount, 1, 'Should increment retry count');
-});
-
-test('OpsQueue requeueFailedOps moves eligible failures back to pending', async () => {
-  const db = new FakeOpsDb();
-  const queue = new OpsQueue(db, { idGen: { newId: () => 'op-x' } });
-  db.ops.set('op-fail', {
-    opId: 'op-fail',
-    state: 'failed',
-    createdAt: 1,
-    updatedAt: 1,
-    retryCount: 1
-  });
-  const now = Date.now();
-  const originalNow = Date.now;
-  try {
-    Date.now = () => now + 5000;
-    const requeued = await queue.requeueFailedOps({
-      limit: 5,
-      maxRetries: 3,
-      minAgeMs: 1000
-    });
-    assertEqual(requeued, 1, 'Should requeue failed op');
-    assertEqual(db.ops.get('op-fail').state, 'pending', 'Should mark pending');
-  } finally {
-    Date.now = originalNow;
-  }
-});
-
-test('OpsQueue requeueFailedOps skips ineligible ops without starvation', async () => {
-  const db = new FakeOpsDb();
-  const queue = new OpsQueue(db, { idGen: { newId: () => 'op-x' } });
-  const now = Date.now();
-  db.ops.set('op-skip', {
-    opId: 'op-skip',
-    state: 'failed',
-    createdAt: 1,
-    updatedAt: now,
-    retryCount: 5
-  });
-  db.ops.set('op-eligible', {
-    opId: 'op-eligible',
-    state: 'failed',
-    createdAt: 2,
-    updatedAt: now - 5000,
-    retryCount: 0
-  });
-  const requeued = await queue.requeueFailedOps({
-    limit: 1,
-    maxRetries: 3,
-    minAgeMs: 0
-  });
-  assertEqual(requeued, 1, 'Should requeue eligible op even if earlier ops skipped');
-  assertEqual(db.ops.get('op-eligible').state, 'pending', 'Should requeue later eligible op');
-  assertEqual(db.ops.get('op-skip').state, 'failed', 'Should keep ineligible op failed');
-});
-
-test('OpsQueue requeueStaleRunningOps moves old running ops to pending', async () => {
-  const db = new FakeOpsDb();
-  const queue = new OpsQueue(db, { idGen: { newId: () => 'op-x' } });
-  db.ops.set('op-run', {
-    opId: 'op-run',
-    state: 'running',
-    createdAt: 1,
-    updatedAt: 1
-  });
-  const now = Date.now();
-  const originalNow = Date.now;
-  try {
-    Date.now = () => now + 5000;
-    const requeued = await queue.requeueStaleRunningOps({
-      limit: 5,
-      minAgeMs: 1000
-    });
-    assertEqual(requeued, 1, 'Should requeue running op');
-    assertEqual(db.ops.get('op-run').state, 'pending', 'Should mark pending');
-  } finally {
-    Date.now = originalNow;
-  }
-});
-
-test('OpsQueue requeueStaleRunningOps skips fresh ops without starvation', async () => {
-  const db = new FakeOpsDb();
-  const queue = new OpsQueue(db, { idGen: { newId: () => 'op-x' } });
-  const now = Date.now();
-  db.ops.set('op-fresh', {
-    opId: 'op-fresh',
-    state: 'running',
-    createdAt: 1,
-    updatedAt: now,
-    retryCount: 0
-  });
-  db.ops.set('op-old', {
-    opId: 'op-old',
-    state: 'running',
-    createdAt: 2,
-    updatedAt: now - 60000,
-    retryCount: 0
-  });
-  const requeued = await queue.requeueStaleRunningOps({
-    limit: 1,
-    minAgeMs: 1000
-  });
-  assertEqual(requeued, 1, 'Should requeue eligible running op even if earlier ops skipped');
-  assertEqual(db.ops.get('op-old').state, 'pending', 'Should requeue stale running op');
-  assertEqual(db.ops.get('op-fresh').state, 'running', 'Should keep fresh op running');
-});
-
-test('OpsQueue pruneDoneOps removes old done ops and respects limit', async () => {
-  const db = new FakeOpsDb();
-  const queue = new OpsQueue(db, { idGen: { newId: () => 'op-x' } });
-  const now = Date.now();
-  const originalNow = Date.now;
-  try {
-    Date.now = () => now;
-    db.ops.set('op-old-1', {
-      opId: 'op-old-1',
-      state: 'done',
-      createdAt: 1,
-      updatedAt: now - 10000
-    });
-    db.ops.set('op-old-2', {
-      opId: 'op-old-2',
-      state: 'done',
-      createdAt: 2,
-      updatedAt: now - 8000
-    });
-    db.ops.set('op-fresh', {
-      opId: 'op-fresh',
-      state: 'done',
-      createdAt: 3,
-      updatedAt: now - 1000
-    });
-    db.ops.set('op-failed', {
-      opId: 'op-failed',
-      state: 'failed',
-      createdAt: 4,
-      updatedAt: now - 20000
-    });
-    const removed = await queue.pruneDoneOps({ maxAgeMs: 5000, limit: 1 });
-    assertEqual(removed, 1, 'Should remove one old done op');
-    const remainingDone = [...db.ops.values()].filter((op) => op.state === 'done');
-    assertEqual(remainingDone.length, 2, 'Should keep remaining done ops');
-    assert(db.ops.has('op-fresh'), 'Should keep recent done op');
-    assert(db.ops.has('op-failed'), 'Should not touch other states');
-  } finally {
-    Date.now = originalNow;
-  }
-});
-
-test('OpsQueue clearAllOps removes all ops', async () => {
-  const db = new FakeOpsDb();
-  const queue = new OpsQueue(db, { idGen: { newId: () => 'op-x' } });
-  db.ops.set('op-pending', { opId: 'op-pending', state: 'pending', createdAt: 1 });
-  db.ops.set('op-running', { opId: 'op-running', state: 'running', createdAt: 2 });
-  db.ops.set('op-done', { opId: 'op-done', state: 'done', createdAt: 3 });
-  const removed = await queue.clearAllOps();
-  assertEqual(removed, 3, 'Should remove all ops');
-  assertEqual(db.ops.size, 0, 'Ops store should be empty');
-});
-
-test('bkgd_pruneOps removes ops with missing node targets', async () => {
-  const db = new FakeOpsDb();
+test('applyTreeMutation dispatches directly', async () => {
   const bkgd = new Bkgd();
-  const tree = createTree(bkgd);
-  tree.createRootNode();
-  bkgd.tree = tree;
-  bkgd.opsQueue = new OpsQueue(db, { idGen: { newId: () => 'op-x' } });
-  bkgd.resolveTreeDbLoaded();
-  bkgd.resolveTreeLoaded();
+  const payload = { nodeId: 'n1' };
+  let received = null;
+  bkgd.ensureMoved = async (value) => {
+    received = value;
+    return 'moved';
+  };
 
-  await addChild(tree.root, { id: 'n1' });
-  db.ops.set('op-missing', {
-    opId: 'op-missing',
-    state: 'pending',
-    name: 'ensureLoaded',
-    payload: { nodeId: 'missing' },
-    createdAt: 1,
-    updatedAt: 1
-  });
-  db.ops.set('op-missing-parent', {
-    opId: 'op-missing-parent',
-    state: 'running',
-    name: 'ensureMoved',
-    payload: { nodeId: 'n1', destParentId: 'missing-parent' },
-    createdAt: 1,
-    updatedAt: 1
-  });
-  db.ops.set('op-valid', {
-    opId: 'op-valid',
-    state: 'pending',
-    name: 'ensureLoaded',
-    payload: { nodeId: 'n1' },
-    createdAt: 1,
-    updatedAt: 1
-  });
+  const result = await bkgd.applyTreeMutation('ensureMoved', payload);
 
-  const result = await bkgd.bkgd_pruneOps({
-    maxAgeMs: 1000,
-    limit: 10,
-    pruneMissing: true
-  });
-
-  assertEqual(result.removedMissing, 2, 'Should remove ops with missing targets');
-  assertEqual(result.removed, 2, 'Removed count should include missing ops');
-  assert(db.ops.has('op-valid'), 'Should keep ops with valid targets');
-});
-
-test('startup purges stale browser move ops without deleting fresh ops', async () => {
-  const db = new FakeOpsDb();
-  const bkgd = new Bkgd();
-  bkgd.opsQueue = new OpsQueue(db, { idGen: { newId: () => 'op-x' } });
-  bkgd.bootStartedAt = 2000;
-
-  db.ops.set('op-old-browser-move', {
-    opId: 'op-old-browser-move',
-    state: 'pending',
-    name: 'ensureMoved',
-    source: 'browserEvent',
-    createdAt: 1000,
-    updatedAt: 1000,
-    payload: {}
-  });
-  db.ops.set('op-fresh-browser-move', {
-    opId: 'op-fresh-browser-move',
-    state: 'pending',
-    name: 'ensureMoved',
-    source: 'browserEvent',
-    createdAt: 3000,
-    updatedAt: 3000,
-    payload: {}
-  });
-  db.ops.set('op-view-move', {
-    opId: 'op-view-move',
-    state: 'pending',
-    name: 'ensureMoved',
-    source: 'view',
-    createdAt: 1000,
-    updatedAt: 1000,
-    payload: {}
-  });
-  db.ops.set('op-browser-unload', {
-    opId: 'op-browser-unload',
-    state: 'pending',
-    name: 'ensureUnloaded',
-    source: 'browserEvent',
-    createdAt: 1000,
-    updatedAt: 1000,
-    payload: {}
-  });
-
-  const removed = await bkgd.purgeStaleBrowserEventMoveOps();
-
-  assertEqual(removed, 1, 'Should remove only stale browser move ops');
-  assert(! db.ops.has('op-old-browser-move'),
-    'Should delete pre-boot browser move op');
-  assert(db.ops.has('op-fresh-browser-move'),
-    'Should keep fresh browser move op');
-  assert(db.ops.has('op-view-move'), 'Should keep view move op');
-  assert(db.ops.has('op-browser-unload'), 'Should keep non-move browser op');
-});
-
-test('OpsQueue countPendingOps returns pending count', async () => {
-  const db = new FakeOpsDb();
-  const queue = new OpsQueue(db, { idGen: { newId: () => 'op-x' } });
-  db.ops.set('op-a', { opId: 'op-a', state: 'pending', createdAt: 1 });
-  db.ops.set('op-b', { opId: 'op-b', state: 'running', createdAt: 2 });
-  const count = await queue.countPendingOps();
-  assertEqual(count, 1, 'Should count pending ops');
-});
-
-test('OpsQueue updateCursor updates checkpoint data', async () => {
-  const db = new FakeOpsDb();
-  db.ops.set('op-cursor', {
-    opId: 'op-cursor',
-    state: 'running',
-    createdAt: 1,
-    updatedAt: 1,
-    cursor: null
-  });
-  const queue = new OpsQueue(db, { idGen: { newId: () => 'op-x' } });
-  await queue.updateCursor('op-cursor', { step: 'phase1', progress: 2 });
-  const updated = db.ops.get('op-cursor');
-  assertEqual(updated.cursor.step, 'phase1', 'Should store cursor step');
-  assertEqual(updated.cursor.progress, 2, 'Should store cursor progress');
-});
-
-test('processOpsQueue executes ensureUnloaded intents', async () => {
-  const db = new FakeOpsDb();
-  const queue = new OpsQueue(db, { idGen: { newId: () => 'op-1' } });
-  const bkgd = new Bkgd();
-  const tree = createTree(bkgd);
-  bkgd.tree = tree;
-  bkgd.opsQueue = queue;
-  bkgd.resolveTreeDbLoaded();
-  bkgd.resolveTreeLoaded();
-
-  const win = await addChild(tree.root, {
-    id: 'w1',
-    type: 'window',
-    windowId: 1,
-    loaded: true
-  });
-  const tab = await addChild(win, {
-    id: 't1',
-    url: 'https://example.com',
-    loaded: true,
-    tabId: 10
-  });
-
-  await queue.enqueue({
-    name: 'ensureUnloaded',
-    source: 'test',
-    payload: { nodeId: tab.id, reason: 'onTabRemoved' }
-  });
-
-  await bkgd.processOpsQueue({ budgetMs: 50, batchLimit: 1 });
-
-  assertEqual(tab.loaded, false, 'Should unload tab');
-  assertEqual(db.ops.get('op-1').state, 'done', 'Op should be marked done');
+  assertEqual(received, payload, 'Should pass the original payload directly');
+  assertEqual(result, 'moved', 'Should return the direct mutation result');
 });
 
 test('TreeStore onTabRemoved honors tabClosedReason for manual unload', async () => {
@@ -563,10 +145,9 @@ test('TreeStore onTabRemoved honors tabClosedReason for manual unload', async ()
     };
 
     const bkgd = {
-      enqueueIntent: async (name, payload, source) => {
-        calls.push({ name, payload, source });
-      },
-      ensureUnloaded: async () => {}
+      applyTreeMutation: async (name, payload) => {
+        calls.push({ name, payload });
+      }
     };
     const tree = new TreeStore(bkgd);
     tree.db = {
@@ -593,7 +174,7 @@ test('TreeStore onTabRemoved honors tabClosedReason for manual unload', async ()
 
     await tree.onTabRemoved(12, { windowId: 1, isWindowClosing: false });
 
-    assertEqual(calls.length, 1, 'Should enqueue one intent');
+    assertEqual(calls.length, 1, 'Should apply one mutation');
     assertEqual(calls[0].name, 'ensureUnloaded', 'Should finalize unload');
     assertEqual(calls[0].payload.nodeId, tab.id, 'Should target tab node');
     assertEqual(calls[0].payload.detail, 'manualUnload', 'Should tag manual unload');
@@ -741,7 +322,7 @@ test('TreeStore restores Firefox tabs by session identity in reverse order', asy
   }
 });
 
-test('TreeStore userAction load bypasses ops queue', async () => {
+test('TreeStore applies view load directly', async () => {
   const originalIndexedDb = globalThis.indexedDB;
   const calls = [];
   try {
@@ -764,8 +345,7 @@ test('TreeStore userAction load bypasses ops queue', async () => {
     };
 
     const bkgd = {
-      enqueueIntent: async (...args) => { calls.push(args); },
-      ensureLoaded: async () => { calls.push(['ensureLoaded']); }
+      applyTreeMutation: async (...args) => { calls.push(args); }
     };
     const tree = new TreeStore(bkgd);
     tree.db = {
@@ -783,13 +363,13 @@ test('TreeStore userAction load bypasses ops queue', async () => {
     });
 
     assertEqual(calls.length, 1, 'Should only call ensureLoaded');
-    assertEqual(calls[0][0], 'ensureLoaded', 'Should bypass enqueue for userAction');
+    assertEqual(calls[0][0], 'ensureLoaded', 'Should apply load directly');
   } finally {
     globalThis.indexedDB = originalIndexedDb;
   }
 });
 
-test('TreeStore userAction unload bypasses ops queue', async () => {
+test('TreeStore applies view unload directly', async () => {
   const originalIndexedDb = globalThis.indexedDB;
   const calls = [];
   try {
@@ -812,8 +392,7 @@ test('TreeStore userAction unload bypasses ops queue', async () => {
     };
 
     const bkgd = {
-      enqueueIntent: async (...args) => { calls.push(args); },
-      ensureUnloaded: async () => { calls.push(['ensureUnloaded']); }
+      applyTreeMutation: async (...args) => { calls.push(args); }
     };
     const tree = new TreeStore(bkgd);
     tree.db = {
@@ -838,13 +417,13 @@ test('TreeStore userAction unload bypasses ops queue', async () => {
     });
 
     assertEqual(calls.length, 1, 'Should only call ensureUnloaded');
-    assertEqual(calls[0][0], 'ensureUnloaded', 'Should bypass enqueue for userAction');
+    assertEqual(calls[0][0], 'ensureUnloaded', 'Should apply unload directly');
   } finally {
     globalThis.indexedDB = originalIndexedDb;
   }
 });
 
-test('TreeStore userAction move bypasses ops queue', async () => {
+test('TreeStore applies view move directly', async () => {
   const originalIndexedDb = globalThis.indexedDB;
   const calls = [];
   try {
@@ -867,8 +446,7 @@ test('TreeStore userAction move bypasses ops queue', async () => {
     };
 
     const bkgd = {
-      enqueueIntent: async (...args) => { calls.push(args); },
-      ensureMoved: async () => { calls.push(['ensureMoved']); }
+      applyTreeMutation: async (...args) => { calls.push(args); }
     };
     const tree = new TreeStore(bkgd);
     tree.db = {
@@ -889,13 +467,13 @@ test('TreeStore userAction move bypasses ops queue', async () => {
     });
 
     assertEqual(calls.length, 1, 'Should only call ensureMoved');
-    assertEqual(calls[0][0], 'ensureMoved', 'Should bypass enqueue for userAction');
+    assertEqual(calls[0][0], 'ensureMoved', 'Should apply move directly');
   } finally {
     globalThis.indexedDB = originalIndexedDb;
   }
 });
 
-test('TreeStore userAction delete bypasses ops queue', async () => {
+test('TreeStore applies view delete directly', async () => {
   const originalIndexedDb = globalThis.indexedDB;
   const calls = [];
   try {
@@ -918,10 +496,7 @@ test('TreeStore userAction delete bypasses ops queue', async () => {
     };
 
     const bkgd = {
-      enqueueIntent: async (...args) => { calls.push(args); },
-      ensureDeleted: async (payload) => {
-        calls.push(['ensureDeleted', payload]);
-      }
+      applyTreeMutation: async (...args) => { calls.push(args); }
     };
     const tree = new TreeStore(bkgd);
     tree.db = {
@@ -939,7 +514,7 @@ test('TreeStore userAction delete bypasses ops queue', async () => {
     });
 
     assertEqual(calls.length, 1, 'Should only call ensureDeleted');
-    assertEqual(calls[0][0], 'ensureDeleted', 'Should bypass enqueue for userAction');
+    assertEqual(calls[0][0], 'ensureDeleted', 'Should apply delete directly');
     assertEqual(calls[0][1].mode, 'promoteKids',
       'Should preserve atomic promote-delete mode');
   } finally {
@@ -991,7 +566,7 @@ test('ensureDeleted atomically promotes children before deleting wrapper', async
   }
 });
 
-test('ensureMoved passes op to applyMoveForIntent', async () => {
+test('ensureMoved delegates to direct tree move application', async () => {
   const bkgd = new Bkgd();
   const tree = createTree(bkgd);
   tree.createRootNode();
@@ -1000,24 +575,22 @@ test('ensureMoved passes op to applyMoveForIntent', async () => {
   const mover = await addChild(parent, { id: 'c1' });
   bkgd.tree = tree;
 
-  let receivedOp = null;
-  tree.applyMoveForIntent = async (node, destParent, destIndex, args, op) => {
-    receivedOp = op;
+  let received = null;
+  tree.applyMove = async (node, destParent, destIndex, args) => {
+    received = { node, destParent, destIndex, args };
     return true;
   };
 
-  const op = {
-    opId: 'op-move',
-    name: 'ensureMoved',
-    payload: {
-      nodeId: mover.id,
-      destParentId: dest.id,
-      destIndex: 0
-    }
+  const payload = {
+    nodeId: mover.id,
+    destParentId: dest.id,
+    destIndex: 0
   };
 
-  await bkgd.ensureMoved(op.payload, op);
-  assertEqual(receivedOp.opId, 'op-move', 'Should pass op to applyMoveForIntent');
+  await bkgd.ensureMoved(payload);
+  assertEqual(received.node, mover, 'Should pass the moved node');
+  assertEqual(received.destParent, dest, 'Should pass the destination parent');
+  assertEqual(received.destIndex, 0, 'Should pass the destination index');
 });
 
 test('ensureMoved can move browser tab node without its children', async () => {
@@ -1201,7 +774,7 @@ test('view-side user move emits tree move without direct tab reorder request', a
   }
 });
 
-test('applyMoveForIntent keeps only-child loaded window content under window', async () => {
+test('applyMove keeps only-child loaded window content under window', async () => {
   const originalIndexedDb = globalThis.indexedDB;
   try {
     globalThis.indexedDB = {
@@ -1224,7 +797,6 @@ test('applyMoveForIntent keeps only-child loaded window content under window', a
 
     const bkgd = {
       bkgd_loadSavedWindow: async () => {},
-      opsQueue: null
     };
     const tree = new TreeStore(bkgd);
     tree.db = {
@@ -1247,7 +819,7 @@ test('applyMoveForIntent keeps only-child loaded window content under window', a
       url: 'https://example.com'
     });
 
-    await tree.applyMoveForIntent(
+    await tree.applyMove(
       mover,
       tree.root,
       1,
@@ -1267,7 +839,7 @@ test('applyMoveForIntent keeps only-child loaded window content under window', a
   }
 });
 
-test('applyMoveForIntent wraps loaded branch into new window', async () => {
+test('applyMove wraps loaded branch into new window', async () => {
   const originalIndexedDb = globalThis.indexedDB;
   try {
     globalThis.indexedDB = {
@@ -1293,7 +865,6 @@ test('applyMoveForIntent wraps loaded branch into new window', async () => {
       bkgd_loadSavedWindow: async (payload) => {
         loadCalls.push(payload);
       },
-      opsQueue: null,
       idGen: { newId: () => 'test-win' }
     };
     const tree = new TreeStore(bkgd);
@@ -1324,7 +895,7 @@ test('applyMoveForIntent wraps loaded branch into new window', async () => {
       url: 'https://example.com/two'
     });
 
-    await tree.applyMoveForIntent(
+    await tree.applyMove(
       mover,
       tree.root,
       1,
@@ -1350,7 +921,7 @@ test('applyMoveForIntent wraps loaded branch into new window', async () => {
   }
 });
 
-test('applyMoveForIntent wraps unloaded branch with loaded descendant', async () => {
+test('applyMove wraps unloaded branch with loaded descendant', async () => {
   const originalIndexedDb = globalThis.indexedDB;
   try {
     globalThis.indexedDB = {
@@ -1376,7 +947,6 @@ test('applyMoveForIntent wraps unloaded branch with loaded descendant', async ()
       bkgd_loadSavedWindow: async (payload) => {
         loadCalls.push(payload);
       },
-      opsQueue: null,
       idGen: { newId: () => 'test-win-2' }
     };
     const tree = new TreeStore(bkgd);
@@ -1414,7 +984,7 @@ test('applyMoveForIntent wraps unloaded branch with loaded descendant', async ()
       url: 'https://example.com/three'
     });
 
-    await tree.applyMoveForIntent(
+    await tree.applyMove(
       mover,
       tree.root,
       1,
@@ -1439,7 +1009,7 @@ test('applyMoveForIntent wraps unloaded branch with loaded descendant', async ()
   }
 });
 
-test('applyMoveForIntent avoids wrapping unloaded root move without open tabs', async () => {
+test('applyMove avoids wrapping unloaded root move without open tabs', async () => {
   const originalIndexedDb = globalThis.indexedDB;
   try {
     globalThis.indexedDB = {
@@ -1465,7 +1035,6 @@ test('applyMoveForIntent avoids wrapping unloaded root move without open tabs', 
       bkgd_loadSavedWindow: async (payload) => {
         loadCalls.push(payload);
       },
-      opsQueue: null,
       idGen: { newId: () => 'test-win-3' }
     };
     const tree = new TreeStore(bkgd);
@@ -1487,7 +1056,7 @@ test('applyMoveForIntent avoids wrapping unloaded root move without open tabs', 
       url: 'https://example.com'
     });
 
-    await tree.applyMoveForIntent(
+    await tree.applyMove(
       mover,
       tree.root,
       1,
@@ -3696,8 +3265,7 @@ test('TreeStore onTabMoved maps browser indexes after pinned tabs', async () => 
     };
     const calls = [];
     const bkgd = {
-      enqueueIntent: async (...args) => { calls.push(args); },
-      opsQueue: null
+      applyTreeMutation: async (...args) => { calls.push(args); },
     };
     const tree = new TreeStore(bkgd);
     tree.db = {
@@ -3750,8 +3318,8 @@ test('TreeStore onTabMoved maps browser indexes after pinned tabs', async () => 
       toIndex: 1
     });
 
-    assertEqual(calls.length, 1, 'Should enqueue one move intent');
-    assertEqual(calls[0][0], 'ensureMoved', 'Should enqueue an ensureMoved op');
+    assertEqual(calls.length, 1, 'Should apply one move');
+    assertEqual(calls[0][0], 'ensureMoved', 'Should apply ensureMoved directly');
     assertEqual(calls[0][1].nodeId, moved.id, 'Should move the requested tab');
     assertEqual(calls[0][1].destParentId, win.id,
       'Moved tab should target the window root');
@@ -3787,8 +3355,7 @@ test('TreeStore onTabMoved ignores extension-generated reorder events', async ()
     };
     const calls = [];
     const bkgd = {
-      enqueueIntent: async (...args) => { calls.push(args); },
-      opsQueue: null
+      applyTreeMutation: async (...args) => { calls.push(args); },
     };
     const tree = new TreeStore(bkgd);
     tree.db = {
@@ -3833,7 +3400,7 @@ test('TreeStore onTabMoved ignores extension-generated reorder events', async ()
     assertEqual(tabLookupCalls, 0,
       'Suppressed extension move should not query browser tab state');
     assertEqual(calls.length, 0,
-      'Suppressed extension move should not enqueue a move intent');
+      'Suppressed extension move should not apply a move');
     assertEqual(win.nodes[0], first,
       'Suppressed extension move should not change tree order');
     assertEqual(win.nodes[1], moved,
@@ -3844,7 +3411,7 @@ test('TreeStore onTabMoved ignores extension-generated reorder events', async ()
   }
 });
 
-test('TreeStore onTabUpdated pinned fallback enqueues move', async () => {
+test('TreeStore onTabUpdated pinned fallback applies move', async () => {
   const originalIndexedDb = globalThis.indexedDB;
   try {
     globalThis.indexedDB = {
@@ -3866,8 +3433,7 @@ test('TreeStore onTabUpdated pinned fallback enqueues move', async () => {
     };
     const calls = [];
     const bkgd = {
-      enqueueIntent: async (...args) => { calls.push(args); },
-      opsQueue: null
+      applyTreeMutation: async (...args) => { calls.push(args); },
     };
     const tree = new TreeStore(bkgd);
     tree.db = {
@@ -3907,8 +3473,8 @@ test('TreeStore onTabUpdated pinned fallback enqueues move', async () => {
     });
 
     assertEqual(moved.pinned, true, 'Tab should update to pinned');
-    assertEqual(calls.length, 1, 'Should enqueue one move intent');
-    assertEqual(calls[0][0], 'ensureMoved', 'Should enqueue ensureMoved');
+    assertEqual(calls.length, 1, 'Should apply one move');
+    assertEqual(calls[0][0], 'ensureMoved', 'Should apply ensureMoved directly');
     assertEqual(calls[0][1].nodeId, moved.id, 'Should move pinned tab');
     assertEqual(calls[0][1].destParentId, win.id,
       'Pinned tab should target window root');
@@ -3942,8 +3508,7 @@ test('TreeStore onTabMoved reorders pinned tabs within pinned prefix', async () 
     };
     const calls = [];
     const bkgd = {
-      enqueueIntent: async (...args) => { calls.push(args); },
-      opsQueue: null
+      applyTreeMutation: async (...args) => { calls.push(args); },
     };
     const tree = new TreeStore(bkgd);
     tree.db = {
@@ -3992,8 +3557,8 @@ test('TreeStore onTabMoved reorders pinned tabs within pinned prefix', async () 
       toIndex: 0
     });
 
-    assertEqual(calls.length, 1, 'Should enqueue one move intent');
-    assertEqual(calls[0][0], 'ensureMoved', 'Should enqueue an ensureMoved op');
+    assertEqual(calls.length, 1, 'Should apply one move');
+    assertEqual(calls[0][0], 'ensureMoved', 'Should apply ensureMoved directly');
     assertEqual(calls[0][1].nodeId, moved.id, 'Should move the pinned tab');
     assertEqual(calls[0][1].destParentId, win.id,
       'Pinned tab should stay under the same window');
@@ -4030,8 +3595,7 @@ test('TreeStore onTabMoved reorders pinned tabs right within pinned prefix', asy
     };
     const calls = [];
     const bkgd = {
-      enqueueIntent: async (...args) => { calls.push(args); },
-      opsQueue: null
+      applyTreeMutation: async (...args) => { calls.push(args); },
     };
     const tree = new TreeStore(bkgd);
     tree.db = {
@@ -4080,8 +3644,8 @@ test('TreeStore onTabMoved reorders pinned tabs right within pinned prefix', asy
       toIndex: 1
     });
 
-    assertEqual(calls.length, 1, 'Should enqueue one move intent');
-    assertEqual(calls[0][0], 'ensureMoved', 'Should enqueue an ensureMoved op');
+    assertEqual(calls.length, 1, 'Should apply one move');
+    assertEqual(calls[0][0], 'ensureMoved', 'Should apply ensureMoved directly');
     assertEqual(calls[0][1].nodeId, moved.id, 'Should move the pinned tab');
     assertEqual(calls[0][1].destParentId, win.id,
       'Pinned tab should stay under the same window');
@@ -4117,8 +3681,7 @@ test('TreeStore onTabMoved moves unpinned tab out of pinned prefix', async () =>
     };
     const calls = [];
     const bkgd = {
-      enqueueIntent: async (...args) => { calls.push(args); },
-      opsQueue: null
+      applyTreeMutation: async (...args) => { calls.push(args); },
     };
     const tree = new TreeStore(bkgd);
     tree.db = {
@@ -4174,7 +3737,7 @@ test('TreeStore onTabMoved moves unpinned tab out of pinned prefix', async () =>
 
     assertEqual(moved.pinned, false,
       'Moved node should refresh to unpinned state');
-    assertEqual(calls.length, 1, 'Should enqueue one move intent');
+    assertEqual(calls.length, 1, 'Should apply one move');
     assertEqual(calls[0][1].nodeId, moved.id, 'Should move the unpinned tab');
     assertEqual(calls[0][1].destParentId, win.id,
       'Moved tab should stay under same window');
@@ -4210,9 +3773,8 @@ test('TreeStore onTabAttached moves pinned tabs between windows', async () => {
     };
     const calls = [];
     const bkgd = {
-      enqueueIntent: async (...args) => { calls.push(args); },
+      applyTreeMutation: async (...args) => { calls.push(args); },
       windowsLoading: [],
-      opsQueue: null
     };
     const tree = new TreeStore(bkgd);
     tree.db = {
@@ -4266,8 +3828,8 @@ test('TreeStore onTabAttached moves pinned tabs between windows', async () => {
       newPosition: 1
     });
 
-    assertEqual(calls.length, 1, 'Should enqueue one move intent');
-    assertEqual(calls[0][0], 'ensureMoved', 'Should enqueue an ensureMoved op');
+    assertEqual(calls.length, 1, 'Should apply one move');
+    assertEqual(calls[0][0], 'ensureMoved', 'Should apply ensureMoved directly');
     assertEqual(calls[0][1].nodeId, pinned.id, 'Should move attached pinned tab');
     assertEqual(calls[0][1].destParentId, newWin.id,
       'Pinned tab should move under the new window');
@@ -4302,9 +3864,8 @@ test('TreeStore onTabAttached corrects pinned index in same window', async () =>
     };
     const calls = [];
     const bkgd = {
-      enqueueIntent: async (...args) => { calls.push(args); },
+      applyTreeMutation: async (...args) => { calls.push(args); },
       windowsLoading: [],
-      opsQueue: null
     };
     const tree = new TreeStore(bkgd);
     tree.db = {
@@ -4346,7 +3907,7 @@ test('TreeStore onTabAttached corrects pinned index in same window', async () =>
       newPosition: 1
     });
 
-    assertEqual(calls.length, 1, 'Should enqueue one move intent');
+    assertEqual(calls.length, 1, 'Should apply one move');
     assertEqual(calls[0][1].nodeId, moved.id, 'Should move attached pinned tab');
     assertEqual(calls[0][1].destParentId, win.id,
       'Pinned tab should stay under same window');
@@ -4382,9 +3943,8 @@ test('TreeStore onTabAttached inserts first unpinned tab after pinned prefix', a
     };
     const calls = [];
     const bkgd = {
-      enqueueIntent: async (...args) => { calls.push(args); },
+      applyTreeMutation: async (...args) => { calls.push(args); },
       windowsLoading: [],
-      opsQueue: null
     };
     const tree = new TreeStore(bkgd);
     tree.db = {
@@ -4436,8 +3996,8 @@ test('TreeStore onTabAttached inserts first unpinned tab after pinned prefix', a
       newPosition: 1
     });
 
-    assertEqual(calls.length, 1, 'Should enqueue one move intent');
-    assertEqual(calls[0][0], 'ensureMoved', 'Should enqueue an ensureMoved op');
+    assertEqual(calls.length, 1, 'Should apply one move');
+    assertEqual(calls[0][0], 'ensureMoved', 'Should apply ensureMoved directly');
     assertEqual(calls[0][1].nodeId, moved.id, 'Should move attached tab');
     assertEqual(calls[0][1].destParentId, newWin.id,
       'Attached tab should move under the new window');
@@ -4598,7 +4158,6 @@ async function runTests() {
   const mods = await Promise.all([
     import('/api.js'),
     import('/bkgd/bkgd.js'),
-    import('/bkgd/ops.js'),
     import('/bkgd/reconcile.js'),
     import('/bkgd/treestore.js'),
     import('/common/tree.js'),
@@ -4607,12 +4166,11 @@ async function runTests() {
   ]);
   api = mods[0].api;
   Bkgd = mods[1].Bkgd;
-  OpsQueue = mods[2].OpsQueue;
-  runReconcile = mods[3].runReconcile;
-  TreeStore = mods[4].TreeStore;
-  Tree = mods[5].Tree;
-  Node = mods[6].Node;
-  emit = mods[7].emit;
+  runReconcile = mods[2].runReconcile;
+  TreeStore = mods[3].TreeStore;
+  Tree = mods[4].Tree;
+  Node = mods[5].Node;
+  emit = mods[6].emit;
   TestNode = class TestNode extends Node {
     newNodeId () {
       this.tree.nextId += 1;

@@ -71,7 +71,7 @@ const tree = await emit('bkgd_getTree');
 emit('tree_nodeAdded', { parentId, index, node });
 
 // Background sends a UI status update:
-emit('treeview_status', { status: 'Ops backlog detected', severity: 'warn' });
+emit('treeview_status', { status: 'Background state refreshed' });
 </code></pre>
 
   <h2>UI input events</h2>

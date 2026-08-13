@@ -33,47 +33,29 @@ code {
     <li><code>Nodes</code> — node records keyed by node ID.</li>
     <li><code>Snapshots</code> — full tree snapshots keyed by name.</li>
     <li><code>Transactions</code> — reserved for future log/undo support.</li>
-    <li><code>Ops</code> — durable background ops (intent queue + reconcile).</li>
   </ul>
 
-  <h2>Ops queue storage</h2>
+  <h2>Reconciliation</h2>
   <p>
-  The <code>Ops</code> store persists resumable background operations so the
-  service worker can recover after termination. Each record is keyed by
-  <code>opId</code> and includes a <code>state</code> (pending/running/failed/done),
-  timestamps, and an optional <code>cursor</code> for replay checkpoints.
+  Browser events and view requests update the background tree directly, where
+  <code>NodeStore</code> persists each actual change. A reconcile pass runs at
+  startup and on the configurable <code>periodicReconcile</code> alarm to repair
+  events lost while a Manifest V3 service worker was stopped.
   </p>
   <p>
-  Ops record fields:
-  <code>opId</code>, <code>state</code>, <code>type</code>, <code>name</code>,
-  <code>source</code>, <code>createdAt</code>, <code>updatedAt</code>,
-  <code>retryCount</code>, <code>lastError</code>, <code>payload</code>,
-  <code>cursor</code>.
+  Browser state is authoritative for currently loaded tabs and windows; the
+  persisted tree remains authoritative for saved nodes. Browser-origin moves
+  are not replayed from disk because their positional indexes become stale as
+  soon as the live tab strip changes.
   </p>
   <p>
-  Retry behavior:
-  failed ops are re-queued after a backoff delay, while stale running ops
-  (left running after a service worker crash) are re-queued after a longer
-  threshold. Both are bounded by <code>maxRetries</code>.
+  The former schema-2 <code>Ops</code> store has no compatibility migration.
+  Moving from a build which used that schema requires exporting a backup,
+  clearing extension data, and restoring the export.
   </p>
   <p>
-  Maintenance:
-  the background prunes old <code>done</code> ops on a periodic timer to
-  keep the queue size manageable and also removes ops which reference missing
-  node IDs. For manual cleanup, the background accepts <code>bkgd_pruneOps</code>
-  (remove old done ops and optionally dangling ops) and <code>bkgd_clearOps</code>
-  (clear all ops) messages.
-  </p>
-  <p>
-  Reconcile scheduling:
-  the background registers a <code>periodicReconcile</code> alarm and runs
-  a reconcile pass on startup. Dirty hints are tracked with
-  <code>reconcileDirtyAt</code> and <code>reconcileDirtySource</code> for
-  future scheduling/diagnostics.
-  </p>
-  <p>
-  See <code>bkgd/ops.js</code> for queue behavior and <code>bkgd/reconcile.js</code>
-  for the periodic reconcile pass that keeps tree state aligned with browser state.
+  See <code>bkgd/reconcile.js</code> for the repair pass which keeps tree
+  state aligned with browser state.
   </p>
 
   <h2>How nodes are stored</h2>

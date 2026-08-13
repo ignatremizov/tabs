@@ -336,11 +336,8 @@ export class TreeStore extends Tree {
         reason: actionReason,
         when: msg.when
       };
-      if ('userAction' === actionReason) {
-        await this.bkgd.ensureLoaded(payload);
-        return { result: 'ok immediate' };
-      }
-      return this.bkgd.enqueueIntent('ensureLoaded', payload, 'view');
+      await this.bkgd.applyTreeMutation('ensureLoaded', payload);
+      return { result: 'ok immediate' };
     }
     if (msg.type === 'unload') {
       const actionReason = msg.actionReason || 'tree_nodeChanged';
@@ -355,11 +352,8 @@ export class TreeStore extends Tree {
       if (undefined !== msg.keepTabsOnClose) {
         payload.keepTabsOnClose = msg.keepTabsOnClose;
       }
-      if ('userAction' === actionReason) {
-        await this.bkgd.ensureUnloaded(payload);
-        return { result: 'ok immediate' };
-      }
-      return this.bkgd.enqueueIntent('ensureUnloaded', payload, 'view');
+      await this.bkgd.applyTreeMutation('ensureUnloaded', payload);
+      return { result: 'ok immediate' };
     }
 
     return super.tree_nodeChanged(msg, sender, sendResponse);
@@ -375,11 +369,8 @@ export class TreeStore extends Tree {
       when: msg.when
     };
     if (undefined !== msg.mode) payload.mode = msg.mode;
-    if ('userAction' === actionReason) {
-      await this.bkgd.ensureDeleted(payload);
-      return { result: 'ok immediate' };
-    }
-    return this.bkgd.enqueueIntent('ensureDeleted', payload, 'view');
+    await this.bkgd.applyTreeMutation('ensureDeleted', payload);
+    return { result: 'ok immediate' };
   }
 
   async tree_nodeMoved (msg, sender, sendResponse) {
@@ -395,14 +386,11 @@ export class TreeStore extends Tree {
       reason: actionReason,
       when: msg.when
     };
-    if ('userAction' === actionReason) {
-      await this.bkgd.ensureMoved(payload);
-      return { result: 'ok immediate' };
-    }
-    return this.bkgd.enqueueIntent('ensureMoved', payload, 'view');
+    await this.bkgd.applyTreeMutation('ensureMoved', payload);
+    return { result: 'ok immediate' };
   }
 
-  async applyMoveForIntent (node, destParent, destIndex, msg, op = null) {
+  async applyMove (node, destParent, destIndex, msg) {
     // if moving to root, optionally wrap in a new window
     if (destParent.isRoot() && (! node.isWindow()) && (! node.parent.isRoot())) {
       let shouldOpenWindow = false;
@@ -432,36 +420,10 @@ export class TreeStore extends Tree {
       if (shouldOpenWindow && wantsWindow && isWholeWindowContent) {
         return true;
       }
-        if (shouldOpenWindow && wantsWindow) {
-          if (op && op.cursor && op.cursor.windowNodeId) {
-            const existingWindow = this.nodes[op.cursor.windowNodeId];
-            if (existingWindow) {
-              const movedIntoWindow = (node.parent !== existingWindow);
-              if (movedIntoWindow) {
-                await node.moveTo(existingWindow, 0, { reason: 'userAction' });
-              }
-              const existingWindowLoaded = (
-                existingWindow.isLoaded()
-                && (undefined !== existingWindow.windowId)
-                && (null !== existingWindow.windowId)
-              );
-              if (! existingWindowLoaded && (! movedIntoWindow)) {
-                await this.bkgd.bkgd_loadSavedWindow({
-                  windowNodeId: existingWindow.id,
-                  nodeId: node.id
-                });
-              }
-            return true;
-          }
-        }
+      if (shouldOpenWindow && wantsWindow) {
         const newWindowNode = await this.root.addChild(destIndex,
           { type: 'window' },
           { reason: 'userAction' });
-        if (op && this.bkgd.opsQueue) {
-          await this.bkgd.opsQueue.updateCursor(op.opId, {
-            windowNodeId: newWindowNode.id
-          });
-        }
         await node.moveTo(newWindowNode, 0, { reason: 'userAction' });
         return true;
       }
@@ -528,18 +490,9 @@ export class TreeStore extends Tree {
   async onTabRemoved (tabId, removeInfo) {
     const tabNode = this.getNodeByTabId(tabId);
     if (! tabNode) return;
-    const enqueueAndApply = async (name, payload) => {
-      const record = await this.bkgd.enqueueIntent(name, payload, 'browserEvent');
-      if ('ensureDeleted' === name) {
-        await this.bkgd.ensureDeleted(payload);
-      } else if ('ensureUnloaded' === name) {
-        await this.bkgd.ensureUnloaded(payload);
-      }
-      return record;
-    };
     if ('unload' === tabNode.tabClosedReason) {
       tabNode.tabClosedReason = undefined;
-      return await enqueueAndApply('ensureUnloaded', {
+      return await this.bkgd.applyTreeMutation('ensureUnloaded', {
         nodeId: tabNode.id,
         reason: 'onTabRemoved',
         detail: 'manualUnload'
@@ -554,7 +507,7 @@ export class TreeStore extends Tree {
       }
     }
     if (isWindowClosing && windowNode && windowNode.keepTabsOnClose) {
-      return await enqueueAndApply('ensureUnloaded', {
+      return await this.bkgd.applyTreeMutation('ensureUnloaded', {
         nodeId: tabNode.id,
         reason: 'onWindowRemoved'
       });
@@ -566,17 +519,17 @@ export class TreeStore extends Tree {
       const isOnlyWindowChild = (1 === windowNode.nodes.length)
         && (windowNode.nodes[0] === tabNode);
       if (tabIsBoringLeaf && isOnlyWindowChild) {
-        await enqueueAndApply('ensureDeleted', {
+        await this.bkgd.applyTreeMutation('ensureDeleted', {
           nodeId: tabNode.id,
           reason: 'onTabRemoved'
         });
         if (windowNode.shouldUnloadNotDelete()) {
-          await enqueueAndApply('ensureUnloaded', {
+          await this.bkgd.applyTreeMutation('ensureUnloaded', {
             nodeId: windowNode.id,
             reason: 'onWindowRemoved'
           });
         } else {
-          await enqueueAndApply('ensureDeleted', {
+          await this.bkgd.applyTreeMutation('ensureDeleted', {
             nodeId: windowNode.id,
             reason: 'onTabRemoved'
           });
@@ -585,25 +538,25 @@ export class TreeStore extends Tree {
       }
     }
     if (isWindowClosing) {
-      return await enqueueAndApply('ensureUnloaded', {
+      return await this.bkgd.applyTreeMutation('ensureUnloaded', {
         nodeId: tabNode.id,
         reason: 'onWindowRemoved'
       });
     }
     if (tabNode.shouldUnloadNotDelete()) {
-      return await enqueueAndApply('ensureUnloaded', {
+      return await this.bkgd.applyTreeMutation('ensureUnloaded', {
         nodeId: tabNode.id,
         reason: 'onTabRemoved'
       });
     }
     if (tabNode.hasKids()) {
-      return await enqueueAndApply('ensureDeleted', {
+      return await this.bkgd.applyTreeMutation('ensureDeleted', {
         nodeId: tabNode.id,
         reason: 'onTabRemoved',
         mode: 'promoteKids'
       });
     }
-    return await enqueueAndApply('ensureDeleted', {
+    return await this.bkgd.applyTreeMutation('ensureDeleted', {
       nodeId: tabNode.id,
       reason: 'onTabRemoved'
     });
@@ -708,7 +661,7 @@ export class TreeStore extends Tree {
     reason,
     details = {}
   ) {
-    return await this.bkgd.enqueueIntent('ensureMoved', {
+    return await this.bkgd.applyTreeMutation('ensureMoved', {
       nodeId: tabNode.id,
       destParentId: destParent.id,
       destIndex: destIndex,
@@ -720,7 +673,7 @@ export class TreeStore extends Tree {
       browserIndex: details.browserIndex,
       pinned: details.pinned,
       prevParentId: tabNode.parent ? tabNode.parent.id : null
-    }, 'browserEvent');
+    });
   }
 
   async onTabAttached (tabId, attachInfo) {
@@ -775,7 +728,7 @@ export class TreeStore extends Tree {
         || (tabNode.parent !== dest.destParent)
         || ((tabNode.indexOf() !== dest.destIndex)
           && (tabNode.indexOf() + 1 !== dest.destIndex))) {
-        await this.bkgd.enqueueIntent('ensureMoved', {
+        await this.bkgd.applyTreeMutation('ensureMoved', {
           nodeId: tabNode.id,
           destParentId: dest.destParent.id,
           destIndex: dest.destIndex,
@@ -786,7 +739,7 @@ export class TreeStore extends Tree {
           browserIndex: newIndex,
           pinned: true,
           prevParentId: tabNode.parent ? tabNode.parent.id : null
-        }, 'browserEvent');
+        });
       }
       await windowNode.setActiveTab({ reason: 'onTabAttached' });
       return;
@@ -823,7 +776,7 @@ export class TreeStore extends Tree {
     }
     if (! skip) {
       debug('Tree.onTabAttached(): moving', tabNode.toLine(), destParent.toLine(), destIndex);
-      await this.bkgd.enqueueIntent('ensureMoved', {
+      await this.bkgd.applyTreeMutation('ensureMoved', {
         nodeId: tabNode.id,
         destParentId: destParent.id,
         destIndex: destIndex,
@@ -834,7 +787,7 @@ export class TreeStore extends Tree {
         browserIndex: newIndex,
         pinned: false,
         prevParentId: tabNode.parent ? tabNode.parent.id : null
-      }, 'browserEvent');
+      });
     }
 
     debug(`onTabAttached(): active tab: auto`);
