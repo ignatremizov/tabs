@@ -1,328 +1,427 @@
 // options/options.js: options page script
-// Copyright (C) 2025 Selene ToyKeeper & Ignat Remizov
+// Copyright (C) 2025-2026 Selene ToyKeeper and Ignat Remizov
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 "use strict";
-import { api, isChrome, isFirefox } from '/api.js';
+import { api, isFirefox } from '/api.js';
 
-import { log, warn, debug, emit } from '/common/common.js';
+import {
+  log, debug, warn, error, emit, sanitizeClientId
+} from '/common/common.js';
 import { buildEventName } from '/common/events.js';
-import { defaultKeyBindings, keyBindingActions } from '/common/keybindings.js';
-import { initClientIdForm } from '/options/client-id-form.js';
+import {
+  defaultKeyBindings, keyBindingActions
+} from '/common/keybindings.js';
+import { ThemedPage } from '/themes/themes.js';
 
 log('options.js running');
 
-function initBackupsForm () {
-  // humanFriendlyBackups checkbox
-  const $humanFriendlyBackups = document.getElementById('humanFriendlyBackups');
-  api.storage.local.get('humanFriendlyBackups').then((result) => {
-    if (undefined !== result.humanFriendlyBackups) {
-      $humanFriendlyBackups.checked = result.humanFriendlyBackups;
+class OptionsPage extends ThemedPage {
+
+  constructor () {
+    super(
+      '/docs/docs',
+      '/options/options'
+    );
+    this.cfgDefaults = {
+      ...this.cfgDefaults,
+      clientId: null,
+
+      // TreeView behavior
+      cursorFollowsActiveTab: true,
+      activeTabExpandsItsParents: true,
+      pinnedTabsOpenNewTabsPinnedToo: false,
+      convertFromWindowWhenDroppedIntoWindow: true,
+      hideTopButtonsDuringSearch: false,
+      hideCollapsedTabs: false,
+      loadExpandedBranchStyle: 'ask',
+      loadCollapsedBranchStyle: 'ask',
+      unloadExpandedBranchStyle: 'ask',
+      unloadCollapsedBranchStyle: 'ask',
+      deleteExpandedBranchStyle: 'ask',
+
+      // fork behavior
+      defaultViewScope: 'auto',
+      openWindowOnRootMove: false,
+      openWindowOnRootLoadTopmost: false,
+      reorderTabsOnCreate: true,
+      focusActiveTabOnLoadOrEdit: false,
+      moveDownIntoExpandedSibling: true,
+      moveUpIntoExpandedSibling: true,
+      dropTextNoteMode: 'prepend',
+      nodesPerPage: 20,
+      reconcileIntervalMinutes: 5,
+      keyBindings: {},
+
+      // backups
+      humanFriendlyBackups: false,
+      localBackupInterval: 0,
+      backupOnStartup: true,
+
+      // display state used outside ThemedPage
+      wasLoadedNodeStats: true,
+    };
+  }
+
+  async init () {
+    await super.init();
+
+    const checkboxes = [
+      'expandedRowPrefix',
+      'alwaysShowNodeStats',
+      'wasLoadedNodeStats',
+      'hideTreeLines',
+      'hideCursorTreeLines',
+      'hideWindowTreeLines',
+      'showFavicons',
+      'compactMode',
+      'cursorFollowsActiveTab',
+      'activeTabExpandsItsParents',
+      'pinnedTabsOpenNewTabsPinnedToo',
+      'convertFromWindowWhenDroppedIntoWindow',
+      'hideTopButtonsDuringSearch',
+      'openWindowOnRootMove',
+      'openWindowOnRootLoadTopmost',
+      'reorderTabsOnCreate',
+      'focusActiveTabOnLoadOrEdit',
+      'moveDownIntoExpandedSibling',
+      'moveUpIntoExpandedSibling',
+      'humanFriendlyBackups',
+      'backupOnStartup',
+    ];
+    const selects = [
+      'theme',
+      'loadExpandedBranchStyle',
+      'loadCollapsedBranchStyle',
+      'unloadExpandedBranchStyle',
+      'unloadCollapsedBranchStyle',
+      'deleteExpandedBranchStyle',
+      'defaultViewScope',
+      'dropTextNoteMode',
+    ];
+    const lines = [
+      'fontFamily',
+      'fontSize',
+      'rowHeight',
+      'indentWidth',
+      'indentMargin',
+      'indentMarginWindow',
+      'indentPadding',
+      'indentPaddingWindow',
+      'expandedBranchBottomPadding',
+      'leafToBranchSpacing',
+      'windowTopLevelNodeSpacing',
+      'detailsBoxHeight',
+      'detailsBoxHeightNotesOnly',
+    ];
+
+    this.options = [
+      new Option(this, {
+        cfgKey: 'clientId',
+        inputType: 'line',
+        fromStr: (value) => this.parseClientId(value),
+        afterSave: (value) => this.notifyClientIdChanged(value),
+        debounceTime: 1000,
+      }),
+      ...selects.map((cfgKey) => new Option(this, {
+        cfgKey,
+        inputType: 'select',
+      })),
+      ...checkboxes.map((cfgKey) => new Option(this, {
+        cfgKey,
+        inputType: 'checkbox',
+      })),
+      ...lines.map((cfgKey) => new Option(this, {
+        cfgKey,
+        inputType: 'line',
+        debounceTime: 1000,
+      })),
+      new Option(this, {
+        cfgKey: 'userStyles',
+        inputType: 'text',
+        debounceTime: 1000,
+      }),
+      new Option(this, {
+        cfgKey: 'nodesPerPage',
+        inputType: 'number',
+        fromStr: (value) => this.parseNumber(
+          value, 'nodesPerPage', 1, 200, true
+        ),
+        debounceTime: 1000,
+      }),
+      new Option(this, {
+        cfgKey: 'reconcileIntervalMinutes',
+        inputType: 'number',
+        fromStr: (value) => this.parseNumber(
+          value, 'reconcileIntervalMinutes', 0, 120, true
+        ),
+        debounceTime: 1000,
+      }),
+      new Option(this, {
+        cfgKey: 'localBackupInterval',
+        elementId: 'localBackupHours',
+        inputType: 'number',
+        toStr: (minutes) => (Number(minutes) || 0) / 60,
+        fromStr: (value) => {
+          const hours = this.parseNumber(
+            value, 'localBackupHours', 0, 1000, false
+          );
+          if (undefined === hours) return;
+          return hours * 60;
+        },
+        debounceTime: 1000,
+      }),
+    ];
+
+    if (isFirefox) {
+      this.options.push(
+        new Option(this, {
+          cfgKey: 'hideCollapsedTabs',
+          inputType: 'checkbox',
+        })
+      );
+    } else {
+      this.greyOut('hideCollapsedTabs');
     }
-  });
-  // save on click
-  $humanFriendlyBackups.addEventListener('click', (event) => {
-    //debug(`humanFriendlyBackups: ${$humanFriendlyBackups.checked}`, $humanFriendlyBackups);
-    const humanFriendlyBackups = $humanFriendlyBackups.checked;
-    api.storage.local.set({ humanFriendlyBackups });
-  });
 
-  // automatic local backup interval
-  const $localBackupHours = document.getElementById('localBackupHours');
-  const $backupOnStartup = document.getElementById('backupOnStartup');
-  api.storage.local.get(['localBackupInterval'], (result) => {
-    if (undefined !== result.localBackupInterval) {
-      $localBackupHours.value = result.localBackupInterval / 60;
+    for (const option of this.options) option.init();
+
+    this.initBackfillFavicons();
+    await initKeyBindingsForm();
+    this.initSessionRestoreForm();
+  }
+
+  parseClientId (value) {
+    const clientId = sanitizeClientId(value);
+    const $input = this.$doc.getElementById('clientId');
+    if (! clientId) {
+      const message = 'Client ID must contain at least one letter or number.';
+      $input.setCustomValidity(message);
+      $input.reportValidity();
+      warn(message);
+      return;
     }
-  });
-  api.storage.local.get({ backupOnStartup: true }).then((result) => {
-    $backupOnStartup.checked = result.backupOnStartup;
-  });
-  let localBackupHoursDebounceTimer;
-  $localBackupHours.addEventListener("input", () => {
-    clearTimeout(localBackupHoursDebounceTimer);
+    $input.setCustomValidity('');
+    return clientId;
+  }
 
-    localBackupHoursDebounceTimer = setTimeout(() => {
-      const hours = parseFloat($localBackupHours.value);
+  async notifyClientIdChanged (clientId) {
+    const response = await emit('bkgd_setClientId', { clientId });
+    if (response && response.error) throw new Error(response.error);
+  }
 
-      // validate the input
-      if (isNaN(hours) || hours < 0 || hours > 1000) {
-        warn('User entered invalid data into localBackupHours input');
-        return;
-      }
-
-      const minutes = hours * 60;
-      api.storage.local.set({ localBackupInterval: minutes });
-      debug(`User set localBackupInterval = ${minutes} minutes`);
-    }, 3000); // 3 second debounce delay
-  });
-  $backupOnStartup.addEventListener('click', () => {
-    api.storage.local.set({ backupOnStartup: $backupOnStartup.checked });
-  });
-}
-
-function initThemeForm () {
-  // theme selector
-  const $theme = document.getElementById('theme');
-  api.storage.local.get('theme').then((result) => {
-    if (undefined !== result.theme) {
-      $theme.value = result.theme;
+  parseNumber (value, name, min, max, integer) {
+    const parsed = integer ? Number.parseInt(value, 10) : Number.parseFloat(value);
+    if (! Number.isFinite(parsed) ||
+        parsed < min ||
+        parsed > max ||
+        (integer && `${parsed}` !== `${value}`.trim())) {
+      warn(`User entered invalid data into ${name}`);
+      return;
     }
-  });
-  // save when changed
-  $theme.addEventListener('change', (event) => {
-    const theme = $theme.value;
-    api.storage.local.set({ theme });
-  });
+    return parsed;
+  }
 
-  // expandedRowPrefix checkbox
-  const $expandedRowPrefix = document.getElementById('expandedRowPrefix');
-  api.storage.local.get({'expandedRowPrefix': true}).then((result) => {
-    if (undefined !== result.expandedRowPrefix) {
-      $expandedRowPrefix.checked = result.expandedRowPrefix;
-    }
-  });
-  // save on click
-  $expandedRowPrefix.addEventListener('click', (event) => {
-    const expandedRowPrefix = $expandedRowPrefix.checked;
-    api.storage.local.set({ expandedRowPrefix });
-  });
-}
+  initBackfillFavicons () {
+    const $button = this.$doc.getElementById('backfillFavicons');
+    const $status = this.$doc.getElementById('backfillFaviconsStatus');
+    if (! $button || ! $status) return;
 
-function initBehaviorForm () {
-  const $defaultViewScope = document.getElementById('defaultViewScope');
-  const $openWindowOnRootMove = document.getElementById('openWindowOnRootMove');
-  const $openWindowOnRootLoadTopmost = document.getElementById(
-    'openWindowOnRootLoadTopmost'
-  );
-  const $reorderTabsOnCreate = document.getElementById('reorderTabsOnCreate');
-  const $focusActiveTabOnLoadOrEdit = document.getElementById(
-    'focusActiveTabOnLoadOrEdit'
-  );
-  const $moveDownIntoExpandedSibling = document.getElementById(
-    'moveDownIntoExpandedSibling'
-  );
-  const $moveUpIntoExpandedSibling = document.getElementById(
-    'moveUpIntoExpandedSibling'
-  );
-  const $dropTextNoteMode = document.getElementById('dropTextNoteMode');
-  const $nodesPerPage = document.getElementById('nodesPerPage');
-  const $reconcileIntervalMinutes = document.getElementById(
-    'reconcileIntervalMinutes'
-  );
-  api.storage.local.get({
-    defaultViewScope: 'auto',
-    openWindowOnRootMove: false,
-    openWindowOnRootLoadTopmost: false,
-    reorderTabsOnCreate: true,
-    focusActiveTabOnLoadOrEdit: false,
-    moveDownIntoExpandedSibling: true,
-    moveUpIntoExpandedSibling: true,
-    dropTextNoteMode: 'prepend',
-    nodesPerPage: 20,
-    reconcileIntervalMinutes: 5
-  }).then((result) => {
-    $defaultViewScope.value = result.defaultViewScope;
-    $openWindowOnRootMove.checked = result.openWindowOnRootMove;
-    $openWindowOnRootLoadTopmost.checked =
-      result.openWindowOnRootLoadTopmost;
-    $reorderTabsOnCreate.checked = result.reorderTabsOnCreate;
-    $focusActiveTabOnLoadOrEdit.checked =
-      result.focusActiveTabOnLoadOrEdit;
-    $moveDownIntoExpandedSibling.checked =
-      result.moveDownIntoExpandedSibling;
-    $moveUpIntoExpandedSibling.checked =
-      result.moveUpIntoExpandedSibling;
-    $dropTextNoteMode.value = result.dropTextNoteMode;
-    $nodesPerPage.value = result.nodesPerPage;
-    $reconcileIntervalMinutes.value = result.reconcileIntervalMinutes;
-  });
-  $defaultViewScope.addEventListener('change', () => {
-    api.storage.local.set({
-      defaultViewScope: $defaultViewScope.value
-    });
-  });
-  $openWindowOnRootMove.addEventListener('click', () => {
-    api.storage.local.set({
-      openWindowOnRootMove: $openWindowOnRootMove.checked
-    });
-  });
-  $openWindowOnRootLoadTopmost.addEventListener('click', () => {
-    api.storage.local.set({
-      openWindowOnRootLoadTopmost: $openWindowOnRootLoadTopmost.checked
-    });
-  });
-  $reorderTabsOnCreate.addEventListener('click', () => {
-    api.storage.local.set({
-      reorderTabsOnCreate: $reorderTabsOnCreate.checked
-    });
-  });
-  $focusActiveTabOnLoadOrEdit.addEventListener('click', () => {
-    api.storage.local.set({
-      focusActiveTabOnLoadOrEdit: $focusActiveTabOnLoadOrEdit.checked
-    });
-  });
-  $moveDownIntoExpandedSibling.addEventListener('click', () => {
-    api.storage.local.set({
-      moveDownIntoExpandedSibling: $moveDownIntoExpandedSibling.checked
-    });
-  });
-  $moveUpIntoExpandedSibling.addEventListener('click', () => {
-    api.storage.local.set({
-      moveUpIntoExpandedSibling: $moveUpIntoExpandedSibling.checked
-    });
-  });
-  $dropTextNoteMode.addEventListener('change', () => {
-    api.storage.local.set({
-      dropTextNoteMode: $dropTextNoteMode.value
-    });
-  });
-
-  let nodesPerPageDebounce;
-  $nodesPerPage.addEventListener('input', () => {
-    clearTimeout(nodesPerPageDebounce);
-    nodesPerPageDebounce = setTimeout(() => {
-      const count = parseInt($nodesPerPage.value, 10);
-      if (isNaN(count) || count < 1 || count > 200) {
-        warn('User entered invalid data into nodesPerPage');
-        return;
-      }
-      api.storage.local.set({ nodesPerPage: count });
-    }, 1000);
-  });
-
-  let reconcileDebounce;
-  $reconcileIntervalMinutes.addEventListener('input', () => {
-    clearTimeout(reconcileDebounce);
-    reconcileDebounce = setTimeout(() => {
-      const minutes = parseInt($reconcileIntervalMinutes.value, 10);
-      if (isNaN(minutes) || minutes < 0 || minutes > 120) {
-        warn('User entered invalid data into reconcileIntervalMinutes');
-        return;
-      }
-      api.storage.local.set({ reconcileIntervalMinutes: minutes });
-    }, 1000);
-  });
-
-}
-
-function initAppearanceForm () {
-  // Helper to set up a dropdown + custom text input pair
-  // The dropdown provides quick presets, the text input allows custom values
-  // Custom input overrides the dropdown when it has a value
-  function setupSelectWithCustom(selectId, customId, storageKey, defaultValue, presetValues) {
-    const $select = document.getElementById(selectId);
-    const $custom = document.getElementById(customId);
-    let debounceTimer;
-
-    // Load saved value
-    api.storage.local.get({ [storageKey]: defaultValue }).then((result) => {
-      const savedValue = result[storageKey];
-      // Check if saved value matches a preset
-      if (presetValues.includes(savedValue)) {
-        $select.value = savedValue;
-        $custom.value = '';
-      } else {
-        // Custom value - show in custom input, set dropdown to default
-        $select.value = defaultValue;
-        $custom.value = savedValue;
-      }
-    });
-
-    // Dropdown change - save immediately and clear custom input
-    $select.addEventListener('change', () => {
-      $custom.value = '';  // Clear custom when using dropdown
-      api.storage.local.set({ [storageKey]: $select.value });
-    });
-
-    // Custom input - save with debounce, overrides dropdown
-    $custom.addEventListener('input', () => {
-      clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        const value = $custom.value.trim();
-        if (value) {
-          api.storage.local.set({ [storageKey]: value });
-        }
-      }, 500);
-    });
-
-    // Save immediately on blur or Enter
-    $custom.addEventListener('blur', () => {
-      clearTimeout(debounceTimer);
-      const value = $custom.value.trim();
-      if (value) {
-        api.storage.local.set({ [storageKey]: value });
-      } else {
-        // If custom is cleared, use dropdown value
-        api.storage.local.set({ [storageKey]: $select.value });
-      }
-    });
-    $custom.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        clearTimeout(debounceTimer);
-        const value = $custom.value.trim();
-        if (value) {
-          api.storage.local.set({ [storageKey]: value });
-        }
+    $button.addEventListener('click', async () => {
+      $button.disabled = true;
+      $status.textContent = ' Working...';
+      try {
+        const result = await emit('bkgd_backfillFavicons', {});
+        const updated = result ? result.updated : 0;
+        const skipped = result ? result.skipped : 0;
+        $status.textContent =
+          ` Done. Updated ${updated} nodes; skipped ${skipped}.`;
+      } catch (err) {
+        warn('Favicon backfill failed:', err);
+        $status.textContent = ` Error: ${err.message || err}`;
+      } finally {
+        $button.disabled = false;
       }
     });
   }
 
-  // Helper for checkbox inputs
-  function setupCheckbox(elementId, storageKey, defaultValue) {
-    const $el = document.getElementById(elementId);
-    api.storage.local.get({ [storageKey]: defaultValue }).then((result) => {
-      $el.checked = result[storageKey];
-    });
-    $el.addEventListener('click', () => {
-      api.storage.local.set({ [storageKey]: $el.checked });
+  initSessionRestoreForm () {
+    this.initFileUpload(
+      'tktsto-file',
+      'bkgd_importBackupFile',
+      ['.json']
+    );
+    this.initFileUpload(
+      'tabs-outliner-file',
+      'bkgd_importTabsOutliner',
+      ['.html', '.tree']
+    );
+  }
+
+  initFileUpload (baseId, signalName, allowedExtensions) {
+    const $button = this.$doc.getElementById(`${baseId}-button`);
+    const $input = this.$doc.getElementById(`${baseId}-input`);
+    if (! $button || ! $input) {
+      warn(`Missing file upload controls for ${baseId}`);
+      return;
+    }
+
+    $button.addEventListener('click', async () => {
+      if (! $input.files.length) {
+        alert('Please select a file first.');
+        return;
+      }
+
+      const originalText = $button.textContent;
+      $button.disabled = true;
+      try {
+        for (const file of $input.files) {
+          const filename = file.name.toLowerCase();
+          const valid = allowedExtensions.some(
+            (extension) => filename.endsWith(extension)
+          );
+          if (! valid) {
+            alert(
+              `Unsupported file type. Allowed extensions: `
+              + allowedExtensions.join(', ')
+            );
+            continue;
+          }
+          if (filename.endsWith('.html') || filename.endsWith('.htm')) {
+            alert(
+              'HTML import is not implemented yet.\n\n'
+              + 'Use Tabs Outliner’s “Export tree” feature to create '
+              + 'a .tree file.'
+            );
+            continue;
+          }
+
+          $button.textContent = '... Loading ...';
+          log(`loading ${file.name} (${file.size} bytes) ...`);
+          try {
+            const fileContent = await readFileAsText(file);
+            const data = JSON.parse(fileContent);
+            const response = await emit(signalName, {
+              data,
+              filename: file.name,
+            });
+            if (response && response.error) {
+              throw new Error(response.error);
+            }
+            const total = response ? response.total : 0;
+            log(`${total} nodes imported from: "${file.name}"`);
+            alert(`${total} nodes imported from: "${file.name}"`);
+          } catch (err) {
+            warn(`Could not import "${file.name}":`, err);
+            alert(`Could not import "${file.name}": ${err.message || err}`);
+          }
+        }
+      } finally {
+        $button.textContent = originalText;
+        $button.disabled = false;
+      }
     });
   }
 
-  // Font size - dropdown + custom
-  setupSelectWithCustom('fontSize', 'fontSizeCustom', 'fontSize', '1.15rem',
-    ['0.85rem', '1rem', '1.15rem', '1.3rem', '1.5rem']);
+  greyOut (elementId) {
+    const $elem = this.$doc.getElementById(elementId);
+    if (! $elem) return warn(`No such page element: ${elementId}`);
+    $elem.disabled = true;
+    const $grey = $elem.parentElement || $elem;
+    $grey.classList.add('greyed-out');
+  }
+}
 
-  // Font family - dropdown + custom
-  setupSelectWithCustom('fontFamily', 'fontFamilyCustom', 'fontFamily',
-    'Arial, Tahoma, Geneva, sans-serif',
-    [
-      'Arial, Tahoma, Geneva, sans-serif',
-      "'DejaVu Sans', Arial, sans-serif",
-      "'Quicksand Medium', Tahoma, Geneva, sans-serif",
-      "'Segoe UI', Tahoma, Geneva, sans-serif",
-      'Verdana, Geneva, sans-serif',
-      "'Trebuchet MS', Arial, sans-serif",
-      'Georgia, serif',
-      "'Courier New', monospace",
-      'monospace'
-    ]);
+class Option {
 
-  // Row height - dropdown + custom
-  setupSelectWithCustom('rowHeight', 'rowHeightCustom', 'rowHeight', '1.5rem',
-    ['1.2rem', '1.5rem', '1.8rem', '2.2rem']);
+  constructor (page, args) {
+    this.page = page;
+    this.cfg = page.cfg;
+    this.cfgKey = args.cfgKey;
+    this.elementId = args.elementId || this.cfgKey;
+    this.inputType = args.inputType;
+    this.toStr = args.toStr;
+    this.fromStr = args.fromStr;
+    this.afterSave = args.afterSave;
+    this.debounceTime = args.debounceTime;
+    this.debounceTimer = null;
+  }
 
-  // Indent width - dropdown + custom
-  setupSelectWithCustom('indentWidth', 'indentWidthCustom', 'indentWidth', '0.8rem',
-    ['0.5rem', '0.8rem', '1.2rem', '1.6rem']);
+  init () {
+    const $elem = this.page.$doc.getElementById(this.elementId);
+    if (! $elem) {
+      error(`No such page element: ${this.elementId}`);
+      return;
+    }
+    this.$elem = $elem;
 
-  // Checkboxes
-  setupCheckbox('showFavicons', 'showFavicons', true);
-  setupCheckbox('compactMode', 'compactMode', false);
+    debug(`${this.inputType}: ${this.cfgKey} = ${this.cfg[this.cfgKey]}`);
+    let value = this.cfg[this.cfgKey];
+    if (this.toStr) value = this.toStr(value);
+    this.setValue(value);
 
-  // Backfill favicons button
-  const $backfillBtn = document.getElementById('backfillFavicons');
-  const $backfillStatus = document.getElementById('backfillFaviconsStatus');
-  $backfillBtn.addEventListener('click', async () => {
-    $backfillBtn.disabled = true;
-    $backfillStatus.textContent = ' Working...';
+    let eventName = 'input';
+    if ('checkbox' === this.inputType ||
+        'select' === this.inputType) {
+      eventName = 'change';
+    }
+
+    $elem.addEventListener(eventName, () => {
+      if (! this.debounceTime) {
+        this.parseAndSave();
+        return;
+      }
+
+      if (this.debounceTimer) clearTimeout(this.debounceTimer);
+      this.$elem.classList.add('unsaved');
+      this.debounceTimer = setTimeout(() => {
+        this.debounceTimer = null;
+        this.parseAndSave();
+      }, this.debounceTime);
+    });
+  }
+
+  getValue () {
+    if ('checkbox' === this.inputType) return this.$elem.checked;
+    return this.$elem.value;
+  }
+
+  setValue (value) {
+    if ('checkbox' === this.inputType) {
+      this.$elem.checked = Boolean(value);
+      return;
+    }
+    this.$elem.value = value ?? '';
+  }
+
+  async parseAndSave () {
+    const rawValue = this.getValue();
+    let value = rawValue;
+    if (this.fromStr) value = this.fromStr(value);
+    if (undefined === value) return;
+
     try {
-      const result = await emit('bkgd_backfillFavicons', {});
-      $backfillStatus.textContent = ` Done! Updated ${result.updated} nodes, skipped ${result.skipped}.`;
+      await this.cfg.set(this.cfgKey, value);
+      if (this.afterSave) await this.afterSave(value);
+
+      let displayValue = value;
+      if (this.toStr) displayValue = this.toStr(displayValue);
+      if (displayValue !== rawValue) this.setValue(displayValue);
+      this.$elem.classList.remove('unsaved');
     } catch (err) {
-      $backfillStatus.textContent = ` Error: ${err.message || err}`;
+      warn(`Could not save option "${this.cfgKey}":`, err);
     }
-    $backfillBtn.disabled = false;
+  }
+}
+
+function readFileAsText (file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => {
+      reject(reader.error || new Error('File read failed'));
+    };
+    reader.onload = (event) => resolve(event.target.result);
+    reader.readAsText(file);
   });
 }
 
@@ -331,9 +430,8 @@ function buildDefaultBindingsByAction () {
   for (const binding of keyBindingActions) {
     defaults[binding.action] = '';
   }
-  for (const key of Object.keys(defaultKeyBindings)) {
-    const action = defaultKeyBindings[key];
-    if (action === 'none') continue;
+  for (const [key, action] of Object.entries(defaultKeyBindings)) {
+    if ('none' === action) continue;
     if (! Object.prototype.hasOwnProperty.call(defaults, action)) continue;
     if (! defaults[action]) defaults[action] = key;
   }
@@ -355,25 +453,36 @@ async function initKeyBindingsForm () {
       label: 'Add / Remove',
       actions: [
         'loadOrEditNode',
+        'loadNode',
         'deleteNode',
         'unloadNode',
         'forceToggleLoad',
         'addNodeAsNextVisibleRow',
-        'addNodeAsPrevVisibleRow'
-      ]
+        'addNodeAsPrevVisibleRow',
+      ],
     },
     {
       label: 'Edit',
       actions: [
+        'wrapNodeInWindow',
         'toggleExpanded',
-        'editNotes'
-      ]
+        'editNode',
+        'detailsButton',
+      ],
     },
     {
       label: 'Task',
+      actions: ['taskEdit'],
+    },
+    {
+      label: 'Search',
       actions: [
-        'taskEdit'
-      ]
+        'beginSearch',
+        'searchForCurrent',
+        'nextSearchResult',
+        'prevSearchResult',
+        'endSearch',
+      ],
     },
     {
       label: 'Navigation',
@@ -385,21 +494,23 @@ async function initKeyBindingsForm () {
         'cursorPgUp',
         'cursorPgDown',
         'cursorHome',
-        'cursorEnd'
-      ]
+        'cursorEnd',
+      ],
     },
     {
       label: 'Move',
       actions: [
         'moveNodeUp',
         'moveNodeDown',
+        'moveNodeUpInvertNest',
+        'moveNodeDownInvertNest',
         'moveNodeUpNoDescend',
         'moveNodeDownNoDescend',
         'moveNodeLeft',
         'moveNodeRight',
         'moveNodeHome',
-        'moveNodeEnd'
-      ]
+        'moveNodeEnd',
+      ],
     },
     {
       label: 'Mark / Paste',
@@ -407,46 +518,39 @@ async function initKeyBindingsForm () {
         'toggleMarked',
         'unmarkAll',
         'pasteMarked',
-        'pasteMarkedBefore'
-      ]
+        'pasteMarkedBefore',
+      ],
     },
     {
-      label: 'Buttons / Misc',
+      label: 'Miscellaneous',
       actions: [
         'backupSession',
-        'generateTutorial'
-      ]
-    }
+        'generateTutorial',
+      ],
+    },
   ];
 
-  const groupedActions = new Set();
-  for (const group of keyBindingGroups) {
-    for (const action of group.actions) {
-      groupedActions.add(action);
-    }
-  }
-  const ungroupedActions = [];
-  for (const binding of keyBindingActions) {
-    if (! groupedActions.has(binding.action)) {
-      ungroupedActions.push(binding.action);
-    }
-  }
+  const groupedActions = new Set(
+    keyBindingGroups.flatMap((group) => group.actions)
+  );
+  const ungroupedActions = keyBindingActions
+    .map((binding) => binding.action)
+    .filter((action) => ! groupedActions.has(action));
   if (ungroupedActions.length) {
     keyBindingGroups.push({
       label: 'Other',
-      actions: ungroupedActions
+      actions: ungroupedActions,
     });
   }
 
   const defaultBindings = buildDefaultBindingsByAction();
-  const data = await api.storage.local.get({ keyBindings: {} });
-  const storedBindings = data.keyBindings || {};
+  const stored = await api.storage.local.get({ keyBindings: {} });
+  const storedBindings = stored.keyBindings || {};
   const effectiveBindings = {};
   const inputs = {};
 
   function setInputValue (action) {
-    const value = effectiveBindings[action] || '';
-    inputs[action].value = value;
+    inputs[action].value = effectiveBindings[action] || '';
   }
 
   function persistBindings () {
@@ -455,8 +559,7 @@ async function initKeyBindingsForm () {
       const action = binding.action;
       const value = effectiveBindings[action] || '';
       const defaultValue = defaultBindings[action] || '';
-      if (value === defaultValue) continue;
-      overrides[action] = value;
+      if (value !== defaultValue) overrides[action] = value;
     }
     api.storage.local.set({ keyBindings: overrides });
   }
@@ -478,17 +581,15 @@ async function initKeyBindingsForm () {
     persistBindings();
   }
 
-  $groups.textContent = '';
+  $groups.replaceChildren();
 
   const $header = document.createElement('div');
   $header.classList.add('shortcut-grid', 'shortcut-grid-header');
-  const $headerAction = document.createElement('div');
-  $headerAction.textContent = 'Action';
-  const $headerShortcut = document.createElement('div');
-  $headerShortcut.textContent = 'Shortcut';
-  const $headerDefault = document.createElement('div');
-  $headerDefault.textContent = 'Default';
-  $header.append($headerAction, $headerShortcut, $headerDefault);
+  for (const label of ['Action', 'Shortcut', 'Default']) {
+    const $column = document.createElement('div');
+    $column.textContent = label;
+    $header.append($column);
+  }
   $groups.append($header);
 
   for (const group of keyBindingGroups) {
@@ -504,12 +605,11 @@ async function initKeyBindingsForm () {
     $grid.classList.add('shortcut-grid');
 
     for (const action of group.actions) {
-      const binding = actionDefinitions[action];
-      const label = binding ? binding.label : action;
+      const definition = actionDefinitions[action];
 
       const $label = document.createElement('div');
       $label.classList.add('shortcut-label');
-      $label.textContent = label;
+      $label.textContent = definition ? definition.label : action;
 
       const $input = document.createElement('input');
       $input.type = 'text';
@@ -518,21 +618,19 @@ async function initKeyBindingsForm () {
       $input.dataset.action = action;
       $input.spellcheck = false;
 
-      let storedValue = defaultBindings[action] || '';
+      let value = defaultBindings[action] || '';
       if (Object.prototype.hasOwnProperty.call(storedBindings, action)) {
-        storedValue = storedBindings[action];
+        value = storedBindings[action];
       }
-      effectiveBindings[action] = storedValue || '';
-      $input.value = effectiveBindings[action];
+      effectiveBindings[action] = value || '';
       inputs[action] = $input;
+      setInputValue(action);
 
       const $default = document.createElement('div');
       $default.classList.add('shortcut-default');
-      if (defaultBindings[action]) {
-        $default.textContent = `Default: ${defaultBindings[action]}`;
-      } else {
-        $default.textContent = 'Default: (unbound)';
-      }
+      $default.textContent = defaultBindings[action]
+        ? `Default: ${defaultBindings[action]}`
+        : 'Default: (unbound)';
 
       $grid.append($label, $input, $default);
 
@@ -540,26 +638,22 @@ async function initKeyBindingsForm () {
         event.preventDefault();
         event.stopPropagation();
 
-        if (event.key === 'Escape') {
+        if ('Escape' === event.key) {
           setInputValue(action);
           $input.blur();
           return;
         }
-        if (event.key === 'Backspace' || event.key === 'Delete') {
+        if ('Backspace' === event.key || 'Delete' === event.key) {
           applyBinding(action, '');
           return;
         }
         if (['Shift', 'Control', 'Alt', 'Meta'].includes(event.key)) {
           return;
         }
-
-        const bindingName = buildEventName(event);
-        applyBinding(action, bindingName);
+        applyBinding(action, buildEventName(event));
       });
 
-      $input.addEventListener('focus', () => {
-        $input.select();
-      });
+      $input.addEventListener('focus', () => $input.select());
     }
 
     $group.append($grid);
@@ -576,101 +670,12 @@ async function initKeyBindingsForm () {
   });
 }
 
-function initSessionRestoreForm () {
-  // generate an onClicked handler
-  function fileUploadHandler($id, signalName, allowedExtensions = ['.json']) {
-    function onClicked () {
-      log(`${$id}-button clicked`);
-      const $button = document.getElementById(`${$id}-button`);
-      const fileInput = document.getElementById(`${$id}-input`);
-      const $buttonOrigText = $button.innerText;
-      if (fileInput.files.length === 0) {
-        alert("Please select a file first.");
-        return;
-      }
-
-      //const file = fileInput.files[0]; {
-      for (const file of fileInput.files) {
-        log(`loading ${file.name} (${file.type}) (${file.size} bytes) ...`);
-        const reader = new FileReader();
-
-        // Check file extension instead of MIME type (more reliable for .tree files)
-        const fileName = file.name.toLowerCase();
-        const hasValidExtension = allowedExtensions.some(ext => fileName.endsWith(ext));
-        if (!hasValidExtension) {
-          alert(`Unsupported file type. Allowed extensions: ${allowedExtensions.join(', ')}`);
-          return;
-        }
-
-        // HTML parsing from "Save Page As..." of TO is not yet implemented
-        if (fileName.endsWith('.html') || fileName.endsWith('.htm')) {
-          alert('HTML file import is not yet implemented.\n\nPlease use Tabs Outliner\'s "Export tree" feature instead, which creates a .tree file.');
-          return;
-        }
-
-        reader.onerror = function (event) {
-          err = 'file load failed';
-          warn(err, event);
-          alert(err);
-        }
-
-        reader.onload = function (event) {
-          log(`${$id} loaded`);
-          let fileContent = event.target.result;
-          // try parsing as json
-          try {
-            const jsonData = JSON.parse(fileContent);
-            // send to bkgd
-            emit(signalName,
-              { data: jsonData, filename: file.name })
-              .then((response) => {
-                log(`${response.total} nodes imported from: "${file.name}"`);
-                $button.innerText = $buttonOrigText;
-                alert(`${response.total} nodes imported from: "${file.name}"`);
-              });
-          } catch (error) {
-            warn("Error parsing JSON:", error);
-            $button.innerText = $buttonOrigText;
-            alert(`The file is not valid JSON: "${file.name}"`);
-          }
-        };
-
-        // read the file; it'll trigger reader.onload when it's ready
-        log(`loading ${file.name} now ...`);
-        reader.readAsText(file);
-        $button.innerText = '... Loading ...';
-      }
-    }
-    return onClicked;
+document.addEventListener('DOMContentLoaded', async () => {
+  try {
+    const optionsPage = new OptionsPage();
+    await optionsPage.init();
+    log('options.js loaded');
+  } catch (err) {
+    error('Could not initialize options page:', err);
   }
-
-  let base;
-
-  // handle tktsto imports
-  base = 'tktsto-file';
-  const importBackupButtonClicked = fileUploadHandler(
-    base, 'bkgd_importBackupFile', ['.json']);
-  document.getElementById(`${base}-button`).addEventListener("click",
-    importBackupButtonClicked);
-
-  // handle tabs-outliner imports (.tree and .html are native Tabs Outliner exports)
-  base = 'tabs-outliner-file';
-  const tabsOutlinerButtonClicked = fileUploadHandler(
-    base, 'bkgd_importTabsOutliner', ['.html', '.tree']);
-  document.getElementById(`${base}-button`).addEventListener("click",
-    tabsOutlinerButtonClicked);
-
-}
-
-// pre-populate form with saved user options,
-// and store new values when the user hits "save"
-document.addEventListener('DOMContentLoaded', () => {
-  log('options.js loaded');
-  initClientIdForm();
-  initThemeForm();
-  initBehaviorForm();
-  initAppearanceForm();
-  initKeyBindingsForm();
-  initBackupsForm();
-  initSessionRestoreForm();
 });

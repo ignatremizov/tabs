@@ -53,15 +53,11 @@ if [ 'firefox' = "$BROWSER" ] && [ -n "${FF_EXT_ID:-}" ]; then
   fi
 fi
 
-# copy subdirs
-SUBDIRS="bkgd common docs img options themes view"
+# Copy extension assets recursively.  Themes now reference SVG files in nested
+# img directories, and default_locale requires the complete _locales tree.
+SUBDIRS="_locales bkgd common docs img options themes view"
 for d in $SUBDIRS ; do
-  mkdir -p "build/$d"
-  for ext in js html css md png ; do
-    for f in "$d"/*.$ext ; do
-      [ -e "$f" ] && cp "$f" "build/$d"
-    done
-  done
+  [ -d "$d" ] && cp -R "$d" build/
 done
 
 # Remove developer-only docs from packaged builds.

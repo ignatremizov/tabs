@@ -2,6 +2,9 @@
  * Copyright (C) 2025 Selene ToyKeeper & Ignat Remizov
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
+html {
+  zoom: var(--zoom-level, 1.0);
+}
 html, body {
   height: 100%;
   margin: 0;
@@ -9,7 +12,7 @@ html, body {
   flex-direction: column;
   overflow-x: hidden;
   background: var(--tree-view-bg);
-  color: #ccc;
+  color: var(--tab-unloaded-fg);
   font-family: var(--font-family);
   font-size: var(--global-font-size);
 }
@@ -48,6 +51,20 @@ html, body {
   padding-top: 0.25rem;
 }
 
+#bottom-area.inline {
+  display: inline-block;
+  box-shadow: none;
+  width: min-content;
+}
+#top-area.inline {
+  box-shadow: none;
+}
+#top-area.inline .button {
+  margin-top: 0.25em;
+  line-height: 1em;
+  vertical-align: top;
+}
+
 #top-bar,
 #bottom-bar {
   min-height: var(--toolbar-height);
@@ -74,15 +91,70 @@ html, body {
   padding-left: 0.25em;
 }
 
+/******************** floating notification area ********************/
+
+#top-area {
+  position: relative;
+  z-index: 1;
+}
+
+#notifications {
+  position: absolute;
+  z-index: 2;
+  /* top: 1rem; */
+  top: 100%;
+  right: 1rem;
+  margin-top: 0.5rem;
+}
+
+#notifications div {
+  display: inline-block;
+}
+
+/******************** search widgets ********************/
+
+.search-bar {
+  min-height: var(--toolbar-height);
+}
+
+.search-entry {
+  width: calc(100% - 1em);
+  margin: 0.33em 0.25em;
+  padding-left: 0.25rem;
+  padding-right: 0.25rem;
+  font-size: var(--global-font-size);
+  background: var(--details-box-bg);
+  color: var(--details-box-fg);
+  border-radius: 8px;
+  border: var(--details-box-border);
+  box-shadow: var(--details-box-shadow);
+}
+
+.search-count {
+  border-radius: var(--cursor-branch-radius);
+  padding: 0.1em 0.35em;
+  font-size: 110%;
+  color: var(--tab-loaded-fg);
+  /* background: var(--top-area-bg); */
+  /*
+  background: var(--button-bg);
+  border: var(--button-border)
+  */
+  /* background: var(--details-box-bg); */
+}
+.search-entry:focus {
+  color: var(--tab-loaded-fg);
+}
+
+
 /******************** node details box ********************/
 
+/* .search-entry, */
 #details-box {
   /* width: calc(100% - 1rem); */
   width: calc(100% - 0.75rem);
   padding-left: 0.25rem;
   padding-right: 0.25rem;
-  height: var(--details-box-height);
-  max-height: var(--details-box-height);
   overflow-x: wrap;
   overflow-y: auto;
   background: var(--details-box-bg);
@@ -90,6 +162,13 @@ html, body {
   border-radius: 8px;
   border: var(--details-box-border);
   box-shadow: var(--details-box-shadow);
+}
+
+#details-box {
+  height: var(--details-box-height);
+  max-height: var(--details-box-height);
+  overflow-x: wrap;
+  overflow-y: auto;
 }
 
 #details-box.hidden + #bottom-bar {
@@ -173,7 +252,9 @@ body:not(.unfocused) ::-webkit-scrollbar-thumb,
 .unfocused *:hover::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb-bg-unfocused);
 }
-body:not(.unfocused) *:hover::-webkit-scrollbar-thumb {
+body:not(.unfocused) *:hover::-webkit-scrollbar-thumb,
+body.docs::-webkit-scrollbar-thumb,
+body.options::-webkit-scrollbar-thumb {
   background: var(--scrollbar-thumb-bg);
 }
 
@@ -188,8 +269,12 @@ body:not(.unfocused) *:hover::-webkit-scrollbar-thumb {
   padding-bottom: 5px;
 }
 
+.search-count,
 .toolbar .button,
-#dialogButtons button {
+#dialogButtons button,
+.options button,
+input[type="file"]::file-selector-button,
+foo {
   display: inline-block;
   flex: 1 1 auto;
   text-align: center;
@@ -203,9 +288,14 @@ body:not(.unfocused) *:hover::-webkit-scrollbar-thumb {
   box-shadow: var(--button-shadow);
   cursor: default;
   transition: var(--button-transition);
+  user-select: none;
 }
+.search-count:hover,
 .toolbar .button:hover,
-#dialogButtons button:hover {
+#dialogButtons button:hover,
+.options button:hover,
+input[type="file"]::file-selector-button:hover,
+foo {
   color: var(--button-hover-fg);
   border: var(--button-hover-border);
   background: var(--button-hover-bg);
@@ -219,14 +309,17 @@ body:not(.unfocused) *:hover::-webkit-scrollbar-thumb {
 }
 .toolbar .button.pressed,
 .toolbar .button:active,
-#dialogButtons button:active {
+#dialogButtons button:active,
+.options button:active,
+input[type="file"]::file-selector-button:active,
+foo {
   color: var(--button-pressed-fg);
   border: var(--button-pressed-border);
   background: var(--button-pressed-bg);
   box-shadow: var(--button-pressed-shadow);
   transition: var(--button-transition);
 }
-.button.greyed-out {
+.greyed-out {
   opacity: 50%;
 }
 /******************** lists ********************/
@@ -236,9 +329,9 @@ body:not(.unfocused) *:hover::-webkit-scrollbar-thumb {
   display: block;
   padding: 0;
   margin: 0;
-  margin-left: 0.27rem;
+  margin-left: var(--indent-margin);
   border-left: 2px solid var(--tree-line);
-  padding-left: 0.4rem;
+  padding-left: var(--indent-padding);
   /* border-radius: 0 0 0 3px; */
 }
 
@@ -298,7 +391,7 @@ body:not(.unfocused) *:hover::-webkit-scrollbar-thumb {
   /* margin-left: -4px;: */
 }
 /* top-level nodes */
-.root-nodes > .nodes > .node {
+#noderoot > .nodes > .node {
   /* put some space between top-level nodes */
   margin-bottom: 1em;
 }
@@ -311,7 +404,11 @@ body:not(.unfocused) *:hover::-webkit-scrollbar-thumb {
   line-height: var(--row-line-height);
   min-height: var(--row-min-height);  /* ensure row still visible even when empty */
   font-size: var(--global-font-size);
+  padding-top: var(--row-padding);
+  padding-bottom: var(--row-padding);
   padding-left: 2px;
+  width: unset;
+
 }
 
 .row:hover {
@@ -370,21 +467,22 @@ body:not(.unfocused) *:hover::-webkit-scrollbar-thumb {
 /* tabs which are only half unloaded */
 .row.discarded .row-title,
 .row.frozen .row-title,
-.row.tab-hidden .row-title {
+foo {
   font-style: italic;
   font-size: 90%;
   /* opacity: 70%; */
 }
 .row.tab-hidden .row-title {
-  /* just in case you're a madman and use "Tab Unloader for Tree Style Tab"
-   * AT THE SAME TIME as this extension, and made it unload+hide some tabs
-   * ... but you'd have to be pretty crazy to do that.
-   */
-  opacity: 66%;
+  /* these should never be visible, but style them anyway just in case */
+  /* because the user could be using a different extension to hide tabs,
+   * or there could be a bug in this extension to allow these to be seen */
+  font-size: 80%;
+  border: 1px dashed #888;
 }
 
 .node-checkbox,
-#hover-menu .task-button,
+#hover-menu .task-button, .task-button,
+input[type="checkbox"],
 foo {
   display: inline-block;
   width: calc(0.7 * var(--row-line-height));
@@ -406,6 +504,7 @@ foo {
 .node-checkbox.done,
 .node-checkbox.skip,
 .node-checkbox.fail,
+input[type="checkbox"]:checked,
 foo {
   background: var(--button-pressed-bg);
   border: var(--button-pressed-border);
@@ -415,7 +514,7 @@ foo {
   background: var(--button-hover-bg);
   border: var(--button-hover-border);
 }
-.node-checkbox.percent {
+.node-checkbox.percent, .node-checkbox.ratio {
   /* percent is wider than other checkboxes */
   width: unset;
   padding-left: 0.2rem;
@@ -428,10 +527,10 @@ foo {
 .node-checkbox.todo {
   color: var(--checkbox-fg-todo);
 }
-.node-checkbox.half-done {
-  color: var(--checkbox-fg-half-done);
+.node-checkbox.percent, .node-checkbox.ratio {
+  color: var(--checkbox-fg-todo);
 }
-.node-checkbox.percent {
+.node-checkbox.half-done {
   color: var(--checkbox-fg-half-done);
 }
 .node-checkbox.done {
@@ -481,6 +580,30 @@ foo {
   content: " ~ ";
 }
 
+/* hr divider rows */
+.node-divider1,
+.node-divider2 {
+  display: inline-block;
+  width: 100%;
+  background: transparent;
+  height: 0;
+  border-top: 0.05em solid var(--tree-line);
+  border-bottom: none;
+  border-left: none;
+  border-right: none;
+  margin: 0.3em 0;
+}
+.node-divider2 {
+  height: 0.1em;
+  margin: 0.2em 0;
+  border-top: 0.05em solid var(--tree-line);
+  border-bottom: 0.05em solid var(--tree-line);
+}
+.cursor .node-divider1,
+.cursor .node-divider2 {
+  border-color: var(--tree-line-cursor);
+}
+
 .expanded.row::before {
   font-weight: bold;
   margin: 0;
@@ -504,11 +627,12 @@ foo {
 }
 
 .node-stats {
-  font-size: 0.8em;
   font-weight: bold;
+  font-size: calc(var(--global-font-size) * 0.8);
+  line-height: calc(var(--global-font-size) * 0.8);
   color: var(--node-stat-dim-color);
 }
-.node-stat-open, .node-stat-total {
+.node-stat-open, .node-stat-was-loaded, .node-stat-total {
   font-weight: normal;
   color: var(--node-stat-bright-color);
   padding-left: 0.15em;
@@ -517,14 +641,42 @@ foo {
 .node-stat-open {
   color: var(--tab-loaded-fg);
 }
+.node-stat-was-loaded {
+  color: var(--tab-was-loaded-fg);
+}
 
 /* expanded parent nodes have extra padding below */
 .node.expanded {
-  padding-bottom: 3px;
+  padding-bottom: var(--expanded-branch-bottom-padding);
 }
+/* put some space between a leaf and a branch */
+/* (but not at root level) */
+.nodes .nodes > .node.leaf:has(+ .node:not(.leaf)),
+.nodes .nodes > .node.collapsed:has(+ .node) {
+  margin-bottom: var(--leaf-to-branch-spacing);
+}
+.nodes .nodes > .node.leaf + .node:not(.leaf),
+.nodes .nodes > .node:not(.leaf) + .node {
+  margin-top: var(--leaf-to-branch-spacing);
+}
+/* put some space (and a drop target) between top-level items in a window */
+/* dang, doesn't work if I set a var... gotta inject the entire clause in js
+.window.node > .nodes > .node:has(+ .node) {
+  padding-bottom: var(--window-top-level-node-padding);
+}
+*/
 
 
 /******************** window nodes ********************/
+
+.window > .nodes {
+  margin-left: var(--indent-margin-window);
+  padding-left: var(--indent-padding-window);
+  border-left: 2px solid var(--tree-line-window);
+}
+.cursor.window > .nodes {
+  border-left: 2px solid var(--tree-line-window-cursor);
+}
 
 .window.node {
   /* put some extra space between window nodes */
@@ -539,11 +691,13 @@ foo {
 }
 
 
-.window.row {
+.window.row,
+h2, h3 {
   background: var(--window-row-bg);
   border-radius: var(--cursor-radius-collapsed);
   font-weight: normal;
   color: var(--window-unloaded-fg);
+  padding: 0.1em 0.2em;
 }
 .window.row.active:not(.cursor) {
   background: var(--window-active-row-bg, var(--window-row-bg));
@@ -552,7 +706,8 @@ foo {
   margin-left: 0;
   padding-left: 0;
 }
-.window.row .row-title {
+.window.row .row-title,
+h2, h3 {
   text-shadow: var(--window-title-text-shadow);
 }
 .window.row .node-label {
@@ -571,10 +726,16 @@ foo {
 
 .window.row.active .row-title,
 .window.row.active .node-label,
+h2, h3,
 foo {
   /* the current window is brighter */
   color: var(--window-active-fg);
   font-weight: bold;
+}
+.window.row.active:not(.cursor) {
+  /* make focused window stand out more */
+  background: var(--window-active-row-bg, var(--window-row-bg));
+  box-shadow: var(--window-active-row-shadow);
 }
 
 .window.row.cursor .row-title {
@@ -641,7 +802,8 @@ foo {
   100% { background-position: -50% 50%; }
 }
 
-.node.marked, #marked-count {
+.node.marked, #marked-count,
+.window.node.marked.expanded {
   box-shadow: var(--marked-node-shadow);
   border-radius: var(--cursor-branch-radius);
 
@@ -661,6 +823,9 @@ foo {
     rgba(255,215,0,0.10));
   */
   background: var(--marked-node-bg);
+}
+.window.node.marked.expanded {
+  background: linear-gradient(var(--window-branch-top), var(--window-branch-bot));
 }
 
 /* let cursor background override marked background */
@@ -684,11 +849,7 @@ foo {
   border-radius: var(--cursor-radius-expanded);
 }
 
-#marked-count {
-  position: fixed;
-  z-index: 2;
-  top: calc(var(--toolbar-height) + 0.5rem);
-  right: 1rem;
+.marked-count, #marked-count {
   border-radius: var(--cursor-branch-radius);
   padding: 0.1em 0.35em;
   font-size: 133%;
@@ -697,6 +858,15 @@ foo {
   box-shadow: var(--marked-count-shadow);
   text-shadow: var(--marked-count-text-shadow);
 }
+
+/*
+#marked-count {
+  position: fixed;
+  z-index: 2;
+  top: calc(var(--toolbar-height) + 0.5rem);
+  right: 1rem;
+}
+*/
 
 #marked-count:hover {
   color: var(--marked-count-fg-hover);
@@ -725,7 +895,7 @@ foo {
   align-items: center;
 }
 
-#hover-menu div {
+#hover-menu div, .hover-menu-button {
   display: inline-block;
   cursor: pointer;
   min-width: 1.4rem;   /* Minimum button width */
@@ -741,7 +911,8 @@ foo {
 }
 
 #hover-menu div:hover,
-#hover-menu .unload-button.unloaded:hover {
+#hover-menu .unload-button.unloaded:hover,
+.hover-menu-button:hover {
   background: var(--hover-menu-button-hover-bg);
   border-radius: 6px;
   box-shadow: 0.1em 0.1em 0.2em #000000c0;
@@ -754,16 +925,21 @@ foo {
   box-shadow: none;
 }
 
-#hover-menu .unload-button {
+#hover-menu .load-button, .load-button {
+  /* click to load */
+  color: var(--tab-loaded-fg);
+}
+
+#hover-menu .unload-button, .unload-button {
   /* click to unload */
   color: var(--tab-unloaded-fg);
 }
-#hover-menu .unload-button.unloaded {
+#hover-menu .unload-button.unloaded, .unload-button.unloaded {
   /* click to set "wasLoaded" state */
   color: var(--tab-was-loaded-fg);
 }
 
-#hover-menu .task-button {
+#hover-menu .task-button, .task-button {
   color: var(--checkbox-fg-todo);
   text-shadow: none;
   vertical-align: middle;
@@ -777,15 +953,15 @@ foo {
   margin-right: 0.05rem;
 }
 
-#hover-menu .edit-button {
+#hover-menu .edit-button, .edit-button {
   color: var(--label-loaded-fg);
 }
 
-#hover-menu .delete-button {
+#hover-menu .delete-button, .delete-button {
   color: var(--delete-button-fg);
 }
 
-#hover-menu .mark-button {
+#hover-menu .mark-button, .mark-button {
   color: var(--marked-count-color);
 }
 
@@ -800,15 +976,15 @@ foo {
 .drop-target-left:not(.dragging),
 .window.node.expanded.drop-target-left:not(.dragging):not(.drop-external-text),
 foo {
-  border-left: 0.25em solid var(--tree-line-dragging);
-  border-bottom: 0.5em solid var(--tree-line-dragging);
-  border-bottom-left-radius: 1rem;
+  border-left: var(--drop-target-left-width) solid var(--tree-line-dragging);
+  border-bottom: var(--drop-target-bottom-width) solid var(--tree-line-dragging);
+  border-bottom-left-radius: var(--drop-target-border-radius);
 }
 /* draw tree line only below, not to left */
 .drop-target-right,
 .cursor.row.drop-target-right:not(.dragging .cursor) {
-  border-bottom: 0.5em solid transparent;
-  border-bottom-left-radius: 1rem;
+  border-bottom: var(--drop-target-bottom-width) solid transparent;
+  border-bottom-left-radius: var(--drop-target-border-radius);
   border-image: linear-gradient(to right,
     transparent 0%,
     transparent 8%,
@@ -890,7 +1066,9 @@ foo {
 }
 
 .dialog input,
-.dialog textarea {
+.dialog textarea,
+.options input,
+.options textarea {
   background: var(--dialog-input-bg);
   border: var(--1px) inset var(--dialog-input-border);
   border-radius: 3px;
@@ -898,19 +1076,42 @@ foo {
   max-width: calc(100% - var(--dialog-padding));
   margin-top: 0.1em;
 }
+.options .unsaved {
+  outline: var(--unsaved-outline);
+}
 
 .dialog input {
-  color: var(--label-loaded-fg);
+  color: var(--note-fg);
   font-size: calc(var(--global-font-size) * 0.9);
   padding: 0.1em 0.2em;
   margin-bottom: var(--dialog-padding);
 }
 
-.dialog textarea {
+.dialog input#dialogLabelInput {
+  color: var(--label-loaded-fg);
+}
+
+#dialogLabelWindowToggleDiv {
+  margin-top: 0.1em;
+  margin-bottom: 0.1em;
+}
+.dialog input[type="checkbox"] {
+  width: 1em;
+  margin-right: 0.5em;
+}
+
+.dialog textarea,
+.options textarea {
   /* height: 100%; */
   min-height: 10em;
   color: var(--note-fg);
   font-size: calc(var(--global-font-size) * 0.8);
+}
+.options textarea {
+  margin: 0 0.25em;
+  max-width: calc(100% - 1em);
+  min-height: 4em;
+  height: 6em;
 }
 
 #dialogButtons {
@@ -981,8 +1182,21 @@ foo {
 }
 
 .dialog *:focus,
-*:focus {
+*:focus,
+.focus {
   outline: var(--focus-outline);
+}
+
+select {
+  border: var(--1px) outset var(--dialog-border-color);
+  /* "select" widget apparently can't use a gradient background */
+  /*background: linear-gradient(var(--dialog-bg-top), var(--dialog-bg-bot));*/
+  background: var(--dialog-bg-top);
+  border-radius: var(--dialog-radius);
+  padding: calc(var(--dialog-padding) * 0.5);
+  color: var(--dialog-fg);
+  font-size: var(--global-font-size);
+  margin: 0.1em 0.1em;
 }
 
 
@@ -990,20 +1204,69 @@ foo {
 
 .hidden {
   /* add/remove 'hidden' class to hide or show elements */
-  display: none;
+  display: none !important;
 }
+
+/******************** icons ********************/
+
+.icon {
+  display: inline-block;
+  width: calc(0.8 * var(--row-line-height));
+  height: calc(0.8 * var(--row-line-height));
+  line-height: calc(0.77 * var(--row-line-height));
+  margin-right: 0.2em;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  vertical-align: middle;
+  background-color: var(--tree-line);
+}
+
+.cursor.node .icon,
+.loaded .icon, .loaded-children .icon {
+  background-color: var(--tree-line-cursor);
+}
+
+.icon.pinned {
+  mask-image: url("/img/twemoji/thumbtack.svg");
+}
+
+.icon.pinned-branch {
+  mask-image: url("/img/twemoji/thumbtack.svg");
+}
+
+.icon.pinned-branch-anchored {
+  mask-image: url("/img/fa/anchor.svg");
+}
+
+.icon.bookmark {
+  mask-image: url("/img/fa/bookmark.svg");
+}
+
+.tree-line-color { color: var(--tree-line); }
+.tree-line-cursor-color { color: var(--tree-line-cursor); }
+.tree-line-window-color { color: var(--tree-line-window); }
 
 /******************** vars ********************/
 
 :root {
   /***** globals *****/
+  --zoom-level: 1.0;
   --font-family: "Quicksand Medium", Tahoma, Geneva, sans-serif;
   --font-family: "DejaVu Sans", Arial, sans-serif;
   --font-family: Arial, Tahoma, Geneva, sans-serif;
-  --global-font-size: 1.15rem;
+  --global-font-size: 14pt;
   --button-font-size: 1rem;
   --row-min-height: 1.5rem;
   --row-line-height: 1.5rem;
+  --row-padding: 0;
+  --expanded-branch-bottom-padding: 0.2em;
+  --leaf-to-branch-spacing: 0;
+  /* --window-top-level-node-padding: unset; */
+  --indent-margin: 0.27em;
+  --indent-margin-window: 0;
+  --indent-padding: 0.4em;
+  --indent-padding-window: 0.2em;
   --1px: 0.08rem;  /* Like 1 pixel, but scalable */
   --2px: 0.15rem;
   --shadow-color: #000000c0;
@@ -1033,6 +1296,11 @@ foo {
   --pinned-icon-fg: #ffd45a;
   /***** tree lines *****/
   --tree-line-dragging: #f0f;
+  --tree-line-window: var(--tree-line);
+  --tree-line-window-cursor: var(--tree-line-cursor);
+  --drop-target-left-width: 0.25em;
+  --drop-target-bottom-width: 0.5em;
+  --drop-target-border-radius: 1em;
   /***** window nodes *****/
   --window-title-text-shadow: var(--fancy-text-shadow);
   --window-branch-shadow: 0.10em 0.10em 0.25em var(--shadow-color);

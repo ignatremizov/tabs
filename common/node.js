@@ -6,7 +6,7 @@
 import { api, isChrome, isFirefox } from '/api.js';
 
 import {
-  log, warn, error, debug, emit, isIllegalURL
+  log, warn, error, debug, emit, isIllegalURL, isNewTabPage
 } from '/common/common.js';
 
 
@@ -22,14 +22,19 @@ export class Node {
     // browser attachment
     this.windowId = undefined;
     this.tabId = undefined;
+    // misc window/tab states
     this.geometry = undefined;
     this.windowState = undefined;
     this.incognito = undefined;
+    this.discarded = undefined;
+    this.frozen = undefined;
+    this.hidden = undefined;
     // attributes
     this.label = undefined;
     this.note = undefined;
     this.title = undefined;
     this.url = undefined;
+    this.bookmark = undefined;
     this.faviconUrl = undefined;
     this.expanded = true;
     this.loaded = false;
@@ -80,10 +85,11 @@ export class Node {
   async deleteSelf (args) {  //  TODO: rename this, maybe just use destroy ()
     debug(`Node.deleteSelf(${args.reason}, ${this.id})`, args);
     // root should refuse to delete itself
-    if (this.isRoot()) return;
+    if (this.isRoot()) return false;
 
     // delete kids first
     if (this.hasKids()) {
+      debug(`Node.deleteSelf(${this.nodes.length} kids)`);
       for (const node of this.nodes.slice()) {
         await node.deleteSelf(args);
       }
@@ -104,9 +110,18 @@ export class Node {
     // bump timestamp
     this.bump('mtime', args);
     // notify others
-    if ((args.emit !== false) && ['userAction', 'onTabRemoved'].includes(args.reason))
+    if ((args.emit !== false) && [
+      'userAction', 'onTabRemoved', 'emptyWindowClosed'
+    ].includes(args.reason)) {
+      //debug(`Node.deleteSelf(${args.reason}): emitting`);
       await emit('tree_nodeDeleted',
-        { nodeId: this.id, when: this.mtime, actionReason: args.reason });
+        {
+          nodeId: this.id,
+          when: this.mtime,
+          actionReason: args.reason
+        });
+    }
+    //else debug(`Node.deleteSelf(${args.reason}): not emitting`);
 
     // TODO: ideally, this should wait until all threads have finished
     //       handling the tree_nodeDeleted event, but await only waits
@@ -181,9 +196,11 @@ export class Node {
   async promoteKids (args) {
     debug('Node.promoteKids()');
     // root should refuse to promote its kids
-    if (this.isRoot()) return;
+    if (this.isRoot()) return false;
     // TODO: if deleting a window node, handle any loaded tabs specially
     //   (since loaded tabs cannot exist outside a window)
+    let moved = 0;
+    let total = this.nodes.length;
     if (this.hasKids()) {
       const moveArgs = { ...args };
       if ((! this.tree.bkgd)
@@ -196,9 +213,14 @@ export class Node {
       // (forward order has issues with race conditions for open tabs)
       const reversed = [...this.nodes].reverse();
       for (const node of reversed) {
-        await node.moveTo(this.parent, newIndex, moveArgs);
+        if (await node.moveTo(this.parent, newIndex, moveArgs)) {
+          moved ++;
+        }
       }
     }
+    debug(`promoteKids(moved ${moved} / ${total} kids)`);
+    if (moved > 0) return true;
+    return false;
   }
 
   async promoteKidsToParentAtIndex (destParent, destIndex, args) {
@@ -234,7 +256,7 @@ export class Node {
 
   isRoot () {
     // root has no parent, or is its own parent
-    return ((! this.parent) || (this.parent === this));
+    return (('root' === this.id) || (! this.parent) || (this.parent === this));
   }
 
   isLeaf () {
@@ -243,6 +265,18 @@ export class Node {
 
   isWindow () {
     return ('window' === this.type);
+  }
+
+  isIncognito () {
+    let windowNode;
+    if (this.isWindow()) windowNode = this;
+    else windowNode = this.getWindowNode();
+    if (windowNode) return (!! windowNode.incognito);
+    return false;
+  }
+
+  isBookmark () {
+    return (!! this.url) && (!! this.bookmark);
   }
 
   hasKids () {
@@ -281,6 +315,16 @@ export class Node {
       if ((! node.isWindow()) && node.isLoaded()) return true;
     for (const node of this.nodes)
       if (node.hasLoadedTabsDeep && node.hasLoadedTabsDeep()) return true;
+    return false;
+  }
+
+  hasUnloadedTabs () {
+    // check if any descendant are unloaded tabs or wasLoaded tabs
+    // (but try to minimize the amount of CPU cycles to calculate this)
+    for (const node of this.nodes)
+      if (node.isUnloadedTab()) return true;
+    for (const node of this.nodes)
+      if ((! node.isWindow()) && node.hasUnloadedTabs()) return true;
     return false;
   }
 
@@ -353,6 +397,8 @@ export class Node {
     if (this.label
       || this.note
       || this.hasCheckbox()
+      || (this.isPinned() && (! isNewTabPage(this.url)))
+      || this.isBookmark()
       //|| (this.type !== '')  // is a window or something
     ) return true;
     // stop if we've gone deep enough
@@ -374,14 +420,27 @@ export class Node {
     return (! this.expanded);
   }
 
-  isVisible () {
+  isVisible (root) {
     // check if entire ancestry is expanded
+    // and exists within the given root node
+    if (undefined === root) root = this.tree.root;
+    if (this === root) return true;  // root is "visible" by definition
     let parent = this.parent;
     while (true) {
+      if (! parent) return false;  // can happen after a node was deleted
       if (parent.isCollapsed()) return false;
-      if (parent.isRoot()) return true;
+      // we've looked far enough, stop the search
+      else if (parent === root) return true;
+      // we've hit the true root instead of the viewRoot,
+      // so assume we're outside of the viewScope and thus not visible
+      else if (parent.isRoot()) return false;
+      // look one level higher up
       parent = parent.parent;
     }
+  }
+
+  isTab () {
+    return (! (! this.url));
   }
 
   isLoaded () {
@@ -398,13 +457,16 @@ export class Node {
     return (this.url
       && this.wasLoaded
       && (! this.loaded)
-      && (! this.isWindow()));
+      && (! this.isWindow())
+      && (! this.isBookmark())
+    );
   }
 
   isUnloadedTab () {
     if (this.url
-      && (!this.isLoaded())
-      && (!this.isWindow())
+      && (! this.isLoaded())
+      && (! this.isWindow())
+      && (! this.isBookmark())
     ) return true;
     return false;
   }
@@ -418,6 +480,25 @@ export class Node {
 
   isActive () { return this.active; }
 
+  isLoadable () {
+    if (this.isUnloadedTab()) return true;
+    if (this.isBookmark()) return true;
+    if (this.isUnloadedWindow() && this.hasUnloadedTabs()) return true;
+    return false;
+  }
+
+  isBatchLoadable () {  // has loadable kids
+    if (this.isRoot()) return false;
+    if (this.isLeaf()) return false;
+
+    // can batch load anything with unloaded tabs,
+    // but only if it is a window, or is inside a window
+    const winNode = this.isWindow() ? this : this.getWindowNode();
+    if (winNode && this.hasUnloadedTabs()) return true;
+
+    return false;
+  }
+
   isUnloadable () {
     if (this.loaded || this.wasLoaded) return true;
     //if (this.url) return true;
@@ -426,13 +507,49 @@ export class Node {
 
   isMarkable () {
     if (this.isRoot()) return false;
-    if (this.isWindow()) return false;  // TODO: unnecessary maybe?
+    //if (this.isWindow()) return false;  // seems unnecessary
+    //if (this.isWindow() && this.isLoaded()) return false;
     return true;
   }
 
   isDeletable () {
     if (this.isRoot()) return false;
+    if (this.isWindow() && this.isLoaded()) return false;
     return true;
+  }
+
+  isPinnedBranch () {
+    // true if this node is a label called "Pinned"
+    // and is the first child of a window
+    // ... and false otherwise
+    if (('Pinned' !== this.label)
+      || this.isTab()
+      || this.isWindow()
+      || this.isRoot()
+      || (! this.parent.isWindow())
+      || (0 !== this.indexOf())
+    ) return false;
+    return true;
+  }
+
+  isPinned () {
+    // The fork persists browser pin state directly.  Also recognize upstream's
+    // optional "Pinned" branch so imported/new upstream-style trees still work.
+    return Boolean(this.pinned || this.isPinnedByBranch());
+  }
+
+  isPinnedByBranch () {
+    // a node is "pinned" if it is in a branch called "Pinned", and
+    // that branch is the first child of its window
+    if (this.isWindow()) return false;
+    const windowNode = this.getWindowNode();
+    if (! windowNode) return false;
+    if (windowNode.nodes?.length <= 0) return false;
+    const firstChild = windowNode.nodes[0];
+    if (! firstChild.isPinnedBranch()) return false;
+    if (this === firstChild) return true;
+    if (this.isChildOf(firstChild)) return true;
+    return false;
   }
 
   isChildOf (node, includeSelf = false) {
@@ -462,6 +579,7 @@ export class Node {
       else line = this.label;
     }
     else if (this.title) line = this.title;
+    else if (this.url) line = this.url;
     else if (this.isWindow()) line = `Window ${this.windowId}`;
     if (! line) line = `node ${this.id}`;
     return line;
@@ -476,10 +594,8 @@ export class Node {
     else line = '* ';
     // checkbox
     if (this.hasCheckbox()) {
-      if ('percent' === this.getCheckboxType()) {
-        const px = Math.floor(this.checkboxPx * 100);
-        line = `${line}[${px}%] `;
-      } else line = `${line}[${this.checkbox}] `;
+      const cbText = this.checkboxText();
+      line = `${line}[${cbText}] `;
     }
     // main text
     let urlTitle = this.title ? this.title : this.url;
@@ -491,8 +607,17 @@ export class Node {
     else if (this.url) line = `${line}[${this.url}](${this.url})`;
     else if (this.isWindow()) line = `${line}Window ${this.windowId}`;
     else if (this.isRoot()) line = `${line}Session`;
-    // closed windows
-    if (this.isWindow() && (! this.isLoaded())) line = `${line} (Closed)`;
+    if (this.isWindow()) {
+      // closed windows
+      if (! this.isLoaded()) line = `${line} (closed)`;
+      // incognito windows
+      if (this.isIncognito()) line = `${line} (private)`;
+      // geometry
+      if (this.geometry) {
+        const g = this.geometry;
+        line = `${line} [${g[0]}x${g[1]}+${g[2]}+${g[3]}]`;
+      }
+    }
     // if all else fails
     if (! line) line = `${line}node ${this.id}`;
     return line;
@@ -548,6 +673,63 @@ export class Node {
     return found;
   }
 
+  search (needle) {
+    let matches = [];
+
+    // search helpers
+    const fields = ['label', 'title', 'url', 'note'];
+    const strSearch = (node, text) => {
+      text = text.toLowerCase();
+      for (const field of fields) {
+        if (node[field] && node[field].toLowerCase().includes(text))
+          return true;
+      }
+      return false;
+    };
+    const regexSearch = (node, re) => {
+      for (const field of fields) {
+        if (node[field] && re.test(node[field])) return true;
+      }
+      return false;
+    };
+    const nodeSearch = (node, other) => {
+      for (const field of fields) {
+        if (node[field] && other[field]
+          && (node[field] === other[field])
+        ) return true;
+      }
+      return false;
+    };
+
+    // search by node to find duplicates
+    if ('object' === typeof(needle)) {
+      matches = this.findNodes( (n) => nodeSearch(n, needle) );
+    }
+    // search by text entry
+    else if ('string' === typeof needle) {
+      // make a list of regexes or plain strings
+      const regexes = [];
+      for (const word of needle.split(' ')) {
+        try { regexes.push(new RegExp(word, 'i')); }
+        catch (e) { regexes.push(word); }  // invalid regex = plain string
+      }
+      matches = this.findNodes(
+        // must match *all* search terms
+        (n) => {
+          for (const re of regexes) {
+            let found = false;
+            if ('string' === typeof(re)) found = strSearch(n, re);
+            else found = regexSearch(n, re);
+            if (! found) return false;
+          }
+          return true;
+        }
+      );
+    }
+
+    return matches;
+  }
+
   findParent (fn) {
     //debug('findParent', this.parent, fn(this.parent));
     // search ancestors for one which satisfies the "fn" condition
@@ -592,7 +774,7 @@ export class Node {
     // if window is boring and has no kids, just delete it
     if ((! this.hasKids()) && (! this.shouldUnloadNotDelete())) {
       debug('Node.windowClosed(): emptyWindowClosed');
-      await this.deleteSelf({ reason: 'emptyWindowClosed' });
+      return await this.deleteSelf({ reason: 'emptyWindowClosed' });
     }
     // if window has no open tabs, mark it as unloaded
     else if (! (this.hasLoadedTabsDeep
@@ -609,7 +791,7 @@ export class Node {
       // Vivaldi does this when closing a window
       // and it's fine... it closes the tabs afterward
       const loadedTabs = this.getLoadedTabs();
-      warn(`Window closed with ${loadedTabs.length} open tabs: ${this.toLine()}`);
+      debug(`Window closed with ${loadedTabs.length} open tabs: ${this.toLine()}`);
     }
     // notify others
     if ('onWindowRemoved' === args.reason)
@@ -636,6 +818,7 @@ export class Node {
     if ([
       'userAction',
       'onTabCreated', 'onTabAttached', 'onWindowCreated',
+      'setPinned',
       'bkgd_loadSavedNode:autoWindow',
       'importFile', 'tutorial', 'reattachOrphanedNodes'
     ].includes(args.reason))
@@ -661,6 +844,7 @@ export class Node {
     // abort on no-op
     if (! args) return;
     if ((label === this.label) && (note === this.note)) return;
+    const wasPinnedBranch = this.isPinnedBranch();
     // Do The Thing
     this.label = label;
     this.note = note;
@@ -673,11 +857,46 @@ export class Node {
           label: this.label,
           note: this.note,
           when: this.mtime });
+
+    // needs extra care if "Pinned" status changed while loaded
+    const isPinnedBranch = this.isPinnedBranch();
+    if (wasPinnedBranch !== isPinnedBranch) {
+      await this.setPinnedBranchChildren(isPinnedBranch, args);
+    }
+    if ((wasPinnedBranch !== isPinnedBranch)
+      && this.hasLoadedTabs()
+      && this.tree.bkgd) {
+      await this.reorderAllTabsInThisWindow();
+    }
+
     return true;  // the data changed
   }
 
   hasCheckbox () {
     return (undefined !== this.checkbox);
+  }
+
+  checkboxText () {
+    // return a text representation of the checkbox type+completion
+    if (! this.hasCheckbox()) return '';
+    const cbType = this.getCheckboxType();
+    if ('percent' === cbType) {
+      if (! this.checkboxPx) this.checkboxPx = 0.0;
+      return String(Math.floor((this.checkboxPx * 100))) + '%';
+    }
+    else if ('ratio' === cbType) {
+      // count isn't saved to DB, so calculate and cache it
+      let total = this.checkboxKidCount;
+      if ((! total) && (this.hasKidsWithCheckboxes())) {
+        total = this.countNodes( (n) => n.hasCheckbox(), (n) => false );
+        this.checkboxKidCount = total;
+      }
+      if (! total) { this.checkboxPx = 0; return '/'; }
+      if (! this.checkboxPx) this.checkboxPx = 0;
+      const done = Math.floor(this.checkboxPx * total);
+      return `${done}/${total}`;
+    }
+    else return this.checkbox;
   }
 
   getCheckboxType () {
@@ -740,6 +959,7 @@ export class Node {
           total ++;
           complete += kid.getCompletion();
         }
+        this.checkboxKidCount = total;
         let completion = 0;
         if (total > 0) {
           completion = complete / total;
@@ -771,6 +991,7 @@ export class Node {
       case 'fail':
         return 1;  // always 1 even if checkboxPx is set
       case 'percent':
+      case 'ratio':
         return this.checkboxPx;
       default:
         if ((! changed)
@@ -782,8 +1003,123 @@ export class Node {
     }
   }
 
+  windowCreateData () {
+    // produce "createData" for api.windows.create(createData)
+    // https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/windows/create
+    const createData = {};
+    // TODO: add support for a "panel" window with only TKTSTO in it
+    //       (for Tabs Outliner users who want a separate window)
+    createData.type = 'normal';
+    // restore incognito status
+    if (undefined !== this.incognito) createData.incognito = this.incognito;
+    // save and restore 'state': fullscreen, maximized, minimized
+    if (undefined !== this.windowState) createData.state = this.windowState;
+    // set window size and position
+    if (this.geometry
+      && (4 === this.geometry.length)
+      // some window types make geometry a forbidden property
+      && (! ['minimized', 'maximized', 'fullscreen']
+          .includes(this.windowState))
+    ) {
+      createData.width = this.geometry[0];
+      createData.height = this.geometry[1];
+      createData.left = this.geometry[2];
+      createData.top = this.geometry[3];
+    }
+    return createData;
+  }
+
+  canBeConvertedFromWindow () {
+    if (! this.isWindow()) return false;
+    // unloaded windows are easy
+    if (! this.isLoaded()) return true;
+
+    // if loaded, we need another window to move tabs to
+    const parentWindow = this.parent.getWindowNode();
+    // no parent window to move tabs to
+    if (! parentWindow) return false;
+    // incognito mismatch, can't move tabs between profiles
+    if (this.isIncognito() !== parentWindow.isIncognito()) return false;
+    // if parent not loaded, return true because caller will load parent
+    //if (! parentWindow.isLoaded()) return false;
+
+    return true;
+  }
+
+  async convertFromWindow (changes, args) {
+    // no-op
+    if (! this.canBeConvertedFromWindow()) return false;
+    // below here, we know this is a window and is either unloaded
+    // or has a parent window with the same incognito status
+
+    debug(`convertFromWindow(): ${this.toLine()}`);
+
+    let changed = false;
+
+    const loadedTabs = this.getLoadedTabs();
+
+    // not loaded
+    if ((! this.isLoaded()) && (0 === loadedTabs.length)) {
+      debug('convertFromWindow(): not loaded');
+      changes.type = this.type = '';
+      changes.incognito = this.incognito = undefined;
+      changed = true;
+    }
+    // loaded
+    else {
+      // must let the bkgd handle it, requires stuff a view can't do
+      const result = await emit('bkgd_convertNodeFromLoadedWindow',
+        { nodeId: this.id });
+      if ('ok' === result.result) return true;
+      return false;
+    }
+
+    debug(`convertFromWindow(): ==> ${changed}`);
+    return changed;
+  }
+
+  async convertToWindow (changes, args) {
+    // if any loaded tabs in branch,
+    // open a new window and move tabs there
+    // or if unloaoded, just change node type
+    debug(`convertToWindow(): ${this.toLine()}`);
+
+    let changed = false;
+
+    const parentWindowNode = this.getWindowNode();
+    const loadedTabs = this.getLoadedTabs();
+
+    // not loaded
+    if ((! this.isLoaded()) && (0 === loadedTabs.length)) {
+      debug('convertToWindow(): not loaded');
+      changes.type = this.type = 'window';
+      if (parentWindowNode)
+        changes.incognito = this.incognito = parentWindowNode.incognito;
+      changed = true;
+    }
+    // loaded
+    else {
+      debug(`convertToWindow(): isLoaded`);
+      debug(`convertToWindow(): parentWindow = ${parentWindowNode.toLine()}`);
+      // if no parent window, abort
+      if (! parentWindowNode) {
+        debug("Error: no parent window");
+        if (this.tree.setStatus)
+          this.tree.setStatus("Error: no parent window");
+        return false;
+      }
+      // move all tabs to new window
+      const result = await emit('bkgd_convertNodeToLoadedWindow',
+        { nodeId: this.id });
+      if ('ok' === result.result) return true;
+      return false;
+    }
+    return false;
+  }
+
   async setTabFields (changes, args) {
     if (! args) return;
+    changes = { ...changes };
     if ((args.ensureUniqueBindings !== false)
       && this.tree
       && this.tree.ensureUniqueBrowserBindings) {
@@ -791,9 +1127,35 @@ export class Node {
     }
     // abort on no-op
     if (Object.keys(changes).length === 0) return;
-    if ((undefined !== changes.tabId) && (null !== changes.tabId)) {
-      changes = { ...changes, oldTabId: undefined };
+
+    let changed = false;
+
+    // special care is needed if converting between a window and a note
+    if ((undefined !== changes.type) && ('userAction' === args.reason)) {
+      debug('setTabFields(isWindow)');
+      // convert window to a note
+      if (('window' === this.type) && (! changes.type)) {
+        changed = await this.convertFromWindow(changes, args);
+      }
+      // convert note to a window
+      else if (('window' !== this.type) && changes.type) {
+        changed = await this.convertToWindow(changes, args);
+      }
+      // nothing changed
+      else {
+        debug('setTabFields(isWindow): no change');
+        delete changes.type;
+      }
     }
+
+    // bookmarks cannot be 'wasLoaded'
+    if (changes.bookmark) changes.wasLoaded = false;
+
+    // A current attachment supersedes the brief old-tab lookup alias.
+    if ((undefined !== changes.tabId) && (null !== changes.tabId)) {
+      changes.oldTabId = undefined;
+    }
+
     // Do The Thing
     for (const [key, value] of Object.entries(changes)) {
       // Map browser API's favIconUrl to our faviconUrl property
@@ -805,6 +1167,7 @@ export class Node {
     }
     if ((undefined !== changes.loaded) && (!('wasLoaded' in changes)))
       this.wasLoaded = changes.loaded;
+    changed = true;
     // bump timestamp
     this.bump('mtime', args);
     // notify others
@@ -812,13 +1175,16 @@ export class Node {
       'userAction',
       'onTabCreated', 'onTabUpdated', 'onTabReplaced',
       'onTabMoved', 'onTabAttached',
-      'onWindowCreated', 'onWindowFocusChanged'
+      'onWindowCreated', 'onWindowFocusChanged', 'onWindowBoundsChanged',
+      'convertNodeToWindow', 'convertNodeFromWindow',
+      'mergeOpenWindowsIntoTree'
     ].includes(args.reason))
       await emit('tree_nodeChanged',
         { nodeId: this.id, type: 'setTabFields',
           changes: changes,
           when: this.mtime });
-    return true;  // the data changed
+
+    return changed;
   }
 
   async load (args) {
@@ -840,7 +1206,9 @@ export class Node {
 
     // notify others, if event originated here
     if ((args.emit !== false)
-      && ['userAction', 'onTabCreated', 'mergeOpenWindowsIntoTree'
+      && [
+        'userAction', 'onTabCreated', 'mergeOpenWindowsIntoTree',
+        'restoreLoadedTab'
       ].includes(args.reason))
       await emit('tree_nodeChanged',
         { nodeId: this.id, type: 'load',
@@ -849,8 +1217,7 @@ export class Node {
     // AFTER everyone has marked the tab as loaded,
     // then it's finally safe to open the tab itself
     // if not already opened by browser, opened the tab
-    if ((this.tree && this.tree.bkgd) && ('userAction' === args.reason)) {
-      const bkgd = this.tree.bkgd;
+    if (['userAction', 'restoreLoadedTab'].includes(args.reason)) {
       // there's some jank involved, so it's much easier to
       // only let the bkgd script open the actual tab
       // (so it can keep some internal state for its onTabCreated handler
@@ -862,6 +1229,7 @@ export class Node {
           discarded: args.discarded,
           when: this.atime
         };
+        const bkgd = this.tree && this.tree.bkgd;
         if (bkgd && bkgd.bkgd_loadSavedNode) {
           await bkgd.bkgd_loadSavedNode(loadMsg);
         } else {
@@ -872,10 +1240,19 @@ export class Node {
       else {
         debug(`loading saved window: ${this.id}`);
         // get a list of 'wasLoaded' tabs
-        const tabList = this.findNodes(
+        let tabList = this.findNodes(
           (node) => { return (node.wasLoaded && node.isUnloadedTab()); },
           (node) => { return ! node.isWindow(); }  // skip nested windows
         );
+        // if window has no 'wasLoaded' tabs, just use the first tab
+        if (tabList.length < 1) {
+          tabList = this.findNodes(
+            (node) => { return (node.isUnloadedTab()); },
+            (node) => { return ! node.isWindow(); }  // skip nested windows
+          );
+          if (tabList.length > 1) tabList.length = 1;
+        }
+        // load everything in the list
         let first = true;
         for (const kid of tabList) {
           debug(`loading saved tab: ${kid.url}`);
@@ -899,7 +1276,9 @@ export class Node {
     if (! args) return;
     //if (! this.isLoaded() && (! this.wasLoaded)) return;
     if ((! this.url) && (! this.isWindow())) return;  // don't "unload" notes
-    const wasActuallyLoaded = this.loaded || this.tabId;
+    const wasActuallyLoaded = (this.loaded || this.tabId)
+      && ('badTabId' !== args.reason);
+    const isWindowClosing = ['onWindowUnloaded', 'onWindowRemoved'].includes(args.reason);
 
     // Do The Thing
     this.loaded = false;
@@ -912,18 +1291,22 @@ export class Node {
     // save briefly so onTabRemoved can find it in a few milliseconds
     this.oldTabId = tabId;
     // distinguish between manual unload and "bkgd woken up by onTabRemoved"
-    if (wasActuallyLoaded && (undefined !== tabId)
-      && ['userAction', 'onWindowUnloaded'].includes(args.reason)) {
+    if (wasActuallyLoaded && (undefined !== tabId) && (! isWindowClosing))
       this.tabClosedReason = 'unload';
-    }
 
-    // let user toggle wasLoaded state manually
-    if (undefined !== args.wasLoaded) this.wasLoaded = args.wasLoaded;
-    else if (['onWindowUnloaded', 'onWindowRemoved'].includes(args.reason))
-      this.wasLoaded = true;
+    // save loaded tabs on window close
+    // (and convert loaded -> wasLoaded during crash recovery)
+    if (isWindowClosing || ('mergeOpenWindowsIntoTree' === args.reason))
+      this.wasLoaded = (isWindowClosing || wasActuallyLoaded);
+    // propagate changes from other threads
+    else if (undefined !== args.wasLoaded) this.wasLoaded = args.wasLoaded;
+    // when unloading a tab manually, mark it as fully unloaded
     else if (wasActuallyLoaded) this.wasLoaded = false;
-    else if ('userAction' === args.reason)
+    // let user toggle wasLoaded state manually
+    else if (('userAction' === args.reason) && (! wasActuallyLoaded))
       this.wasLoaded = (! this.wasLoaded);
+    // bookmarks are always unloaded
+    if (this.isBookmark()) this.wasLoaded = false;
 
     // bump timestamp (?)
     // TODO: (but are 'load' and 'unload' really modifications?)
@@ -933,7 +1316,7 @@ export class Node {
     if ((args.emit !== false)
       && ['userAction',
         'onTabRemoved', 'onWindowRemoved', 'onWindowUnloaded',
-        'mergeOpenWindowsIntoTree'
+        'mergeOpenWindowsIntoTree', 'badTabId'
       ].includes(args.reason))
       await emit('tree_nodeChanged',
         { nodeId: this.id, type: 'unload',
@@ -956,6 +1339,12 @@ export class Node {
       for (const kid of tabList) {
         await kid.unload(args);
       }
+      // remove stale tabIds too
+      const stale = this.findNodes(
+        (n) => n.tabId,
+        (n) => (! n.isWindow())
+      );
+      for (const kid of stale) { kid.tabId = undefined; }
       return true;
     }
 
@@ -973,23 +1362,37 @@ export class Node {
           await api.tabs.remove(tabId);
           //debug(`Node.deleteSelf() removed tab: "${tabId}"`);
         } catch (err) {
-          warn(`Node.unloaded() tried to remove tab twice: "${tabId}"`);
+          warn(`Node.unloaded() failed: "${tabId}", ${err}`);
         }
       }
       else if (this.isWindow()) {  // a window has no tabId and it's fine
-        // close the window (it'll unload all the tabs for us)
-        if (windowId) await api.windows.remove(windowId);
-        // unload all tabs in the window
-        else {
-          // this should never happen, but if it does, at least it works
-          warn('Window node has no windowId');
-          const tabList = this.getLoadedTabs();
-          for (const kid of tabList) {
-            const tabArgs = { ...args };
-            tabArgs.reason = 'onWindowUnloaded';
-            await kid.unload(tabArgs);
+        debug(`unloading window ${windowId}: ${this.toLine()}`);
+        // unload tabs manually, because some browsers report false
+        // "isWindowClosing" state when a window is closing,
+        // and then we end up with incorrect "wasLoaded" states
+        const tabList = this.getLoadedTabs();
+        // move focused tab to the end, so we'll close it last
+        const activeTab = this.getActiveTab();
+        const index = tabList.indexOf(activeTab);
+        if (index > -1) { tabList.push(tabList.splice(index, 1)[0]); }
+        // close the tabs
+        for (const kid of tabList) {
+          const tabArgs = { ...args };
+          tabArgs.reason = 'onWindowUnloaded';
+          await kid.unload(tabArgs);
+        }
+        // close the window too
+        if (windowId) {
+          try { await api.windows.remove(windowId); }
+          catch (err) {
+            // not actually an error, window was already closed
+            // (and Firefox generates an error for that, while Chrome doesn't)
           }
         }
+        // just in case, make sure we're not still marked active
+        await this.setActive(false, {
+          reason: 'onWindowRemoved', 'onWindowRemoved': true,
+        });
       }
       else {
         warn(`Node.unload() called on Node with no tabId`, this);
@@ -1012,12 +1415,18 @@ export class Node {
   }
 
   prevVisibleNode (root) {
-    // TODO: check if we're visible.  If not, return nearest visible parent
     // root node has no previous row
     if (this.isRoot()) return this;
     if (root === this) return this;
     if (root && (! this.isChildOf(root, false))) return root;
 
+    // if not visible, find nearest visible parent
+    let node = this;
+    while ((! node.isRoot()) && (node !== root) && (! node.isVisible(root)))
+    { node = node.parent; }
+    if (node !== this) return node;
+
+    // otherwise, we were visible and need to go up one row
     const myIndex = this.indexOf();
 
     // if we're the first child, return parent
@@ -1040,17 +1449,17 @@ export class Node {
     return lastChild.lastVisibleDescendant();
   }
 
-  nextVisibleNode (root) {
+  nextVisibleNode (root, enableKids = true) {
     // TODO: check if we're visible.  If not, return nearest visible parent
     if (root && (! this.isChildOf(root, true))) return root;
 
     // if we have visible kids, return the first child
-    if (this.hasKids() && this.isExpanded()) return this.nodes[0];
+    if (enableKids && this.hasKids() && this.isExpanded()) return this.nodes[0];
 
     // otherwise, search without looking at kids
     const nextNode = this.nextVisibleNodeNoKids(root);
     // avoid wrapping from last node to root
-    if (nextNode.isRoot()) return this;
+    if (nextNode.isRoot() || (nextNode === root)) return this;
     // ensure still in root
     if (root && (! nextNode.isChildOf(root, true))) return this;
     // otherwise, assume this is correct
@@ -1070,16 +1479,17 @@ export class Node {
     }
 
     // we're the last child, so escalate to the parent
-    return this.parent.nextVisibleNodeNoKids();
+    // but don't wrap around from bottom to top
+    const candidate = this.parent.nextVisibleNodeNoKids(root);
+    if (candidate.isRoot()
+      || (candidate === root)
+      || (candidate === this.parent)) return this;
+    return candidate;
   }
 
   nextVisibleNodeNotMyChild (root) {
     // find next visible node... but exclude our own kids
-    const wasExpanded = this.expanded;
-    this.expanded = false;
-    const result = this.nextVisibleNode(root);
-    this.expanded = wasExpanded;
-    return result;
+    return this.nextVisibleNode(root, false);
   }
 
   insertChild (node, index) {
@@ -1089,13 +1499,26 @@ export class Node {
   }
 
   async moveTo (destParent, destIndex, args) {
-    if (! args) return error(`Node.moveTo(): no args`);
+    if (! args) { error(`Node.moveTo(): no args`); return false; }
     debug(`Node.moveTo(${args.reason})`, this, destParent, destIndex);
+    // report errors to UI
+    const self = this;
+    function setStatus (msg, retval = false) {
+      if (self.tree.setStatus) self.tree.setStatus(msg);
+      return retval;
+    }
     // abort on no-op
     if ((destParent === this.parent) && (destIndex === this.indexOf()))
-      return;
+      return setStatus('moveTo: already there');
+
     const prevParent = this.parent;
+    const wasPinnedBranch = this.isPinnedBranch();
     const prevWindow = this.getWindowNode(false);
+    const oldWindowNode = this.getWindowNode();
+    const oldParentWindowNode = this.parent
+      ? this.parent.getWindowNode()
+      : null;
+    const newWindowNode = destParent.getWindowNode();
     const movingToRoot = (
       destParent.isRoot()
       && prevParent
@@ -1104,27 +1527,26 @@ export class Node {
     const hasLoadedDescendants = (
       this.hasLoadedTabsDeep ? this.hasLoadedTabsDeep() : this.hasLoadedTabs()
     );
+    const thisHasLoadedTabs = this.isLoaded() || hasLoadedDescendants;
     const openTabs = (
       (! this.isWindow())
-      && (this.isLoaded() || hasLoadedDescendants)
+      && thisHasLoadedTabs
     );
-    const shouldOpenWindowOnRootMove = (
-      args.reason === 'userAction'
-      && (! this.tree.bkgd)
-      && movingToRoot
-      && (this.tree.openWindowOnRootMove || openTabs)
-    );
-    const destWindow = destParent.getWindowNode
-      ? destParent.getWindowNode(false)
-      : null;
+
+    // Loaded tabs cannot cross the regular/incognito boundary.
+    if (thisHasLoadedTabs && (! this.isWindow())
+      && oldWindowNode && newWindowNode
+      && (oldWindowNode.isIncognito() !== newWindowNode.isIncognito())) {
+      return setStatus('moveTo: incognito mismatch');
+    }
+
     // view-only: if moving the only child of a window into a
     // windowless parent, move the window container instead
     const allowWindowProxy = (args.allowWindowProxy !== false);
     if (allowWindowProxy && args.reason === 'userAction'
       && (! this.tree.bkgd)
       && (! this.isWindow())
-      && openTabs
-      && (! destWindow)) {
+      && (! newWindowNode)) {
       const windowNode = this.getWindowNode(false);
       if (windowNode && windowNode.nodes.length === 1
         && windowNode.nodes[0] === this) {
@@ -1136,7 +1558,7 @@ export class Node {
           ? windowNode.hasLoadedTabsDeep()
           : windowNode.hasLoadedTabs();
         const keepWindow = (
-          windowNode.shouldUnloadNotDelete()
+          windowNode.shouldUnloadNotDelete(false)
           || (windowNode.isLoaded() && windowHasId)
           || hasLoadedDesc
         );
@@ -1159,8 +1581,10 @@ export class Node {
     if ((this === destParent) || (this.isParentOf(destParent))) {
       debug('Node.moveTo() becoming own child, promoting kids first...', this.toLine());
       // stop if becoming our own first child
-      if ((this === destParent) && (0 === destIndex)) return;
-      if (! this.hasKids()) return;  // stop if becoming self
+      if ((this === destParent) && (0 === destIndex))
+        return setStatus("moveTo: can't become own 1st child");
+      // stop if becoming self
+      if (! this.hasKids()) return setStatus("moveTo: can't replace self");
       // becoming our own direct child
       if (this === destParent) {
         // figure out new destination after promoting kids
@@ -1170,7 +1594,7 @@ export class Node {
       }
       await this.promoteKids({ reason: 'moveTo' });
     }
-    // remove
+    // remove from old parent ...
     let newIndex = destIndex;
     if (prevParent) {
       const oldIndex = this.indexOf();
@@ -1190,9 +1614,13 @@ export class Node {
         prevParent.bump('mtime', args);
       }
     }
-    // ... and add
+    // ... and add to new parent
     destParent.insertChild(this, newIndex);
     const nextWindow = this.getWindowNode(false);
+    const isPinnedBranch = this.isPinnedBranch();
+    if (wasPinnedBranch !== isPinnedBranch) {
+      await this.setPinnedBranchChildren(isPinnedBranch, args);
+    }
 
     // bump new parent timestamp
     destParent.bump('mtime', args);
@@ -1208,21 +1636,17 @@ export class Node {
     if (this.hasCheckbox()) { this.updateCheckboxes(); }
 
     // TODO: recalculate stats
-    const movedToRoot = (
-      destParent.isRoot()
-      && prevParent
-      && (! prevParent.isRoot())
-    );
     const shouldEmit = (args.emit !== false);
     if (shouldEmit && [
       'userAction',
       'onTabMoved', 'onTabRemoved', 'onTabAttached',
       'moveTo',
+      'setPinned',
       'bkgd_loadSavedNode:autoWindow'
     ].includes(args.reason)) {
       if (args.reason === 'userAction'
         && (! this.tree.bkgd)
-        && movedToRoot
+        && movingToRoot
         && (this.tree.openWindowOnRootMove || openTabs)) {
         args.openWindowOnRootMove = true;
       }
@@ -1283,9 +1707,9 @@ export class Node {
             await emit('bkgd_loadSavedWindow', loadMsg);
           }
         }
-        // TODO: if loaded tab moved so it's not in a window,
-        //   create a new window to hold it
-        //   (maybe, maybe not... seems fine to not handle that case)
+        // TODO? if loaded tab moved so it's not in a window,
+        //   create a new window to hold it?
+        //   Nope, that case is blocked earlier in moveTo()
         //else if (! newWindow) {
         //}
 
@@ -1311,10 +1735,24 @@ export class Node {
       for (const kid of loadedKids) kid.updateOpenerTabId();
 
     }
+
+    // maybe convert window back to a heading, if dropped into another window
+    if (this.tree.cfg.convertFromWindowWhenDroppedIntoWindow
+      && ('userAction' === args.reason)
+      && thisHasLoadedTabs && this.isWindow()
+      && newWindowNode && (newWindowNode !== oldParentWindowNode)
+      && this.canBeConvertedFromWindow()
+    ) {
+      // convert window to a heading
+      const changed = await this.convertFromWindow({}, {});
+      if (! changed) return setStatus('convert from window failed');
+    }
+
     return true;  // the data changed
   }
 
   async setExpanded (expanded, args) {
+    //debug(`setExpanded: ${this.expanded} => ${expanded}`, args);
     if (! args) return;
     // abort on no-op
     if (expanded === this.expanded) return;
@@ -1329,12 +1767,61 @@ export class Node {
     if (changed) this.bump('atime', args);
 
     // TODO? recalculate stats
-    if (changed && ('userAction' === args.reason))
+    if (changed && ('userAction' === args.reason)) {
       await emit('tree_nodeChanged',
         { nodeId: this.id, type: 'setExpanded', expanded: this.expanded,
           when: this.atime });
 
+      if (isFirefox) await this.syncTabHideState();
+    }
+
     return true;
+  }
+
+  async syncTabHideState (forceShow = false) {
+    // forceShow: call tabs.show() on everything, period
+    // (is used after turning off hideCollapsedTabs in Options)
+
+    if (! isFirefox) return;  // only Firefox has tabs.hide()
+
+    if ((! forceShow) && (! this.tree.cfg.hideCollapsedTabs)) return;
+
+    // don't hide entire windows
+    // (it gets weird when a parent window collapses a child window,
+    //  and the child window's TreeView gets all greyed out)
+    if ((! forceShow) && this.isWindow() && (! this.isExpanded())) return;
+
+    // we only care about visibility within the current window
+    // (if entire window is in a collapsed branch, it should still
+    //  count as visible... even in Session mode)
+    let viewRoot;
+    if (this.isWindow()) viewRoot = this;
+    else viewRoot = this.tree.viewRoot || this.tree.root;
+    //debug(`viewRoot: ${viewRoot.toLine()}`);
+
+    const tabNodeList = this.getLoadedTabs();
+    const hideTabIds = [];
+    const showTabIds = [];
+    for (const node of tabNodeList) {
+      if (node.tabId) {
+        const shouldBeVisible =
+          node.isVisible(viewRoot) || node.isPinned() || node.isActive();
+        // show if hidden and needs to be visible
+        if (forceShow || (node.hidden && shouldBeVisible))
+          showTabIds.push(node.tabId);
+        // hide if visible but needs to be hidden
+        else if ((! node.hidden) && (! shouldBeVisible))
+          hideTabIds.push(node.tabId);
+      }
+    }
+    if (showTabIds.length > 0) {
+      debug(`show: ${showTabIds}`);
+      await api.tabs.show(showTabIds);
+    }
+    if (hideTabIds.length > 0) {
+      debug(`hide: ${hideTabIds}`);
+      await api.tabs.hide(hideTabIds);
+    }
   }
 
   async setMarked (marked, args) {
@@ -1344,7 +1831,8 @@ export class Node {
     // refuse to mark root node
     if (this.isRoot()) return;
     // refuse to mark window nodes
-    if (this.isWindow()) return;
+    //if (this.isWindow()) return;
+    //if (this.isWindow() && this.isLoaded()) return;
 
     if (marked) {
       // reject mark request if ancestor is already marked,
@@ -1381,7 +1869,9 @@ export class Node {
   async setActive (active, args) {
     if (! args) return;
     // abort on no-op
-    if (active === this.active) return;
+    if ((active === this.active) && (! args.onWindowRemoved)) return;
+    // do we need to sync the hidden state?
+    let syncHide = false;
     // Do The Thing
     this.active = active;
     // bump timestamp
@@ -1390,16 +1880,19 @@ export class Node {
     if (undefined !== args.loaded) this.loaded = args.loaded;
     // let others know
     if (['userAction', 'onTabActivated', 'onTabAttached',
+      'onWindowFocusChanged', 'onWindowRemoved',
       'reorderAllTabsInThisWindow'
     ].includes(args.reason)) {
       // in case the 'loaded' state somehow got desynced or corrupted,
       // this event means we know it *must* be in a loaded state
-      this.loaded = true;
+      if (active) this.loaded = true;
       // let others know
       await emit('tree_nodeChanged',
-        { nodeId: this.id, type: 'setActive', active: this.active,
+        { ...args, nodeId: this.id, type: 'setActive', active: this.active,
           loaded: this.loaded,
           when: this.atime });
+
+      syncHide = true;
     }
 
     // if we're the originator and the tab isn't focused, focus it
@@ -1422,12 +1915,19 @@ export class Node {
       }
     }
 
+    if (isFirefox && syncHide) {
+      const windowNode = this.getWindowNode(true);
+      if (windowNode) await windowNode.syncTabHideState();
+    }
+
     return true;
   }
 
   getActiveTab () {
-    const nodes = this.findNodes(function (node)
-      { return node.isActive() && node.isLoaded(); });
+    const nodes = this.findNodes(
+      function (node) { return node.isActive() && node.isLoaded(); },
+      function (node) { return ! node.isWindow(); }
+    );
     const tabNode = nodes[0];
     if (! tabNode) {
       // this happens when opening a new window,
@@ -1447,7 +1947,14 @@ export class Node {
     if (! this.isWindow()) return;
 
     // handle the changes after no events have occurred for this long
-    const delayTime = 100;  // ms
+    // (handle 1st event quickly, then debounce repeated events
+    //  until they stop)
+    const delayTime = 250;  // ms
+    let actualDelay = delayTime;
+    const now = Date.now();
+    const sinceLast = now - this.lastSetActiveTabTime;
+    this.lastSetActiveTabTime = now;
+    if ((NaN === sinceLast) || (sinceLast > delayTime)) actualDelay = 10;
     // reset our timer on each new event
     // so it only fires after events stop coming in
     if (this.setActiveTabTimer) {
@@ -1459,7 +1966,7 @@ export class Node {
 
       try {
         // auto-detect which tab is active
-        const [tab] = await chrome.tabs.query(
+        const [tab] = await api.tabs.query(
           { active: true, windowId: this.windowId });
         if (! tab) return;
 
@@ -1474,6 +1981,8 @@ export class Node {
           // bugfix: Vivaldi panels are briefly "active" when current tab closes
           // and they generate spurious "setActiveTab" events
           // so ignore errors on those
+          // also, this may be trying to set the active tab on a window
+          // after the window was closed, which isn't a problem
           if (! this.tree.tabBlacklist[`${tab.id}`])
             warn(`Node.setActiveTab(): can't find tab "${tab.id}"`);
         }
@@ -1497,12 +2006,34 @@ export class Node {
       finally {
         // get ready for next time
         this.setActiveTabTimer = null;
+        this.lastSetActiveTabTime = Date.now();
         return changed;
       }
-    }, delayTime);
+    }, actualDelay);
 
     const result = await this.setActiveTabTimer;
     return result;
+  }
+
+  async setPinned (pinned, args) {
+    if (! args) return false;
+    pinned = Boolean(pinned);
+    if (pinned === Boolean(this.pinned)) return false;
+    await this.setTabFields(
+      { pinned },
+      { ...args, ensureUniqueBindings: false }
+    );
+    return true;
+  }
+
+  async setPinnedBranchChildren (pinned, args) {
+    const tabNodes = this.getLoadedAndUnloadedTabs();
+    for (const tabNode of tabNodes) {
+      await tabNode.setPinned(pinned, {
+        ...args,
+        reason: 'setPinned'
+      });
+    }
   }
 
   async reorderAllTabsInThisWindow (opts = {}) {
@@ -1520,10 +2051,7 @@ export class Node {
     if (! windowNode) return;
     if (! windowNode.windowId) return;
 
-    // bugfix: prevent a "tab storm", infinite loop of tab reordering
-    // (could trigger the bug in Vivaldi by grabbing a tab in the tab bar
-    //  and "spazzing out" with the mouse to overload the browser with
-    //  tab move events... since it generates events *during* dragging)
+    // only the bkgd can handle this
     if (! this.tree.bkgd) {
       // tell the bkgd to reorder the tabs
       await emit('bkgd_reorderAllTabsInThisWindow',
@@ -1531,91 +2059,181 @@ export class Node {
       return;
     }
 
+    // ensure window actually still exists
+    let winObj;
+    try { winObj = await api.windows.get(windowNode.windowId); }
+    catch (e) {
+      return log(`can't reorder tabs, window already closed: ${windowNode.windowId}`);
+    }
+
+    // drop reorder requests when one is already pending
+    const bkgd = this.tree.bkgd;
+    if (bkgd.tabReorderInProgress) {
+      if (! force) return;
+      const waitUntil = Date.now() + 1000;
+      while (bkgd.tabReorderInProgress && (Date.now() < waitUntil)) {
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      if (bkgd.tabReorderInProgress) return;
+    }
+
     // actually handle the request
     try {
+      bkgd.tabReorderInProgress = true;
       this.tabReorderInProgress = true;
+
       // wait a moment; Firefox wants this sometimes
       // (like, when dragging a tab to the void,
       //  it needs to create a window before the tabs can be reordered)
       await new Promise(resolve => setTimeout(resolve, 50));
-
-      // verify which tab is active, and deactivate all others
-      //const [activeTab] = await api.tabs.query(
-      //  { active: true, windowId: windowNode.windowId });
-      //if (activeTab) windowNode.setActiveTab(
-      //  { reason: 'reorderAllTabsInThisWindow' });
 
       // try to move the tabs... maybe try a few times
       // (keep trying until the browser stops blocking reorder requests)
       let success = false;
       let tries = 0;
       const msPerTry = 500;
-      const maxTrySeconds = 30;
+      const maxTrySeconds = 30;  // how long will a user do a single drag?
       while ((! success) && (tries < (maxTrySeconds * 1000 / msPerTry))) {
-        try {
-          // get a list of all loaded tab nodes in this window node, in order
-          const tabNodeList = windowNode.getLoadedTabs();
+        tries ++;
+        // get a list of all loaded tab nodes in this window node, in order
+        const tabNodeList = windowNode.getLoadedTabs();
 
-          // Keep pinned tabs fixed at the front of the browser window.
-          // Browser tab indexes include the pinned prefix, but the tree only
-          // models the movable strip, so reorders must start at the first
-          // unpinned index instead of absolute zero.
-          let browserTabs = [];
+        // Reconcile native pin state with an optional "Pinned" branch, then
+        // order the pinned and movable browser strips independently.
+        let browserTabs = await api.tabs.query({
+          windowId: windowNode.windowId
+        });
+        const browserTabMap = new Map(
+          browserTabs.map((tab) => [tab.id, tab])
+        );
+        const pinnedBranch = this.tree.getPinnedBranch(windowNode);
+        const desiredPinnedById = new Map();
+        const pinUpdateIds = [];
+        for (const node of tabNodeList) {
+          if (! node.tabId) continue;
+          const desiredPinned = pinnedBranch
+            ? node.isChildOf(pinnedBranch)
+            : Boolean(node.pinned);
+          desiredPinnedById.set(node.tabId, desiredPinned);
+          if (node.pinned !== desiredPinned) {
+            await node.setPinned(desiredPinned, { reason: 'setPinned' });
+          }
+          const browserTab = browserTabMap.get(node.tabId);
+          if (browserTab
+            && (Boolean(browserTab.pinned) !== desiredPinned)) {
+            pinUpdateIds.push(node.tabId);
+          }
+        }
+
+        if (pinUpdateIds.length > 0) {
+          this.tree.suppressTabMovedEvents(
+            windowNode.windowId,
+            pinUpdateIds
+          );
           try {
-            browserTabs = await api.tabs.query({ windowId: windowNode.windowId });
-          } catch (err) {
-            warn(`Node.reorderAllTabsInThisWindow(): tab query failed: ${err}`);
-          }
-          const browserTabMap = new Map();
-          let firstMovableIndex = 0;
-          let sawUnpinnedTab = false;
-          for (const tab of browserTabs) {
-            browserTabMap.set(tab.id, tab);
-            if (! sawUnpinnedTab) {
-              if (tab && (! tab.pinned)) {
-                sawUnpinnedTab = true;
-              } else {
-                firstMovableIndex += 1;
-              }
+            for (const tabId of pinUpdateIds) {
+              await api.tabs.update(tabId, {
+                pinned: desiredPinnedById.get(tabId)
+              });
             }
+          } catch (err) {
+            this.tree.clearSuppressedTabMovedEvents(
+              windowNode.windowId,
+              pinUpdateIds
+            );
+            if (err.message.includes('Tabs cannot be edited right now')) {
+              bkgd.tabReorderStalled = true;
+              await new Promise(resolve => setTimeout(resolve, msPerTry));
+              bkgd.tabReorderStalled = false;
+              continue;
+            }
+            throw err;
           }
+          browserTabs = await api.tabs.query({
+            windowId: windowNode.windowId
+          });
+        }
 
-          // tell browser to move all movable tabs in this window to tree order
-          const tabIds = [];
-          for (const node of tabNodeList) {
-            if (! node.tabId) continue;
-            const browserTab = browserTabMap.get(node.tabId);
-            if (browserTab && browserTab.pinned) continue;
+        const firstUnpinnedTab = browserTabs.find((tab) => ! tab.pinned);
+        const firstMovableIndex = firstUnpinnedTab
+          ? firstUnpinnedTab.index
+          : browserTabs.filter((tab) => tab.pinned).length;
+        const pinnedTabIds = [];
+        const tabIds = [];
+        for (const node of tabNodeList) {
+          if (! node.tabId) continue;
+          if (desiredPinnedById.get(node.tabId)) {
+            pinnedTabIds.push(node.tabId);
+          } else {
             tabIds.push(node.tabId);
           }
+        }
 
-          debug(`Node.reorderAllTabsInThisWindow():`, tabIds);
+        debug(`Node.reorderAllTabsInThisWindow():`,
+          pinnedTabIds, firstMovableIndex, tabIds);
 
-          // attempt to reorder the tabs
-          if (tabIds.length > 0) {
-            this.tree.suppressTabMovedEvents(windowNode.windowId, tabIds);
-            try {
-              await api.tabs.move(tabIds,
-                { index: firstMovableIndex, windowId: windowNode.windowId });
-            } catch (err) {
-              this.tree.clearSuppressedTabMovedEvents(
-                windowNode.windowId,
-                tabIds
-              );
-              throw err;
-            }
+        const reorderedTabIds = [...pinnedTabIds, ...tabIds];
+        if (reorderedTabIds.length <= 0) {
+          success = true;
+          continue;
+        }
+
+        this.tree.suppressTabMovedEvents(
+          windowNode.windowId,
+          reorderedTabIds
+        );
+        try {
+          if (pinnedTabIds.length > 0) {
+            await api.tabs.move(pinnedTabIds, {
+              index: 0,
+              windowId: windowNode.windowId
+            });
           }
+          if (tabIds.length > 0) {
+            await api.tabs.move(tabIds, {
+              index: firstMovableIndex,
+              windowId: windowNode.windowId
+            });
+          }
+          if (isFirefox) await windowNode.syncTabHideState();
           debug('tab reorder success');
           success = true;
-          tries ++;
         } catch (err) {
-          // handle Brave's "Error: Tabs cannot be edited right now (user may be dragging a tab)."
+          this.tree.clearSuppressedTabMovedEvents(
+            windowNode.windowId,
+            reorderedTabIds
+          );
           if (err.message.includes('Tabs cannot be edited right now')) {
             // wait before trying again
-            debug(`Tab reorder blocked, trying again in ${msPerTry}ms...`, err);
+            debug(`Tab reorder blocked, trying again in ${msPerTry}ms...`);
+            bkgd.tabReorderStalled = true;
             await new Promise(resolve => setTimeout(resolve, msPerTry));
-          } else { throw err; }
+            bkgd.tabReorderStalled = false;
+            continue;
+          }
+          if (err.message.includes('No window with id')) {
+            // Chrome can create and delete a window before it can be queried.
+            debug(err);
+            return;
+          }
+          if (err.message.includes('Invalid tab ID:')
+            || err.message.includes('No tab with id:')) {
+            warn('Invalid tab ID', err);
+            const badId = Number(err.message.split(' ').pop());
+            const badNode = badId && this.tree.getNodeByTabId(badId);
+            if (badNode) {
+              await badNode.unload({ reason: 'badTabId' });
+              continue;
+            }
+          }
+          throw err;
         }
+      }
+      if (bkgd.onTabAttachedRequested) {
+        // ensure only one tab is 'active'
+        debug(`reset active tab afterward`);
+        await windowNode.setActiveTab({ reason: 'reorderAllTabsInThisWindow' });
+        bkgd.onTabAttachedRequested = false;
       }
     }
     // all other errors should still be allowed
@@ -1624,6 +2242,7 @@ export class Node {
     }
     finally {
       this.tabReorderInProgress = false;
+      queueMicrotask(() => bkgd.tabReorderInProgress = false);
     }
     return;
   }

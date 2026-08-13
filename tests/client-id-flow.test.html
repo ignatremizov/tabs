@@ -28,7 +28,8 @@
       runtime: {
         onConnect: { addListener: () => {} },
         onMessage: { addListener: () => {} },
-        sendMessage: async () => ({})
+        sendMessage: async () => ({}),
+        getBrowserInfo: async () => ({ name: 'Firefox', version: '128' })
       },
       storage: {
         local: {
@@ -52,7 +53,8 @@
           set: async (items) => {
             Object.assign(storageStore, items);
           }
-        }
+        },
+        onChanged: { addListener: () => {} }
       }
     };
   </script>

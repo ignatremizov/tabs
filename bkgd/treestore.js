@@ -24,7 +24,7 @@ export class TreeStore extends Tree {
   }
 
   async init () {
-    super.init();
+    await super.init();
     // load the nodes from storage
     await this.loadTreeFromDB();
   }
@@ -157,7 +157,7 @@ export class TreeStore extends Tree {
           await this.rememberWindowNode(windowNode, tab.windowId);
         }
 
-        const preserveSavedPinned = savedTabNode.pinned && (! tab.pinned);
+        const preserveSavedPinned = savedTabNode.isPinned() && (! tab.pinned);
         if (preserveSavedPinned) {
           savedTabNode.pinRestorePending = true;
           savedTabNode.pinRestorePendingAt = Date.now();
@@ -174,7 +174,7 @@ export class TreeStore extends Tree {
           frozen: tab.frozen,
           hidden: tab.hidden,
           incognito: tab.incognito,
-          pinned: Boolean(tab.pinned || savedTabNode.pinned)
+          pinned: Boolean(tab.pinned || savedTabNode.isPinned())
         }, { reason: 'onTabCreated' });
 
         if (windowNode && savedWindowNode
@@ -251,6 +251,20 @@ export class TreeStore extends Tree {
     if (numLoaded !== numIds) {
       await this.reattachOrphanedNodes(nodeIds);
     }
+
+    // look for empty boring windows and delete them
+    // (because Firefox, for some reason, keeps accumulating these)
+    const boringEmptyWinNodes = this.root.findNodes(
+      (n) => (n.isWindow()
+        && (! n.hasKids())
+        && (! n.shouldUnloadNotDelete())),
+      (n) => true,
+    );
+    for (const toDelete of boringEmptyWinNodes) {
+      debug(`delete boringEmptyWinNodes: ${toDelete.toLine()}`, toDelete);
+      await toDelete.deleteSelf({ reason: 'emptyWindowClosed' });
+    }
+    // TODO: if lost+found exists with nothing inside, delete it too?
   }
 
   async reattachOrphanedNodes (nodeIds) {
@@ -267,7 +281,9 @@ export class TreeStore extends Tree {
     }
     if (! lostFound) {
       log(`fsck: making new ${newParentName} node`);
-      lostFound = await this.root.addChild(this.root.nodes.length,
+      lostFound = await this.root.addChild(
+        //this.root.nodes.length,  // attach as last child
+        0,  // attach as first child
         { label: newParentName, note: 'orphaned nodes found during fsck' },
         { reason: 'reattachOrphanedNodes' });
     }
@@ -289,15 +305,17 @@ export class TreeStore extends Tree {
     // (entire branches may have been detached, and attaching the top-most
     //  node of each detached branch should recover the whole thing)
     for (const nodeId of Object.keys(nodeIds)) {
-      const parentId = nodeIds[nodeId].parent;
+      if ('root' === nodeId) continue; // root can't be orphaned
+
       const n = nodeIds[nodeId];
+      const parentId = n.parent;
       const p = nodeIds[parentId];
       // attach to lost+found if:
       // - parent ID not in the database
       // - node is its own parent
       // - parent doesn't recognize child
       if ((undefined === p)  // parent ID not in database
-        || ((parentId === nodeId) && ('root' !== nodeId))  // is own parent
+        || (parentId === nodeId)  // is own parent
         || (! p.nodes.includes(nodeId))  // parent doesn't expect this child
       ) {
         log('fsck: attaching orphan to lost+found:', nodeIds[nodeId]);

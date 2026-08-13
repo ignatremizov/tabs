@@ -1,0 +1,119 @@
+.options input {
+  width: unset;
+  max-width: unset;
+  color: var(--tab-loaded-fg);
+  font-size: calc(var(--global-font-size) * 0.9);
+  padding: 0.1em 0.2em;
+  margin-top: var(--dialog-padding);
+}
+
+.short-input {
+  min-width: unset;
+}
+
+.options button {
+  flex: unset;
+  margin: unset;
+}
+
+.shortcut-grid {
+  display: grid;
+  grid-template-columns:
+    minmax(14em, 2fr)
+    minmax(10em, 1fr)
+    minmax(10em, 1fr);
+  gap: 0.25em 0.8em;
+  align-items: center;
+}
+
+.shortcut-grid-header {
+  color: var(--tab-unloaded-fg);
+  font-size: 0.8em;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  margin: 0.25em 0 0.1em;
+}
+
+.shortcut-group {
+  margin: 0.35em 0;
+  padding: 0.25em 0.5em;
+  border: var(--details-box-border);
+  border-radius: var(--button-border-radius);
+  background: var(--details-box-bg);
+}
+
+.shortcut-group-title,
+.shortcut-label {
+  font-weight: bold;
+}
+
+.shortcut-group-title {
+  color: var(--tab-loaded-fg);
+  margin-bottom: 0.25em;
+}
+
+.shortcut-input {
+  min-width: unset;
+  width: 12em;
+  margin: 0;
+}
+
+.shortcut-default {
+  color: var(--tab-unloaded-fg);
+  font-size: 0.9em;
+}
+
+.shortcut-actions {
+  margin-top: 0.4em;
+}
+
+.shortcut-grid > div {
+  margin: 0;
+}
+
+.file-input {
+  display: flex;
+  flex-flow: row wrap;
+  gap: 0.5em;
+}
+
+#backfillFaviconsStatus {
+  margin-left: 0.5em;
+}
+
+.bottom-area-demo {
+  display: inline-block;
+  width: min-content;
+  padding: 0.25rem;
+  color: var(--toolbar-fg);
+  background: var(--bottom-area-bg);
+}
+
+.details-box-demo {
+  display: inline-block;
+  width: max-content;
+  padding: 0 0.25rem;
+  color: var(--details-box-fg);
+  background: var(--details-box-bg);
+  border: var(--details-box-border);
+  border-radius: 8px;
+  box-shadow: var(--details-box-shadow);
+}
+
+.details-box-demo b {
+  color: var(--details-label-fg);
+}
+
+@media (max-width: 700px) {
+  .shortcut-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .shortcut-grid-header {
+    display: none;
+  }
+
+  .shortcut-default {
+    margin-bottom: 0.5em;
+  }
+}

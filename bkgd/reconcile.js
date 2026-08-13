@@ -54,6 +54,9 @@ function buildWindowChanges(winNode, window) {
   if (winNode.type !== 'window') changes.type = 'window';
   if (winNode.windowId !== window.id) changes.windowId = window.id;
   if (! winNode.isLoaded()) changes.loaded = true;
+  if (undefined !== window.focused && winNode.active !== window.focused) {
+    changes.active = window.focused;
+  }
   const geom = [window.width, window.height, window.left, window.top];
   const hasGeometry = geom.every((value) => Number.isFinite(value));
   if (hasGeometry) {
@@ -85,6 +88,9 @@ function buildTabChanges(node, tabInfo) {
   }
   if (! node.isLoaded()) changes.loaded = true;
   if (undefined !== tab.active && node.active !== tab.active) changes.active = tab.active;
+  if (undefined !== tab.pinned && node.pinned !== Boolean(tab.pinned)) {
+    changes.pinned = Boolean(tab.pinned);
+  }
   if (undefined !== tab.discarded && node.discarded !== tab.discarded) {
     changes.discarded = tab.discarded;
   }
@@ -221,19 +227,52 @@ export async function runReconcile ({ reason } = {}) {
         const existing = tabNodesById.get(tab.id);
         if (existing && existing.length > 0) {
           const primary = choosePrimaryTabNode(existing, tabInfo);
+          const wasPinned = Boolean(primary.pinned);
           const changed = await ensureTabNodeAttached(primary, winNode, tabInfo, reason);
           if (changed || primary !== existing[0]) didWork = true;
+          if (wasPinned !== Boolean(tab.pinned)) {
+            const dest = await bkgd.tree.getBrowserEventTabDestination(
+              primary,
+              winNode,
+              tab.index,
+              Boolean(tab.pinned)
+            );
+            await bkgd.tree.moveTabNodeForBrowserEvent(
+              primary,
+              dest.destParent,
+              dest.destIndex,
+              reason,
+              {
+                moveNodeOnly: true,
+                windowNode: winNode,
+                browserIndex: tab.index,
+                pinned: Boolean(tab.pinned)
+              }
+            );
+          }
           continue;
         }
 
         let destParent = winNode;
-        if (tab.openerTabId && tab.openerTabId !== tab.id) {
+        let destIndex = destParent.nodes.length;
+        if (tab.pinned) {
+          const pinnedIndex = Number.isInteger(tab.index)
+            ? tab.index
+            : bkgd.tree.getPinnedLoadedTabs(winNode).length;
+          const dest = bkgd.tree.getPinnedInsertDestination(
+            winNode,
+            pinnedIndex
+          );
+          destParent = dest.destParent;
+          destIndex = dest.destIndex;
+        } else if (tab.openerTabId && tab.openerTabId !== tab.id) {
           const openerNodes = tabNodesById.get(tab.openerTabId);
           if (openerNodes && openerNodes.length > 0) {
             destParent = openerNodes[0];
+            destIndex = destParent.nodes.length;
           }
         }
-        const newNode = await destParent.addChild(destParent.nodes.length, {
+        const newNode = await destParent.addChild(destIndex, {
           windowId: window.id,
           tabId: tab.id,
           title: tab.title,
@@ -241,6 +280,7 @@ export async function runReconcile ({ reason } = {}) {
           faviconUrl: tab.favIconUrl,
           loaded: true,
           active: tab.active,
+          pinned: Boolean(tab.pinned),
           discarded: tab.discarded,
           frozen: tab.frozen,
           hidden: tab.hidden,

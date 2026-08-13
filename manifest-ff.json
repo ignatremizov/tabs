@@ -3,6 +3,9 @@
   "name": "Ignat's copy of TK's Tree Style Tab Outliner",
   "description": "Outliner, tree-style tabs, bookmarks, and notes all in one",
   "version": "0.0.2.55",
+  "author": "Selene ToyKeeper & Ignat Remizov",
+  "homepage_url": "https://github.com/ignatremizov/tabs",
+  "default_locale": "en",
   "browser_specific_settings": {
     "gecko": {
       "id": "tktsto-ignat@ignatremizov.com",
@@ -25,11 +28,10 @@
     "downloads",
     "tabs",
     "sessions",
+    "tabHide",
     "alarms"
   ],
   "optional_permissions": [
-    "clipboardRead",
-    "clipboardWrite"
   ],
   "optional_host_permissions": [
     "http://localhost/*",
@@ -64,7 +66,7 @@
   "commands": {
     "_execute_sidebar_action": {
       "description": "Toggle Side Panel",
-      "suggested_key": { "default": "Ctrl+1" }
+      "suggested_key": { "default": "F1" }
     },
     "backupSession": {
       "description": "Back up session now"
@@ -73,15 +75,20 @@
       "description": "Unload current tab",
       "suggested_key": { "default": "Alt+U" }
     },
+    "bookmarkCurrentTab": {
+      "description": "Bookmark current tab",
+      "suggested_key": { "default": "Alt+K" }
+    },
     "addNoteToCurrentTab": {
-      "description": "Add highlighted text to current tab's notes",
-      "suggested_key": { "default": "Alt+A" }
+      "description": "Add highlighted text to current tab's notes"
     },
     "cursorUp": {
-      "description": "Move cursor up"
+      "description": "Move cursor up",
+      "suggested_key": { "default": "Alt+Up" }
     },
     "cursorDown": {
-      "description": "Move cursor down"
+      "description": "Move cursor down",
+      "suggested_key": { "default": "Alt+Down" }
     },
     "cursorLeft": {
       "description": "Move cursor left (to parent)"
@@ -90,55 +97,77 @@
       "description": "Move cursor right (to 1st child)"
     },
     "cursorPgUp": {
-      "description": "Move cursor up 1 page"
+      "description": "Move cursor up 1 page",
+      "suggested_key": { "default": "Alt+PageUp" }
     },
     "cursorPgDown": {
-      "description": "Move cursor down 1 page"
+      "description": "Move cursor down 1 page",
+      "suggested_key": { "default": "Alt+PageDown" }
     },
     "cursorHome": {
       "description": "Move cursor home (up to first sibling)"
     },
     "cursorEnd": {
-      "description": "Move cursor end (down to last sibling)"
+      "description": "Move cursor end (down to last sibling)",
+      "suggested_key": { "default": "Alt+End" }
     },
     "loadNode": {
-      "description": "Load or switch to highlighted node"
+      "description": "Load or switch to highlighted node",
+      "suggested_key": { "default": "Alt+L" }
     },
     "unloadNode": {
-      "description": "Unload highlighted node"
+      "description": "Unload highlighted node",
+      "suggested_key": { "default": "Shift+Alt+U" }
     },
     "toggleExpanded": {
-      "description": "Expand/Collapse highlighted node"
+      "description": "Expand/Collapse highlighted node",
+      "suggested_key": { "default": "Alt+Space" }
     },
     "toggleMarked": {
-      "description": "Mark or unmark the current node"
+      "description": "Mark or unmark the current node",
+      "suggested_key": { "default": "Alt+M" }
     },
     "unmarkAll": {
-      "description": "Unmark all nodes"
+      "description": "Unmark all nodes",
+      "suggested_key": { "default": "Shift+Alt+M" }
     },
     "pasteMarked": {
-      "description": "Move marked nodes to after cursor"
+      "description": "Move marked nodes to after cursor",
+      "suggested_key": { "default": "Alt+P" }
     },
     "pasteMarkedBefore": {
-      "description": "Move marked nodes to before cursor"
+      "description": "Move marked nodes to before cursor",
+      "suggested_key": { "default": "Shift+Alt+P" }
     },
     "moveNodeUp": {
-      "description": "Move highlighted node up"
+      "description": "Move highlighted node up",
+      "suggested_key": { "default": "Shift+Alt+Up" }
     },
     "moveNodeDown": {
-      "description": "Move highlighted node down"
+      "description": "Move highlighted node down",
+      "suggested_key": { "default": "Shift+Alt+Down" }
     },
     "moveNodeLeft": {
-      "description": "Move highlighted node left (toward parent)"
+      "description": "Move highlighted node left (toward parent)",
+      "suggested_key": { "default": "Shift+Alt+Left" }
     },
     "moveNodeRight": {
-      "description": "Move highlighted node right (child of prev sibling)"
+      "description": "Move highlighted node right (child of prev sibling)",
+      "suggested_key": { "default": "Shift+Alt+Right" }
     },
     "moveNodeHome": {
-      "description": "Move highlighted node home (up to first sibling)"
+      "description": "Move highlighted node home (up to first sibling)",
+      "suggested_key": { "default": "Shift+Alt+Home" }
     },
     "moveNodeEnd": {
-      "description": "Move highlighted node end (down to last sibling)"
+      "description": "Move highlighted node end (down to last sibling)",
+      "suggested_key": { "default": "Shift+Alt+End" }
+    },
+    "prevTab": {
+      "description": "Focus the previous tab"
+    },
+    "nextTab": {
+      "description": "Focus the next tab"
     }
   }
 }

@@ -10,6 +10,7 @@ export const defaultKeyBindings = {
   // add / remove nodes
   'Enter': 'loadOrEditNode',
   'd': 'deleteNode',
+  'l': 'loadNode',
   'u': 'unloadNode',
   'Shift+U': 'forceToggleLoad',
   'o': 'addNodeAsNextVisibleRow',
@@ -17,19 +18,19 @@ export const defaultKeyBindings = {
   'w': 'wrapNodeInWindow',
   // edit nodes
   'Space': 'toggleExpanded',
-  'e': 'editNotes',
+  'e': 'editNode',
   // task status
   //'x': 'toggleTaskDone',
   //'t': 'taskLeaderKey',
   't': 'taskEdit',
   // search
-  //'/': 'beginSearch',
-  //'Shift+*': 'searchForCurrent',  // match current label, url, or title
+  '/': 'beginSearch',
+  'Shift+*': 'searchForCurrent',  // match current label, url, or title
   //'Ctrl+f': 'beginSearch',
   //'Ctrl+g': 'nextSearchResult',
-  //'n': 'nextSearchResult',
-  //'Shift+N': 'prevSearchResult',
-  //'Escape': 'endSearch',
+  'n': 'nextSearchResult',
+  'Shift+N': 'prevSearchResult',
+  'Escape': 'endSearch',
   // cursor movement
   'ArrowUp': 'cursorUp',
   'ArrowDown': 'cursorDown',
@@ -64,6 +65,7 @@ export const defaultKeyBindings = {
   // buttons
   'b': 'backupSession',
   // misc
+  'i': 'detailsButton',
   'Shift+?': 'generateTutorial',
   'Tab': 'none',
   'none': 'none'
@@ -72,14 +74,20 @@ export const defaultKeyBindings = {
 export const keyBindingActions = [
   { action: 'loadOrEditNode', label: 'Open/load node (or edit label)' },
   { action: 'deleteNode', label: 'Delete node' },
+  { action: 'loadNode', label: 'Load node or branch' },
   { action: 'unloadNode', label: 'Unload node' },
   { action: 'forceToggleLoad', label: 'Force load/unload' },
   { action: 'addNodeAsNextVisibleRow', label: 'Add node below' },
   { action: 'addNodeAsPrevVisibleRow', label: 'Add node above' },
   { action: 'wrapNodeInWindow', label: 'Wrap in window / convert label' },
   { action: 'toggleExpanded', label: 'Expand/collapse branch' },
-  { action: 'editNotes', label: 'Edit notes' },
+  { action: 'editNode', label: 'Edit node' },
   { action: 'taskEdit', label: 'Edit task/checkbox' },
+  { action: 'beginSearch', label: 'Begin search' },
+  { action: 'searchForCurrent', label: 'Search for current node' },
+  { action: 'nextSearchResult', label: 'Next search result' },
+  { action: 'prevSearchResult', label: 'Previous search result' },
+  { action: 'endSearch', label: 'End search' },
   { action: 'cursorUp', label: 'Cursor up' },
   { action: 'cursorDown', label: 'Cursor down' },
   { action: 'cursorLeft', label: 'Cursor left (parent)' },
@@ -103,5 +111,6 @@ export const keyBindingActions = [
   { action: 'pasteMarked', label: 'Paste marked' },
   { action: 'pasteMarkedBefore', label: 'Paste marked before' },
   { action: 'backupSession', label: 'Backup session' },
+  { action: 'detailsButton', label: 'Toggle details' },
   { action: 'generateTutorial', label: 'Generate tutorial' }
 ];

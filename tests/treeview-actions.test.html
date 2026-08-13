@@ -61,6 +61,8 @@
   </div>
 
   <script>
+    window.__TKTSTO_TEST__ = true;
+
     const params = new URLSearchParams(location.search);
     let env = params.get('env');
     if (! env) {
@@ -72,6 +74,9 @@
     function ensureApi(api) {
       if (!api.runtime) api.runtime = {};
       if (!api.runtime.sendMessage) api.runtime.sendMessage = async () => ({});
+      if (!api.runtime.getURL) {
+        api.runtime.getURL = (path = '') => `moz-extension://test/${path}`;
+      }
       if (!api.runtime.onMessage) api.runtime.onMessage = {};
       if (!api.runtime.onMessage.addListener) {
         api.runtime.onMessage.addListener = () => {};
@@ -88,6 +93,9 @@
       if (!api.tabs.update) api.tabs.update = async () => ({});
       if (!api.tabs.query) api.tabs.query = async () => ([]);
       if (!api.tabs.create) api.tabs.create = async () => ({});
+      if (!api.tabs.getCurrent) api.tabs.getCurrent = async () => null;
+      if (!api.tabs.hide) api.tabs.hide = async () => {};
+      if (!api.tabs.show) api.tabs.show = async () => {};
       if (!api.tabs.onCreated) api.tabs.onCreated = {};
       if (!api.tabs.onCreated.addListener) {
         api.tabs.onCreated.addListener = () => {};
@@ -124,6 +132,15 @@
       if (!api.windows) api.windows = {};
       if (!api.windows.remove) api.windows.remove = async () => {};
       if (!api.windows.get) api.windows.get = async () => ({});
+      if (!api.windows.getCurrent) {
+        api.windows.getCurrent = async (args, callback) => {
+          const win = { id: 1, incognito: false };
+          if ('function' === typeof args) args(win);
+          else if (callback) callback(win);
+          return win;
+        };
+      }
+      if (!api.windows.update) api.windows.update = async () => ({});
       if (!api.windows.getAll) api.windows.getAll = async () => ([]);
       if (!api.windows.create) api.windows.create = async () => ({});
       if (!api.windows.onCreated) api.windows.onCreated = {};
@@ -203,11 +220,19 @@
       if (!api.sidePanel.setPanelBehavior) {
         api.sidePanel.setPanelBehavior = async () => {};
       }
+
+      if (!api.action) api.action = {};
+      if (!api.action.onClicked) api.action.onClicked = {};
+      if (!api.action.onClicked.addListener) {
+        api.action.onClicked.addListener = () => {};
+      }
     }
 
     if ('firefox' === env) {
       if (!window.browser) window.browser = {};
       ensureApi(window.browser);
+      window.browser.runtime.getBrowserInfo =
+        async () => ({ name: 'Firefox', version: '128' });
     } else {
       if (!window.chrome) window.chrome = {};
       ensureApi(window.chrome);
@@ -270,6 +295,7 @@
       function createView() {
         buildViewScaffold();
         const view = new TreeView();
+        view.resolveTreeViewLoaded();
         view.viewRoot = view.root;
         view.root.window = view.window;
         view.openWindowOnRootLoadTopmost = true;
@@ -361,6 +387,7 @@
       function setDropTarget(view, node, right = false) {
         view.mouseDragStartNode = null;
         view.mouseNode = node;
+        view.mouseNodeNonRoot = node;
         view.$mouseRow = {};
         view.$mouseRowWid = 100;
         view.$mouseRowX = right ? 100 : 0;
@@ -3123,6 +3150,7 @@
 
       async function runTests() {
         const results = [];
+        const $summary = document.getElementById('summary');
 
         for (const item of tests) {
           if (item.type === 'group') {
@@ -3130,6 +3158,7 @@
             continue;
           }
           window.__testActions = [];
+          $summary.textContent = `Running: ${item.name}`;
           try {
             const snap = await item.fn();
             const actions = window.__testActions || [];
@@ -3157,7 +3186,6 @@
         }
 
         const $results = document.getElementById('results');
-        const $summary = document.getElementById('summary');
 
         let passCount = 0;
         let failCount = 0;

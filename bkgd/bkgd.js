@@ -16,6 +16,8 @@ import {
   isIllegalURL,
   sanitizeClientId
 } from '/common/common.js';
+import { Mutex } from '/common/mutex.js';
+import { Config } from '/common/config.js';
 import { IdGenerator } from '/common/id-generator.js';
 import * as sidepanel from './sidepanel.js';
 import { TreeStore } from './treestore.js';
@@ -39,14 +41,36 @@ export class Bkgd {
 
     // queues for saved nodes which are in the process of being loaded
     // (empty except during brief moments before browser opens stuff)
+    // ... and a mutex so others can wait until the queue is empty.
+    this.nodesLoadingMutex = new Mutex();
     this.nodesLoading = [];
     this.windowsLoading = [];
+
+    // internal map of treeId : TreeViewInfo,
+    // tracks the port and viewType and viewScope of each open TreeView
+    // so we can decide where to send global hotkey events
+    // (usually send to current window, but in "Tabs Outliner mode",
+    //  send to a separate window)
+    this.treeViews = {};
 
     // local backups
     this.localBackupAlarmName = 'periodicLocalBackup';
     this.reconcileAlarmName = 'periodicReconcile';
     this.reconcileIntervalMinutes = 5;
     this.reconcileInFlight = false;
+
+    this.cfg = new Config();
+    this.cfgDefaults = {
+      clientId: null,
+      localBackupInterval: 0,
+      localBackupLastTimeCompleted: 0,
+      backupOnStartup: true,
+      reconcileIntervalMinutes: 5,
+    };
+
+    // kludge because Chrome sidePanel API is missing important stuff
+    // like sidePanel.isOpen()
+    if (isChrome) this.chromeSidepanelIsOpen = {};
   }
 
   init () {
@@ -73,9 +97,14 @@ export class Bkgd {
     // tell the browser the sidepanel can be opened via hotkey or icon click
     sidepanel.init();
 
-    this.initConfig().then(async () => {
-      await this.initBackgroundConfig();
-      this.idGen = new IdGenerator(this.clientId, 9, 2);
+    this.initConfig().then(() => {
+      this.idGen = new IdGenerator(this.cfg.clientId, 9, 2);
+      this.clientId = this.cfg.clientId;
+      this.cfg.watch('clientId', (key, newVal, oldVal) => {
+        // always use latest clientId to generate new nodeIds
+        this.idGen.name = newVal;
+        this.clientId = newVal;
+      });
       debug('Bkgd.resolveConfigLoaded()');
       this.resolveConfigLoaded();  // let listeners know the config is ready
 
@@ -241,12 +270,8 @@ export class Bkgd {
   }
 
   initMiscListeners () {
-    api.storage.onChanged.addListener( this.onStorageChanged.bind(this) );
-
-    // TODO
-    //api.action.onClicked.addListener((...args) => {
-    //  this.onExtensionIconClicked(...args);
-    //});
+    // user clicked extension icon in the address bar area
+    api.action.onClicked.addListener( this.onExtensionIconClicked.bind(this) );
 
     // global hotkey "commands"
     api.commands.onCommand.addListener( this.onCommand.bind(this) );
@@ -289,43 +314,43 @@ export class Bkgd {
   }
 
   async initConfig () {
-    // load client name from storage
-    const result = await api.storage.local.get('clientId');
-    if (result.clientId) {
-      const sanitized = sanitizeClientId(result.clientId);
-      if (sanitized) {
-        if (sanitized !== result.clientId) {
-          await api.storage.local.set({ 'clientId': sanitized });
-        }
-        this.clientId = sanitized;
-        log(`clientId: ${this.clientId}`);
-        return;
-      }
-    }
-    // detect first run and generate random client name
-    // generate 2-digit base32 string
-    let num = Math.floor(Math.random() * (32**2));
-    this.clientId = base32encode(num, 2);
-    await api.storage.local.set({ 'clientId': this.clientId });
-    log(`rand clientId: ${this.clientId}`);
-  }
+    await this.cfg.init(this.cfgDefaults);
 
-  async initBackgroundConfig () {
-    const result = await api.storage.local.get({
-      reconcileIntervalMinutes: this.reconcileIntervalMinutes
+    const sanitized = sanitizeClientId(this.cfg.clientId);
+    if (! sanitized) {
+      // detect first run and generate random client name
+      // generate 2-digit base32 string
+      let num = Math.floor(Math.random() * (32**2));
+      const clientId = base32encode(num, 2);
+      await this.cfg.set('clientId', clientId);
+      log(`set random clientId: ${clientId}`);
+    }
+    else if (sanitized !== this.cfg.clientId) {
+      await this.cfg.set('clientId', sanitized);
+    }
+    log(`clientId: ${this.cfg.clientId}`);
+
+    // reset backup events when the interval changes
+    this.cfg.watch('localBackupInterval', () => {
+      this.initLocalBackupAlarm(true);
     });
-    this.reconcileIntervalMinutes = result.reconcileIntervalMinutes;
+    this.reconcileIntervalMinutes = this.cfg.reconcileIntervalMinutes;
+    this.cfg.watch('reconcileIntervalMinutes', (key, newValue) => {
+      this.reconcileIntervalMinutes = newValue;
+      this.initReconcileAlarm(true);
+    });
     await this.initReconcileAlarm(true);
   }
 
   async initLocalBackupAlarm (reset = false) {
-    const stored = await api.storage.local.get([
-      'localBackupInterval',
-      'lastBackupTime',
-      'backupOnStartup'
-    ]);
-    let interval = stored.localBackupInterval;
+    await this.configLoaded;  // this.cfg must be ready first
+
+    const stored = await api.storage.local.get({
+      lastBackupTime: 0,
+      backupOnStartup: this.cfg.backupOnStartup
+    });
     const alarm = await api.alarms.get(this.localBackupAlarmName);
+    let interval = this.cfg.localBackupInterval;
     // 0.5 minutes is the shortest the browser allows
     const backupDisabled = (! interval) || (interval < 0.5);
 
@@ -333,9 +358,12 @@ export class Bkgd {
     // because sometimes alarms don't persist across browser restarts, and
     // if a user sets interval=24h but they restart daily, it may never fire
     if (! backupDisabled && (stored.backupOnStartup !== false)) {
-      const lastBackupTime = stored.lastBackupTime;
+      const lastBackupTime = Math.max(
+        stored.lastBackupTime || 0,
+        this.cfg.localBackupLastTimeCompleted || 0
+      );
       const intervalMs = interval * 60 * 1000;
-      if (lastBackupTime && ((Date.now() - lastBackupTime) >= intervalMs)) {
+      if ((Date.now() - lastBackupTime) >= intervalMs) {
         if (! this.backupQueued) {
           this.backupQueued = true;
           this.treeLoaded.then(async () => {
@@ -398,16 +426,39 @@ export class Bkgd {
     }
   }
 
-  onStorageChanged (changes, areaName) {
-    if ('local' === areaName) {
-      if (undefined !== changes.localBackupInterval) {
-        this.initLocalBackupAlarm(true);
-      }
-      if (undefined !== changes.reconcileIntervalMinutes) {
-        this.reconcileIntervalMinutes = changes.reconcileIntervalMinutes.newValue;
-        this.initReconcileAlarm(true);
+  onExtensionIconClicked (tab, click) {
+    // middle click
+    if (click && click.button === 1) {
+      debug('onExtensionIconClicked(middle)');
+      // TODO: add this, for browsers which support it...
+      // (but it seems like only Firefox supports it)
+    }
+    // left click
+    else {
+      debug('onExtensionIconClicked(left)');
+      if (isFirefox) {
+        api.sidebarAction.toggle();
+      } else {
+        // FIXME: sidePanel.isOpen() still doesn't exist, as of Chrome 143
+        // nasty kludge, waiting on Chrome to add .isOpen()
+        let isOpen = this.chromeSidepanelIsOpen[tab.windowId];
+        if (undefined !== api.sidePanel.isOpen) {
+          isOpen = api.sidePanel.isOpen({ windowId: tab.windowId });
+        }
+        if (isOpen) {
+          // Chrome 141+
+          // (WTF, why didn't this exist until 25 releases AFTER .open())
+          api.sidePanel.close({ windowId: tab.windowId });
+        } else {
+          // Chrome 116+
+          api.sidePanel.open({ windowId: tab.windowId });
+        }
+        this.chromeSidepanelIsOpen[tab.windowId] = (! isOpen);
       }
     }
+    // right click uses a totally different API
+    // because the browser handles it as a context menu,
+    // and gives us the option to add items to that menu
   }
 
   async mergeOpenWindowsIntoTree () {
@@ -425,8 +476,13 @@ export class Bkgd {
       console.time('mergeOpenWindowsIntoTree');
     }
     // attach browser windows to window nodes
-    let attached = [];
+    const attachedWindows = [];
     const attachedNodeIds = new Set();
+    const extUrl = api.runtime.getURL
+      ? api.runtime.getURL('/')
+      : null;
+    let delay = 500;
+    const delayPerTab = 50;
     for (const window of windows) {
       debug(`Window ID: ${window.id}`);
       // Firefox session values survive restored browser IDs, so consult them
@@ -452,11 +508,34 @@ export class Bkgd {
         }
       }
       // Otherwise search for a Window in the tree with matching tabs.
+      let match = {
+        winNode: null,
+        loadedTabNodesWithNoTab: []
+      };
       if (! winNode) {
-        winNode = await this.tree.findMatchingWindow(window, attachedNodeIds);
+        match = await this.tree.findMatchingWindow(window, attachedNodeIds);
+        winNode = match.winNode;
       }
       if (winNode) {
-        winNode.load({ reason: 'mergeOpenWindowsIntoTree' });
+        //debug('winNode before loading:', winNode.asTextBranch());
+        await winNode.load({ reason: 'mergeOpenWindowsIntoTree' });
+        // reload any extension pages which failed to re-open
+        // after browser restart or extension restart
+        // (but do it slowly, to give the browser time to load)
+        const previouslyLoaded = match.loadedTabNodesWithNoTab;
+        if (previouslyLoaded?.length > 0) {
+          const deferredLoad = async () => {
+            for (const node of previouslyLoaded) {
+              if (extUrl && node.url?.startsWith(extUrl)) {
+                debug(`restoreLoadedTab: ${node.toLine()}`);
+                await node.load({reason: 'restoreLoadedTab' });
+                await new Promise(r => setTimeout(r, delayPerTab));
+              }
+            }
+          };
+          setTimeout(deferredLoad, delay);
+          delay += (delayPerTab + 10) * previouslyLoaded.length;
+        }
       }
       // if nothing found, add new window node to the tree
       else {
@@ -474,7 +553,7 @@ export class Bkgd {
         await this.tree.rememberWindowNode(winNode, window.id);
       }
       // mark this winNode as actually attached to a real window
-      attached.push({ winNode, window });
+      attachedWindows.push({ winNode, window });
       attachedNodeIds.add(winNode.id);
     }
 
@@ -484,7 +563,7 @@ export class Bkgd {
       (n) => { return n.isWindow(); });
     for (const node of winNodeList) {
       let found = false;
-      for (const obj of attached) {
+      for (const obj of attachedWindows) {
         if (node.id === obj.winNode.id) found = true;
       }
       const hasLoadedDesc = node.hasLoadedTabsDeep
@@ -497,7 +576,7 @@ export class Bkgd {
 
     // attach tabs now
     const claimedTabNodeIds = new Set();
-    for (const obj of attached) {
+    for (const obj of attachedWindows) {
       const winNode = obj.winNode;
       const window = obj.window;
       let pinnedPrefixCount = 0;
@@ -513,10 +592,10 @@ export class Bkgd {
           (node) => ! claimedTabNodeIds.has(node.id)
         );
         const localPinnedTabList = localTabList.filter(
-          (node) => node.pinned
+          (node) => node.isPinned()
         );
         const localMovableTabList = localTabList.filter(
-          (node) => ! node.pinned
+          (node) => ! node.isPinned()
         );
         const getTabDestination = (tabNode = null) => {
           // Startup merge receives browser indexes, where pinned tabs occupy a
@@ -566,7 +645,8 @@ export class Bkgd {
           // Try same-pinned-state URL matches before generic URL matches.  This
           // avoids swapping saved pinned/unpinned duplicates with identical URLs.
           const localUrlMatches = availableTabList.filter((node) =>
-            node.url === tabUrl && (node.pinned === Boolean(tab.pinned)));
+            node.url === tabUrl
+              && (node.isPinned() === Boolean(tab.pinned)));
           if (localUrlMatches.length > 0) {
             tabNode = this.tree.choosePreferredTabNode(localUrlMatches);
           }
@@ -699,6 +779,7 @@ export class Bkgd {
           url: tabUrl,
           faviconUrl: tab.favIconUrl,
           loaded: true,
+          wasLoaded: false,
           active: tab.active,
           discarded: tab.discarded,
           frozen: tab.frozen,
@@ -711,6 +792,33 @@ export class Bkgd {
         if (this.tree.rememberTabNode) {
           await this.tree.rememberTabNode(newTabNode, tab.id);
         }
+      }
+
+      // remove stale "active" status if it exists
+      // (happens when extension page is active and extension restarted,
+      //  because the page gets closed while extension isn't running)
+      await winNode.setActiveTab({ reason: 'mergeOpenWindowsIntoTree' });
+
+      // Session identity matching can bypass the URL matcher, so explicitly
+      // clear stale loaded bindings here too.  Reopen internal extension pages
+      // afterward because browsers close them while an extension restarts.
+      const extensionPagesToReload = [];
+      for (const node of winNode.getLoadedTabs()) {
+        if (claimedTabNodeIds.has(node.id)) continue;
+        await node.unload({ reason: 'mergeOpenWindowsIntoTree' });
+        if (extUrl && node.url?.startsWith(extUrl)) {
+          extensionPagesToReload.push(node);
+        }
+      }
+      if (extensionPagesToReload.length > 0) {
+        const deferredLoad = async () => {
+          for (const node of extensionPagesToReload) {
+            await node.load({ reason: 'restoreLoadedTab' });
+            await new Promise(resolve => setTimeout(resolve, delayPerTab));
+          }
+        };
+        setTimeout(deferredLoad, delay);
+        delay += (delayPerTab + 10) * extensionPagesToReload.length;
       }
     }
 
@@ -744,11 +852,11 @@ export class Bkgd {
     // TODO
     const node = this.tree.root.getWindowId(windowId);
     if (node) {
-      debug('found window node', windowId, node);
-      return node.windowClosed({ reason: 'onWindowRemoved' });
+      debug('bkgd.onWindowRemoved(): found window node', windowId, node);
+      return await node.windowClosed({ reason: 'onWindowRemoved' });
     }
     else {
-      debug('no window node found', windowId);
+      debug('bkgd.onWindowRemoved(): no window node found', windowId);
     }
   }
 
@@ -763,53 +871,33 @@ export class Bkgd {
       // update the window geometry and stuff
       // (because Firefox has no onWindowBoundsChanged event, apparently)
       // (so this is a workaround for that)
-      const win = await api.windows.get(windowId);
-      if (win) {
-        const geom = [ win.width, win.height, win.left, win.top ];
-        await focusedNode.setTabFields(
-          { geometry: geom,
-            windowState: win.state,
-            incognito: win.incognito
-          },
-          { reason: 'onWindowFocusChanged' });
-      }
+      let win;
+      try { win = await api.windows.get(windowId); } catch (err) { }
+      if (win) await this.tree.onWindowBoundsChanged(win, focusedNode);
     }
+    const now = Date.now();
     const windowNodes = this.tree.root.findNodes(
-      (n) => n.isWindow() && (undefined !== n.windowId)
+      (node) => node.isWindow()
+        && ((undefined !== node.windowId)
+          || (node.mtime > (now - 3000)))
     );
     for (const node of windowNodes) {
-      const shouldBeActive = focusedNode && (node === focusedNode);
-      if (node.active !== shouldBeActive) {
-        await node.setTabFields(
-          { active: shouldBeActive },
-          { reason: 'onWindowFocusChanged' }
-        );
+      const shouldBeActive = Boolean(focusedNode && (node === focusedNode));
+      if ((node.active !== shouldBeActive) || (! node.isLoaded())) {
+        await node.setActive(shouldBeActive, {
+          reason: 'onWindowFocusChanged',
+          focusedNodeId: focusedNode?.id,
+          onWindowRemoved: ! node.isLoaded()
+        });
       }
     }
     // no node = no problem, because a non-browser window may be focused
   }
 
-  async onWindowBoundsChanged (...args) {
-    debug('bkgd.onWindowBoundsChanged', ...args);
+  async onWindowBoundsChanged (win) {
+    debug('bkgd.onWindowBoundsChanged', win);
     await this.treeLoaded;
-    const window = args[0];
-    if (! window) return;
-    const node = this.tree.root.getWindowId(window.id);
-    if (! node) return;
-    const hasGeometry = (
-      Number.isFinite(window.width) &&
-      Number.isFinite(window.height) &&
-      Number.isFinite(window.left) &&
-      Number.isFinite(window.top)
-    );
-    const changes = {};
-    if (hasGeometry) {
-      changes.geometry = [window.width, window.height, window.left, window.top];
-    }
-    if (undefined !== window.state) changes.windowState = window.state;
-    if (undefined !== window.incognito) changes.incognito = window.incognito;
-    if (Object.keys(changes).length === 0) return;
-    await node.setTabFields(changes, { reason: 'onWindowBoundsChanged' });
+    return this.tree.onWindowBoundsChanged(win);
   }
 
   async onTabCreated (tab) {
@@ -858,6 +946,8 @@ export class Bkgd {
     // moveInfo.toIndex: number
     // moveInfo.windowId: number
     debug(`bkgd.onTabMoved(tabId=${tabId}, windowId=${moveInfo.windowId}): ${moveInfo.fromIndex} -> ${moveInfo.toIndex}`);
+    if (this.tabReorderInProgress && (! this.tabReorderStalled))
+      return debug('bkgd.onTabMoved ignored (tabReorderInProgress)');
     await this.treeLoaded;
     await this.tree.onTabMoved(tabId, moveInfo);
   }
@@ -868,6 +958,10 @@ export class Bkgd {
     // attachInfo.newWindowId: number
     //   (may refer to a window which doesn't exist yet)
     debug(`bkgd.onTabAttached(tabId=${tabId}, windowId=${attachInfo.newWindowId}, ${attachInfo.newPosition})`);
+    if (this.tabReorderInProgress) {
+      this.onTabAttachedRequested = true;
+      return debug('bkgd.onTabAttached ignored (tabReorderInProgress)');
+    }
     await this.treeLoaded;
     return this.tree.onTabAttached(tabId, attachInfo);
   }
@@ -923,9 +1017,38 @@ export class Bkgd {
   onConnect (port) {
     // keep a list of connected TreeView instances
     this.ports.push(port);
+    //debug('ports', this.ports);
+
+    // handle posted messages
+    port.onMessage.addListener((msg) => { this.onPortMessage(port, msg); });
+
+    // delete associated TreeView on disconnect
     port.onDisconnect.addListener(() => {
+      debug('bkgd_portDisconnect()', port);
+      //debug('treeViews[]:', this.treeViews);
+      for (const treeId of Object.keys({ ...this.treeViews })) {
+        const tv = this.treeViews[treeId];
+        if (tv?.port === port) {
+          debug(`disconnect TreeView ${treeId}`);
+          delete this.treeViews[treeId];
+          //debug('treeViews[]:', this.treeViews);
+        }
+      }
       this.ports = this.ports.filter(p => p !== port);
     });
+  }
+
+  onPortMessage (port, msg) {
+    //debug(`Bkgd.onPortMessage(${msg.msg})`, msg, port);
+    // there is only one message type expected
+    if ('bkgdPort_registerTreeView' === msg?.msg) {
+      // save the ID so we can tell which one disconnected later
+      this.bkgdPort_registerTreeView(msg);
+      if (msg.treeId) {
+        const tv = this.treeViews[msg.treeId];
+        if (tv) tv.port = port;
+      }
+    }
   }
 
   onMessage (msg, sender, sendResponse) {
@@ -963,7 +1086,7 @@ export class Bkgd {
       //await this.configLoaded;  // wait for config to finish loading
       // actually handle the event
       //debug(`bkgd: ${msg.msg}()`);
-      const result = await handler.bind(this)(msg);
+      const result = await handler.bind(this)(msg, sender);
       //debug('bkgd sendResponse:', result);
       sendResponse(result);
       return;
@@ -976,8 +1099,46 @@ export class Bkgd {
     return error(err);
   }
 
-  async bkgd_ping (msg) {
+  async bkgd_ping (msg, sender) {
+    const update = async () => {
+      this.bkgdPort_registerTreeView(msg, sender);
+      this.pruneDeadTreeViews();
+    };
+    update();  // put update on the queue to do after we respond to sender
     return Date.now();
+  }
+
+  bkgdPort_registerTreeView (msg, sender) {
+    //debug('bkgdPort_registerTreeView()', msg, sender);
+    // data:
+    //   msg.treeId
+    //   msg.windowId
+    //   msg.viewScope ('session' or 'window')
+    //   msg.viewType ('tab' or 'sidepanel')
+    //   sender?.documentId?
+    //   sender?.tab?.id
+    //   ? lastPingTime
+    const key = msg.treeId;
+    if (! key) return warn('no treeId', msg, sender);
+    let oldValue = this.treeViews[key];
+    if (! oldValue) oldValue = {};
+    const value = { ...oldValue, ...msg, lastPing: Date.now() };
+    if (sender?.tab?.id) value.tabId = sender.tab.id;
+    if (! this.treeViews[key])
+      debug(`registered TreeView ${value.treeId} (${value.viewScope} ${value.viewType})`);
+    this.treeViews[key] = value;
+  }
+
+  pruneDeadTreeViews () {
+    const cutoff = Date.now() - (20 * 1000);  // 20 seconds ago
+    for (const treeId of Object.keys({ ...this.treeViews })) {
+      const data = this.treeViews[treeId];
+      if (data.lastPing < cutoff) {
+        debug(`pruning TreeView ${treeId}`);
+        delete this.treeViews[treeId];
+      }
+    }
+    //debug('treeViews[]:', this.treeViews);
   }
 
   async bkgd_newNodeId (msg) {
@@ -997,7 +1158,7 @@ export class Bkgd {
     }
     this.clientId = clientId;
     this.idGen.name = this.clientId;
-    await api.storage.local.set({ 'clientId': this.clientId });
+    await this.cfg.set('clientId', this.clientId);
     return { clientId: this.clientId };
   }
 
@@ -1021,7 +1182,7 @@ export class Bkgd {
     const response = {};
     let node = this.tree.nodes[msg.nodeId];
     if (! node) {
-      const err = `bkgd_loadSavedNode(): no node found: "%{msg.nodeId}"`;
+      const err = `bkgd_loadSavedNode(): no node found: "${msg.nodeId}"`;
       error(err);
       return { error: err };
     }
@@ -1033,8 +1194,8 @@ export class Bkgd {
       //   so no need to handle it here
     }
     // some browsers block some types of URLs
-    if (isIllegalURL(this.url)) {
-      response.result = `Error: Can't load forbidden URL: ${this.url}`;
+    if (isIllegalURL(node.url)) {
+      response.result = `Error: Can't load forbidden URL: ${node.url}`;
       return response;
     }
     // - otherwise...
@@ -1082,7 +1243,7 @@ export class Bkgd {
       this.windowsLoading.push(windowNode);
       // TODO: actually open the window?
     }
-    const shouldPinCreatedTab = Boolean(node.pinned);
+    const shouldPinCreatedTab = Boolean(node.isPinned());
     // Existing-window creation can request pinned directly.  New-window
     // creation must pin after the first tab exists, so guard the saved flag
     // against early unpinned events until that follow-up completes.
@@ -1091,7 +1252,35 @@ export class Bkgd {
       node.pinRestorePendingAt = Date.now();
     }
     // - push node to be loaded, and open it (new window or existing window)
+    if (this.nodesLoading.length <= 0) {
+      if (this.nodesLoadingMutexUnlock) {
+        this.nodesLoadingMutexUnlock();
+        this.nodesLoadingMutexUnlock = null;
+      }
+      this.nodesLoadingMutexUnlock = await this.nodesLoadingMutex.lock();
+    }
     this.nodesLoading.push(node);
+    const popNode = (node, failed = false) => {
+      if (node.pendingLoadTimer) {
+        clearTimeout(node.pendingLoadTimer);
+        delete node.pendingLoadTimer;
+      }
+      const index = this.nodesLoading.indexOf(node);
+      if (index !== -1) {
+        if (failed) warn('bkgd_loadSavedNode failed:', node);
+        this.nodesLoading.splice(index, 1);
+      }
+      if ((this.nodesLoading.length <= 0) && this.nodesLoadingMutexUnlock) {
+        this.nodesLoadingMutexUnlock();
+        this.nodesLoadingMutexUnlock = null;
+      }
+    };
+    node.pendingLoadTimer = setTimeout(() => {
+      popNode(node, true);
+    }, 1000);  // failsafe
+    // Node's timer object supports unref(); browsers return a numeric ID.
+    node.pendingLoadTimer.unref?.();
+
     // actually open the tab
     const createProperties = {};
     createProperties.url = node.url;
@@ -1100,22 +1289,13 @@ export class Bkgd {
       createProperties.url = 'about:blank';
     // opening as first tab in new window
     if (needsWindow) {
-      createProperties.type = 'normal';
-      // set window size and position
-      // TODO: save and restore 'state': fullscreen, maximized, minimized
-      if (windowNode.geometry && (4 === windowNode.geometry.length)) {
-        createProperties.width = windowNode.geometry[0];
-        createProperties.height = windowNode.geometry[1];
-        createProperties.left = windowNode.geometry[2];
-        createProperties.top = windowNode.geometry[3];
-      }
-      // TODO: set incognito?  (node doesn't check this data yet)
-      if (windowNode.incognito) createProperties.incognito = true;
-      debug('bkgd_loadSavedNode() creating saved window', createProperties);
+      const createData = windowNode.windowCreateData();
+      createData.url = createProperties.url;
+      debug('bkgd_loadSavedNode() creating saved window', createData);
       try {
         let createdWindow;
         try {
-          createdWindow = await api.windows.create(createProperties);
+          createdWindow = await api.windows.create(createData);
         } catch (err) {
           // handle "Error: Invalid value for bounds. Bounds must be at least 50% within visible screen space."
           if (err.message.includes('Invalid value for bounds')) {
@@ -1123,8 +1303,12 @@ export class Bkgd {
             // ignore their saved position
             // It's stupid that we have to do this, instead of the browser just
             // moving the window to an allowed position+size.
-            delete createProperties.geometry;
-            createdWindow = await api.windows.create(createProperties);
+            debug('deleting invalid window bounds');
+            delete createData.width;
+            delete createData.height;
+            delete createData.left;
+            delete createData.top;
+            createdWindow = await api.windows.create(createData);
           }
           else { throw err; }
         }
@@ -1161,9 +1345,10 @@ export class Bkgd {
           }
         }
       } catch (err) {
-        this.windowsLoading.pop(windowNode);
-        this.nodesLoading.pop(node);
+        const windowIndex = this.windowsLoading.indexOf(windowNode);
+        if (windowIndex !== -1) this.windowsLoading.splice(windowIndex, 1);
         node.pinRestorePending = false;
+        popNode(node);
         warn(`loadSavedTab failed: ${err}`);
         response.result = err;
       }
@@ -1173,7 +1358,11 @@ export class Bkgd {
       createProperties.windowId = windowNode.windowId;
       // maybe don't fully load it?
       if (msg.discarded) {
-        if (isFirefox) createProperties.discarded = true;
+        if (isFirefox) {
+          createProperties.discarded = true;
+          // only allowed for discarded URLs
+          createProperties.title = node.title;
+        }
         else createProperties.active = false;
       }
       // assign an "openerTab" if one exists
@@ -1186,7 +1375,7 @@ export class Bkgd {
       if (shouldPinCreatedTab) {
         createProperties.pinned = true;
         const pinnedTabs = windowNode.getLoadedAndUnloadedTabs()
-          .filter((tabNode) => tabNode.pinned);
+          .filter((tabNode) => tabNode.isPinned());
         const pinnedIndex = pinnedTabs.indexOf(node);
         if (pinnedIndex >= 0) createProperties.index = pinnedIndex;
       }
@@ -1197,8 +1386,8 @@ export class Bkgd {
           await api.windows.update(windowNode.windowId, { focused: true });
         }
       } catch (err) {
-        this.nodesLoading.pop(node);
         node.pinRestorePending = false;
+        popNode(node);
         warn(`loadSavedTab failed: ${err}`);
         response.result = err;
       }
@@ -1347,6 +1536,76 @@ export class Bkgd {
     return response;
   }
 
+  async bkgd_convertNodeToLoadedWindow (msg) {
+    await this.treeLoaded;
+    const response = {};
+    const node = this.tree.nodes[msg.nodeId];
+    if ((! node) || node.isRoot() || node.url) {
+      const err = 'bkgd_convertNodeToLoadedWindow(): invalid node';
+      error(err);
+      return { error: err };
+    }
+
+    const changes = { type: 'window', loaded: false };
+    const parentWindowNode = node.getWindowNode();
+    if (parentWindowNode) changes.incognito = parentWindowNode.incognito;
+    const changed = await node.setTabFields(
+      changes,
+      { reason: 'convertNodeToWindow' }
+    );
+    if (! changed) {
+      response.result = 'nop';
+      return response;
+    }
+
+    const result = await this.bkgd_loadSavedWindow({
+      windowNodeId: node.id,
+      nodeId: node.id
+    });
+    if (result.result) response.result = result.result;
+    if (result.error) response.error = result.error;
+    return response;
+  }
+
+  async bkgd_convertNodeFromLoadedWindow (msg) {
+    await this.treeLoaded;
+    const response = {};
+    const node = this.tree.nodes[msg.nodeId];
+    if ((! node) || (! node.canBeConvertedFromWindow())) {
+      const err = 'bkgd_convertNodeFromLoadedWindow(): invalid node';
+      error(err);
+      return { error: err };
+    }
+
+    const parentWindowNode = node.parent.getWindowNode();
+    const changed = await node.setTabFields({
+      type: '',
+      loaded: false,
+      wasLoaded: false,
+      windowId: undefined,
+      incognito: undefined
+    }, { reason: 'convertNodeFromWindow' });
+    if (! changed) {
+      response.result = 'nop';
+      return response;
+    }
+
+    let result;
+    if (parentWindowNode.isLoaded()) {
+      result = await this.bkgd_reorderAllTabsInThisWindow({
+        nodeId: node.id
+      });
+    } else {
+      result = await this.bkgd_loadSavedWindow({
+        windowNodeId: parentWindowNode.id,
+        nodeId: node.id
+      });
+    }
+    if (result?.result) response.result = result.result;
+    if (result?.error) response.error = result.error;
+    return response;
+  }
+
   async bkgd_loadSavedWindow (msg) {
     await this.treeLoaded;  // ensure tree is loaded
     const response = {};
@@ -1378,21 +1637,9 @@ export class Bkgd {
     // push window node to be loaded
     this.windowsLoading.push(windowNode);
     // actually open the window
-    const createProperties = {};
+    const createProperties = windowNode.windowCreateData();
     createProperties.tabId = tabIds[0];  // dang, it only allows one
-    // opening as first tab in new window
-    createProperties.type = 'normal';
-    // set window size and position
-    // TODO: save and restore 'state': fullscreen, maximized, minimized
-    if (windowNode.geometry && (4 === windowNode.geometry.length)) {
-      createProperties.width = windowNode.geometry[0];
-      createProperties.height = windowNode.geometry[1];
-      createProperties.left = windowNode.geometry[2];
-      createProperties.top = windowNode.geometry[3];
-    }
-    // TODO: set incognito?  (node doesn't check this data yet)
-    if (windowNode.incognito) createProperties.incognito = true;
-    debug('bkgd_loadSavedWindow() creating saved window', createProperties);
+    debug('bkgd_loadSavedWindow() creating saved window', createProperties, windowNode);
     try {
       const winObj = await api.windows.create(createProperties);
       debug('bkgd_loadSavedWindow() created window', winObj);
@@ -1436,7 +1683,8 @@ export class Bkgd {
         }
       }
     } catch (err) {
-      this.windowsLoading.pop(windowNode);
+      const windowIndex = this.windowsLoading.indexOf(windowNode);
+      if (windowIndex !== -1) this.windowsLoading.splice(windowIndex, 1);
       warn(`loadSavedWindow failed: ${err}`);
       response.result = err;
     }
@@ -1838,8 +2086,11 @@ export class Bkgd {
     debug(`Bkgd.onCommand(${command})`, tab);
     const bkgdCommands = [
       'unloadCurrentTab',
+      'bookmarkCurrentTab',
       'unmarkAll',
       'backupSession',
+      //'prevTab',  // TODO
+      //'nextTab',  // TODO
     ];
     // decide whether Bkgd or TreeView should handle the command
     if (bkgdCommands.includes(command)) {
@@ -1849,16 +2100,31 @@ export class Bkgd {
       await handler.bind(this)(tab);
       return;
     }
+
     // otherwise, send the command to the current window's TreeView
     // get the focused window
-    const window = await chrome.windows.getLastFocused();
-    if (window) {
-      debug(`Bkgd.onCommand(${command})`, window);
+    let windowId, origWindowId;
+    const window = await api.windows.getLastFocused();
+    if (window) windowId = window.id;
+
+    // in "Tabs Outliner mode" (just 1 TreeView in its own window),
+    // send commands there instead of the current window
+    // (works with any lone TreeView in session mode)
+    const treeViewIds = Object.keys(this.treeViews);
+    const firstTreeView = this.treeViews[treeViewIds[0]];
+    if ((1 === treeViewIds.length)
+      && ('session' === firstTreeView?.viewScope)
+    ) {
+      origWindowId = windowId;
+      windowId = firstTreeView.windowId;
+    }
+
+    if (windowId) {
+      //debug(`Bkgd.onCommand(${command})`, windowId);
       // send a message to the sidepanel of that window
       emit(`treeview_onCommand`, {
-        windowId: window.id,
         action: command,
-        tab: tab
+        windowId, tab, origWindowId,
       });
     }
   }
@@ -1878,6 +2144,27 @@ export class Bkgd {
       nodeId: tabNode.id,
       reason: 'userAction'
     });
+  }
+
+  async command_bookmarkCurrentTab (tab) {
+    if (! tab) return;
+    debug(`bookmark(${tab.title})`, tab);
+    const tabNode = this.tree.getNodeByTabId(tab.id);
+    if (! tabNode) return;
+    // add a new bookmark node in place of tabNode,
+    // and make tabNode the first child of the bookmark
+    const parentNode = tabNode.parent;
+    const bmNode = await parentNode.addChild(tabNode.indexOf(),
+      { bookmark: true, loaded: false,
+        url: tabNode.url, title: tabNode.title,
+        label: tabNode.label, note: tabNode.note,
+        checkbox: tabNode.checkbox, },
+      { reason: 'userAction' });
+    if (! bmNode) return error(`failed to add bookmark`, tabNode);
+    const moved = await tabNode.moveTo(bmNode, 0, { reason: 'userAction'});
+    if (! moved) return error(`failed to move tab into bookmark`,
+      tabNode, bmNode);
+    return moved;
   }
 
   command_unmarkAll (tab) {

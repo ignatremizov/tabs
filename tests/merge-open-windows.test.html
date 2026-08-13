@@ -37,6 +37,9 @@
     function ensureApi(api) {
       if (!api.runtime) api.runtime = {};
       if (!api.runtime.sendMessage) api.runtime.sendMessage = async () => ({});
+      if (!api.runtime.getURL) {
+        api.runtime.getURL = (path = '') => `moz-extension://test/${path}`;
+      }
       if (!api.runtime.onMessage) api.runtime.onMessage = {};
       if (!api.runtime.onMessage.addListener) {
         api.runtime.onMessage.addListener = () => {};
@@ -53,6 +56,8 @@
     if ('firefox' === env) {
       if (!window.browser) window.browser = {};
       ensureApi(window.browser);
+      window.browser.runtime.getBrowserInfo =
+        async () => ({ name: 'Firefox', version: '128' });
     } else {
       if (!window.chrome) window.chrome = {};
       ensureApi(window.chrome);

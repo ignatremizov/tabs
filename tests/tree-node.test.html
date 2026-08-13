@@ -36,6 +36,8 @@
   <div id="results"></div>
 
   <script>
+    window.__TKTSTO_TEST__ = true;
+
     const params = new URLSearchParams(location.search);
     let env = params.get('env');
     if (! env) {
@@ -47,6 +49,9 @@
     function ensureApi(api) {
       if (!api.runtime) api.runtime = {};
       if (!api.runtime.sendMessage) api.runtime.sendMessage = async () => ({});
+      if (!api.runtime.getURL) {
+        api.runtime.getURL = (path = '') => `moz-extension://test/${path}`;
+      }
       if (!api.runtime.onMessage) api.runtime.onMessage = {};
       if (!api.runtime.onMessage.addListener) {
         api.runtime.onMessage.addListener = () => {};
@@ -63,6 +68,9 @@
       if (!api.tabs.update) api.tabs.update = async () => ({});
       if (!api.tabs.query) api.tabs.query = async () => ([]);
       if (!api.tabs.create) api.tabs.create = async () => ({});
+      if (!api.tabs.getCurrent) api.tabs.getCurrent = async () => null;
+      if (!api.tabs.hide) api.tabs.hide = async () => {};
+      if (!api.tabs.show) api.tabs.show = async () => {};
       if (!api.tabs.onCreated) api.tabs.onCreated = {};
       if (!api.tabs.onCreated.addListener) {
         api.tabs.onCreated.addListener = () => {};
@@ -99,6 +107,15 @@
       if (!api.windows) api.windows = {};
       if (!api.windows.remove) api.windows.remove = async () => {};
       if (!api.windows.get) api.windows.get = async () => ({});
+      if (!api.windows.getCurrent) {
+        api.windows.getCurrent = async (args, callback) => {
+          const win = { id: 1, incognito: false };
+          if ('function' === typeof args) args(win);
+          else if (callback) callback(win);
+          return win;
+        };
+      }
+      if (!api.windows.update) api.windows.update = async () => ({});
       if (!api.windows.onCreated) api.windows.onCreated = {};
       if (!api.windows.onCreated.addListener) {
         api.windows.onCreated.addListener = () => {};
@@ -178,11 +195,19 @@
       if (!api.sidePanel.setPanelBehavior) {
         api.sidePanel.setPanelBehavior = async () => {};
       }
+
+      if (!api.action) api.action = {};
+      if (!api.action.onClicked) api.action.onClicked = {};
+      if (!api.action.onClicked.addListener) {
+        api.action.onClicked.addListener = () => {};
+      }
     }
 
     if ('firefox' === env) {
       if (!window.browser) window.browser = {};
       ensureApi(window.browser);
+      window.browser.runtime.getBrowserInfo =
+        async () => ({ name: 'Firefox', version: '128' });
     } else {
       if (!window.chrome) window.chrome = {};
       ensureApi(window.chrome);
@@ -542,7 +567,8 @@
 
         const $pin = node.$row.querySelector('.node-pin-icon');
         assert($pin, 'Pinned node should render a pin icon');
-        assertEqual($pin.textContent, '📌', 'Pin icon should use pin glyph');
+        assert($pin.classList.contains('pinned'),
+          'Pin icon should use the themed pinned icon');
         assertEqual($pin.getAttribute('aria-label'), 'Pinned tab',
           'Pin icon should expose an accessible label');
         assert(node.$row.classList.contains('pinned'),
@@ -1021,6 +1047,10 @@
           id: 'p1',
           loaded: false
         });
+        await addChild(windowNode, {
+          id: 't2',
+          url: 'https://example.com/other'
+        });
         await addChild(mover, {
           id: 'c1',
           tabId: 1,
@@ -1264,6 +1294,13 @@
           windowId: 1,
           loaded: true,
           url: 'https://example.com'
+        });
+        await addChild(loadedWin, {
+          id: 't2',
+          tabId: 11,
+          windowId: 1,
+          loaded: true,
+          url: 'https://example.com/stays'
         });
 
         await tab.moveTo(unloadedWin, 0, { reason: 'userAction' });
@@ -1890,15 +1927,21 @@
           ]
         };
 
-        const match1 = await tree.findMatchingWindow(realWindow);
+        const result1 = await tree.findMatchingWindow(realWindow);
+        const match1 = result1.winNode;
         assert(match1, 'Should match a window node');
 
         const exclude = new Set([match1.id]);
-        const match2 = await tree.findMatchingWindow(realWindow, exclude);
+        const result2 = await tree.findMatchingWindow(realWindow, exclude);
+        const match2 = result2.winNode;
         assert(match2, 'Should match a second window node');
         assert(match2.id !== match1.id, 'Exclude list should prevent reuse');
-        assertEqual(tree.nodes.t1.tabId, 1, 'Should attach tabId to matched node');
-        assertEqual(tree.nodes.t1.wasLoaded, false, 'Matched tab should reset wasLoaded');
+        const matchedTab = match2.findNodes(
+          (node) => node.url === 'https://example.com/a'
+        )[0];
+        assertEqual(matchedTab.tabId, 1, 'Should attach tabId to matched node');
+        assertEqual(matchedTab.wasLoaded, false,
+          'Matched tab should reset wasLoaded');
       });
 
       test('promoteKidsToParentAtIndex preserves order', async () => {
@@ -1945,14 +1988,27 @@
         const api = getApi();
         const before = Date.now();
         const originalDownload = api.downloads.download;
-        api.downloads.download = async () => (1);
+        const originalOnChanged = api.downloads.onChanged;
+        let onProgress;
+        api.downloads.download = async () => {
+          setTimeout(() => onProgress({
+            id: 1,
+            state: { current: 'complete' }
+          }), 0);
+          return 1;
+        };
+        api.downloads.onChanged = {
+          addListener: (listener) => { onProgress = listener; },
+          removeListener: () => {}
+        };
         try {
           await tree.downloadBackupNow();
-          await new Promise(r => setTimeout(r, 0));
+          await new Promise(r => setTimeout(r, 10));
           const stored = await api.storage.local.get('lastBackupTime');
           assert(stored.lastBackupTime >= before, 'Should persist lastBackupTime');
         } finally {
           api.downloads.download = originalDownload;
+          api.downloads.onChanged = originalOnChanged;
         }
       });
 

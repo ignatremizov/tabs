@@ -1,126 +1,28 @@
 <!DOCTYPE html>
 <!-- options/options.html: options page
-  -- Copyright (C) 2025 Selene ToyKeeper and Ignat Remizov
+  -- Copyright (C) 2025-2026 Selene ToyKeeper and Ignat Remizov
   -- SPDX-License-Identifier: AGPL-3.0-or-later
   -->
 <html>
 <head>
-  <meta charset="utf-8">
+  <meta charset="UTF-8">
   <title>Ignat's copy of TK's Tree Style Tab Outliner Options</title>
-  <script defer src="options.js" type="module"></script>
-  <style>
-    body {
-      background-color: #333;
-      color: #ccc;
-    }
-    h2 {
-      margin: 0.8em 0 0.35em;
-    }
-    h3 {
-      margin: 0.6em 0 0.25em;
-    }
-    p, form, ul {
-      margin: 0.4em 0;
-    }
-    label, input {
-      margin: 0.25em 0;
-    }
-    input {
-      background-color: #222;
-      color: #ccc;
-      border: inset 3px #444;
-    }
-    .short-input {
-      min-width: unset;
-    }
-    .shortcut-grid {
-      display: grid;
-      grid-template-columns: minmax(14em, 2fr) minmax(10em, 1fr) minmax(10em, 1fr);
-      gap: 0.25em 0.8em;
-      align-items: center;
-    }
-    .shortcut-grid-header {
-      color: #9a9a9a;
-      font-size: 0.8em;
-      letter-spacing: 0.05em;
-      text-transform: uppercase;
-      margin: 0.25em 0 0.1em;
-    }
-    .shortcut-group {
-      margin: 0.35em 0;
-      padding: 0.25em 0.5em;
-      border: 1px solid #444;
-      border-radius: 0.5em;
-      background-color: #2b2b2b;
-    }
-    .shortcut-group-title {
-      font-weight: bold;
-      color: #ddd;
-      margin-bottom: 0.25em;
-    }
-    .shortcut-label {
-      font-weight: bold;
-    }
-    .shortcut-input {
-      min-width: unset;
-      width: 12em;
-      margin: 0;
-    }
-    .shortcut-default {
-      color: #888;
-      font-size: 0.9em;
-    }
-    .shortcut-actions {
-      margin-top: 0.4em;
-    }
-    .shortcut-grid > div {
-      margin: 0;
-    }
-    .file-input {
-      display: flex;
-      flex-direction: row;
-      gap: 0.5em;
-    }
-    button,
-    input[type="file"]::file-selector-button {
-      background: linear-gradient(180deg, #888, #444);
-      border-radius: 1em;
-      color: #fff;
-      border: outset 1px #555;
-      font-weight: bold;
-      padding: 0.1em 1em;
-    }
-    code, pre {
-      background-color: #3a3a3a;
-      border-radius: 0.25em;
-      padding: 0.1em 0.25em;
-    }
-    pre {
-      margin: 0 2em;
-      border-left: 3px solid #555;
-    }
-    @media (max-width: 700px) {
-      .shortcut-grid {
-        grid-template-columns: 1fr;
-      }
-      .shortcut-grid-header {
-        display: none;
-      }
-      .shortcut-default {
-        margin-bottom: 0.5em;
-      }
-    }
-  </style>
+  <script type="module" src="options.js"></script>
 </head>
-<body>
+<body class="options">
   <h1>Ignat's copy of TK's Tree Style Tab Outliner Options</h1>
 
   <h2>Client ID</h2>
+
+  <p>
 
   Each browser you use needs its own unique identifier.  Use something <b>very
   short with no spaces or punctuation</b>, ideally 3 letters or less, because
   it will become part of the ID for each tree node and transaction created by
   that browser.  For example:
+
+  </p>
+
   <ul>
     <li><code>pc</code>: Your desktop computer.</li>
     <li><code>nb</code>: Your notebook computer.</li>
@@ -128,33 +30,352 @@
   </ul>
 
   <form id="options-form" accept-charset="utf-8">
-    <label for="client-id">ID for this browser: (a-z and 0-9 only)</label>
+    <label>
     <input type="text" maxlength="8" class="short-input"
-      id="client-id" name="client-id" required />
-    <button type="submit">Save</button>
+      id="clientId" name="clientId" required />
+    ID for this browser: (a-z and 0-9 only)
+    </label>
   </form>
   <p>
     <small>Non-alphanumeric characters are removed automatically.</small>
   </p>
 
 
-  <h2>Theme</h2>
+  <h2>Appearance</h2>
 
   <div>
-    Theme:
+    <label>
     <select id="theme" name="theme">
       <option value="TK Night">TK Night</option>
       <option value="TK Day">TK Day</option>
     </select>
+    Theme
+    </label>
   </div>
 
   <div>
-    <p>
     <label>
     <input type="checkbox" id="expandedRowPrefix" name="expandedRowPrefix">
     Draw a <code>+</code> before expanded branches?
     </label>
-    </p>
+  </div>
+
+  <div>
+    <label>
+    <input type="checkbox" id="alwaysShowNodeStats" name="alwaysShowNodeStats">
+    Show node stats
+    <span class="node-stats">[<span class="node-stat-open">7</span>/<span class="node-stat-total">42</span>] </span>
+    before expanded branches?
+    </label>
+  </div>
+
+  <div>
+    <label>
+    <input type="checkbox" id="wasLoadedNodeStats" name="wasLoadedNodeStats">
+    Show
+    <span class="row was-loaded"><span class="url-title">wasLoaded</span></span>
+    in node stats?
+    <span class="node-stats">[<span class="node-stat-open">7</span>+<span class="node-stat-was-loaded">2</span>/<span class="node-stat-total">42</span>] </span>
+    </label>
+  </div>
+
+  <div>
+    <label>
+    <input type="checkbox" id="hideTreeLines" name="hideTreeLines">
+    Hide tree lines?
+    <span class="tree-line-color">(dim)</span>
+    </label>
+  </div>
+
+  <div>
+    <label>
+    <input type="checkbox" id="hideCursorTreeLines" name="hideCursorTreeLines">
+    Hide
+    <span class="row cursor loaded expanded"><span class="row-title"><span class="url-title">cursor branch</span></span></span>
+    tree lines?
+    <span class="tree-line-cursor-color">(bright)</span>
+    </label>
+  </div>
+
+  <div>
+    <label>
+    <input type="checkbox" id="hideWindowTreeLines" name="hideWindowTreeLines">
+    Hide
+    <span class="row window expanded loaded active"><span class="row-title">window</span></span>
+    tree lines?
+    <span class="tree-line-window-color">(window)</span>
+    </label>
+  </div>
+
+  <div>
+    <label>
+    <input type="text" id="fontFamily" name="fontFamily"
+      placeholder="Arial, Tahoma, Geneva, sans-serif" />
+    Font family:
+    </label>
+    <small>
+    Arial, Georgia, Humor Sans, Comic Sans MS, Quicksand, DejaVu Sans, Verdana,
+    Tahoma, Geneva, Trebuchet MS, Latin Modern Roman Caps, URW Gothic, VL
+    PGothic, Z003, Px IBM VGA8, serif, sans-serif, ...
+    </small>
+  </div>
+
+  <div>
+    <label>
+    <input type="text" id="fontSize" name="fontSize"
+      placeholder="1.15rem" />
+    Font size
+    </label>
+    <small>Examples: 14px, 1rem, 1.3rem</small>
+  </div>
+
+  <div>
+    <label>
+    <input type="text" id="rowHeight" name="rowHeight"
+      placeholder="1.5rem" />
+    Row height
+    </label>
+    <small>Examples: 20px, 1.5rem, 2rem</small>
+  </div>
+
+  <div>
+    <label>
+    <input type="text" id="indentWidth" name="indentWidth"
+      placeholder="0.8rem" />
+    Indent width
+    </label>
+    <small>Examples: 8px, 0.8rem, 1.2rem</small>
+  </div>
+
+  <div>
+    <label>
+    <input type="text" id="indentMargin" name="indentMargin"
+      placeholder="0.27em" />
+    Indent margin
+    </label>
+  </div>
+
+  <div>
+    <label>
+    <input type="text" id="indentMarginWindow" name="indentMarginWindow"
+      placeholder="0" />
+    Indent margin
+    <span class="row window expanded loaded active"><span class="row-title">(window nodes)</span></span>
+    </label>
+  </div>
+
+  <div>
+    <label>
+    <input type="text" id="indentPadding" name="indentPadding"
+      placeholder="0.4em" />
+    Indent padding:
+    </label>
+    0.4em, 1em, ...
+  </div>
+
+  <div>
+    <label>
+    <input type="text" id="indentPaddingWindow" name="indentPaddingWindow"
+      placeholder="0.2em" />
+    Indent padding
+    <span class="row window expanded loaded active"><span class="row-title">(window nodes)</span></span>
+    </label>
+  </div>
+
+  <div>
+    <label>
+    <input type="text" id="expandedBranchBottomPadding" name="expandedBranchBottomPadding"
+      placeholder="0.2em" />
+    Expanded branch bottom padding
+    </label>
+  </div>
+
+  <div>
+    <label>
+    <input type="text" id="leafToBranchSpacing" name="leafToBranchSpacing"
+      placeholder="0" />
+    Space between leaf (or collapsed branch) and branch
+    </label>
+  </div>
+
+  <div>
+    <label>
+    <input type="text" id="windowTopLevelNodeSpacing" name="windowTopLevelNodeSpacing"
+      placeholder="" />
+    Space between top-level nodes in a window
+    </label>
+  </div>
+
+  <div>
+    <label>
+    <input type="text" id="detailsBoxHeight" name="detailsBoxHeight"
+      placeholder="8rem" />
+    <span class="bottom-area-demo"><span class="details-box-demo all-details"><span id="detail-note"><b>Details&nbsp;box</b></span></span></span>
+    height:
+    </label>
+    Example: 25vh or 12em
+  </div>
+
+  <div>
+    <label>
+    <input type="text" id="detailsBoxHeightNotesOnly" name="detailsBoxHeightNotesOnly"
+      placeholder="8rem" />
+    <span class="bottom-area-demo"><span class="details-box-demo notes-only"><span id="detail-label"><b>Details&nbsp;box</b></span></span></span>
+    height (in <b>notes</b> mode):
+    </label>
+    Example: 10vh or 6em
+  </div>
+
+  <div>
+    <label>User stylesheet (add any CSS you like):</label>
+    <a href="/docs/user-styles.html">(documentation)</a>
+    <textarea id="userStyles" name="userStyles"
+      placeholder="see /themes/tk-night.css for an example"></textarea>
+  </div>
+
+  <div>
+    <label>
+    <input type="checkbox" id="showFavicons" name="showFavicons">
+    Show favicons (site icons)?
+    </label>
+    <button type="button" id="backfillFavicons">
+      Fetch missing favicons
+    </button>
+    <span id="backfillFaviconsStatus" role="status"></span>
+  </div>
+
+  <div>
+    <label>
+    <input type="checkbox" id="compactMode" name="compactMode">
+    Compact mode (reduce row padding)?
+    </label>
+  </div>
+
+
+  <h2>Tree View behavior</h2>
+
+  <div>
+    <label>
+    <input type="checkbox" id="cursorFollowsActiveTab"
+                           name="cursorFollowsActiveTab">
+    Tree view
+    <span class="row cursor loaded collapsed"><span class="row-title"><span class="url-title">cursor</span></span></span>
+    follows
+    <span class="row active loaded"><b class="url-title">active (focused) tab?</b></span>
+    </label>
+  </div>
+
+  <div>
+    <label>
+    <input type="checkbox" id="activeTabExpandsItsParents"
+                           name="activeTabExpandsItsParents">
+    While following active tab, expand the tab's parents?
+    </label>
+  </div>
+
+  <div>
+    <label>
+    <input type="checkbox" id="pinnedTabsOpenNewTabsPinnedToo"
+                           name="pinnedTabsOpenNewTabsPinnedToo">
+    When a
+    <span class="row loaded"><span class="url-title">
+      <span class="icon pinned"> </span> pinned tab</span></span>
+    is active and a new tab is opened, pin the new tab too?
+    </label>
+  </div>
+
+  <div>
+    <label>
+    <input type="checkbox" id="convertFromWindowWhenDroppedIntoWindow"
+                           name="convertFromWindowWhenDroppedIntoWindow">
+    Convert
+    <span class="row loaded window"><span class="node-label">loaded window</span></span>
+    into a
+    <span class="row loaded"><span class="node-label">heading</span></span>
+    when moved into another window?
+    </label>
+  </div>
+
+  <div>
+    <label>
+    <input type="checkbox" id="hideTopButtonsDuringSearch"
+                           name="hideTopButtonsDuringSearch">
+    Hide
+    <span id="top-area" class="inline"><span class="toolbar"><span class="button">Top</span>&nbsp;<span class="button">bar</span>&nbsp;<span class="button">buttons</span></span></span>
+    during a search?
+    </label>
+  </div>
+
+  <div class="isFirefox">
+    <label>
+    <input type="checkbox" id="hideCollapsedTabs"
+                           name="hideCollapsedTabs">
+    Hide tabs in browser's tab bar when those tabs are in a collapsed branch?
+    (Firefox-based browsers only)
+    </label>
+  </div>
+
+  <div>
+    <label>
+    <select id="loadExpandedBranchStyle" name="loadExpandedBranchStyle">
+      <option value="ask">Ask what to do</option>
+      <option value="one">Load parent only</option>
+      <option value="all">Load entire branch without asking</option>
+    </select>
+    When
+    <b class="row loaded"><span class="url-title">loading</span></b>
+    an expanded parent node with saved tabs
+    </label>
+  </div>
+
+  <div>
+    <label>
+    <select id="loadCollapsedBranchStyle" name="loadCollapsedBranchStyle">
+      <option value="ask">Ask what to do</option>
+      <option value="one">Load parent only</option>
+      <option value="all">Load entire branch without asking</option>
+    </select>
+    When
+    <b class="row loaded"><span class="url-title">loading</span></b>
+    a collapsed parent node with saved tabs
+    </label>
+  </div>
+
+  <div>
+    <label>
+    <select id="unloadExpandedBranchStyle" name="unloadExpandedBranchStyle">
+      <option value="ask">Ask what to do</option>
+      <option value="one">Unload parent only</option>
+      <option value="all">Unload entire branch without asking</option>
+    </select>
+    When
+    <b class="row"><span class="url-title">unloading</span></b>
+    an expanded parent node
+    </label>
+  </div>
+
+  <div>
+    <label>
+    <select id="unloadCollapsedBranchStyle" name="unloadCollapsedBranchStyle">
+      <option value="ask">Ask what to do</option>
+      <option value="one">Unload parent only</option>
+      <option value="all">Unload entire branch without asking</option>
+    </select>
+    When
+    <b class="row"><span class="url-title">unloading</span></b>
+    a collapsed parent node
+    </label>
+  </div>
+
+  <div>
+    <label>
+    <select id="deleteExpandedBranchStyle" name="deleteExpandedBranchStyle">
+      <option value="ask">Ask what to do</option>
+      <option value="one">Delete parent and promote all children</option>
+      <option value="all">Delete entire branch without asking</option>
+    </select>
+    When <span class="delete-button">deleting</span> an expanded parent node
+    </label>
   </div>
 
 
@@ -293,100 +514,6 @@
     </p>
   </div>
 
-  <h2>Appearance</h2>
-
-  <div>
-    <p>
-    <label for="fontSize">Font Size:</label>
-    <select id="fontSize" name="fontSize">
-      <option value="0.85rem">Extra Small</option>
-      <option value="1rem">Small</option>
-      <option value="1.15rem">Medium (Default)</option>
-      <option value="1.3rem">Large</option>
-      <option value="1.5rem">Extra Large</option>
-    </select>
-    or custom:
-    <input type="text" id="fontSizeCustom" name="fontSizeCustom"
-      placeholder="e.g. 14px" class="short-input">
-    </p>
-  </div>
-
-  <div>
-    <p>
-    <label for="fontFamily">Font Family:</label>
-    <select id="fontFamily" name="fontFamily">
-      <option value="Arial, Tahoma, Geneva, sans-serif">Arial (Default)</option>
-      <option value="'DejaVu Sans', Arial, sans-serif">DejaVu Sans</option>
-      <option value="'Quicksand Medium', Tahoma, Geneva, sans-serif">Quicksand Medium</option>
-      <option value="'Segoe UI', Tahoma, Geneva, sans-serif">Segoe UI</option>
-      <option value="Verdana, Geneva, sans-serif">Verdana</option>
-      <option value="'Trebuchet MS', Arial, sans-serif">Trebuchet MS</option>
-      <option value="Georgia, serif">Georgia</option>
-      <option value="'Courier New', monospace">Courier New (Monospace)</option>
-      <option value="monospace">System Monospace</option>
-    </select>
-    </p>
-    <p>
-    or custom:
-    <input type="text" id="fontFamilyCustom" name="fontFamilyCustom"
-      placeholder="e.g. 'My Font', sans-serif" style="min-width: 20em;">
-    </p>
-  </div>
-
-  <div>
-    <p>
-    <label for="rowHeight">Row Height:</label>
-    <select id="rowHeight" name="rowHeight">
-      <option value="1.2rem">Compact</option>
-      <option value="1.5rem">Normal (Default)</option>
-      <option value="1.8rem">Comfortable</option>
-      <option value="2.2rem">Spacious</option>
-    </select>
-    or custom:
-    <input type="text" id="rowHeightCustom" name="rowHeightCustom"
-      placeholder="e.g. 20px" class="short-input">
-    </p>
-  </div>
-
-  <div>
-    <p>
-    <label for="indentWidth">Indent Width:</label>
-    <select id="indentWidth" name="indentWidth">
-      <option value="0.5rem">Narrow</option>
-      <option value="0.8rem">Normal (Default)</option>
-      <option value="1.2rem">Wide</option>
-      <option value="1.6rem">Extra Wide</option>
-    </select>
-    or custom:
-    <input type="text" id="indentWidthCustom" name="indentWidthCustom"
-      placeholder="e.g. 12px" class="short-input">
-    </p>
-  </div>
-
-  <div>
-    <p>
-    <label>
-    <input type="checkbox" id="showFavicons" name="showFavicons" checked>
-    Show favicons (site icons)
-    </label>
-    </p>
-    <p>
-    <button id="backfillFavicons">Fetch missing favicons</button>
-    <span id="backfillFaviconsStatus"></span>
-    <br>
-    <small>For old/imported tabs without favicons, fetches icons using Google's favicon service.</small>
-    </p>
-  </div>
-
-  <div>
-    <p>
-    <label>
-    <input type="checkbox" id="compactMode" name="compactMode">
-    Compact mode (reduce padding)
-    </label>
-    </p>
-  </div>
-
   <h2>Keyboard Shortcuts</h2>
 
   <p>
@@ -423,12 +550,14 @@
     <input type="checkbox" id="humanFriendlyBackups" name="humanFriendlyBackups">
     Human readable backup files
     </label>
+    (larger, "pretty printed" json)
   </div>
 
   <div>
     <p>
     Automatic local backups are saved to your "Downloads" folder if enabled.
     Set to 0 to disable this.  1 day = 24, 1 week = 168, 1 month = 720.
+    <small>(recommended: 1 to 24 hours)</small>
     </p>
     <label>
     <input type="number" id="localBackupHours" name="localBackupHours"
@@ -483,30 +612,30 @@
   extension), unzip it with <code>zstd -d myfile.json.zst</code> or
   <code>unzstd myfile.json.zst</code>.</p>
 
-  <h3>TKTSTO files</h3>
+  <h4>TKTSTO files</h4>
   <div class="file-input">
   <!-- <form id="tktsto-import-form" accept-charset="utf-8"> -->
-    <input type="file" id="tktsto-file-input">
-    <button id="tktsto-file-button">Restore</button>
+    <input type="file" id="tktsto-file-input"
+      accept=".json,application/json">
+    <button type="button" id="tktsto-file-button">Restore</button>
     <!-- </form> -->
   </div>
 
-  <h3>Tabs Outliner files</h3>
+  <h4>Tabs Outliner files</h4>
   <p>If you used Tabs Outliner and have session file backups, import those
   here.</p>
 
   <div class="file-input">
   <!-- <form id="tabs-outliner-import-form" accept-charset="utf-8"> -->
-    <input type="file" id="tabs-outliner-file-input" />
-    <button id="tabs-outliner-file-button">Import</button>
+    <input type="file" id="tabs-outliner-file-input"
+      accept=".tree,.html,text/html" />
+    <button type="button" id="tabs-outliner-file-button">Import</button>
   <!-- </form> -->
   </div>
 
 
   <!-- TODO:
-    - Re-use css from tree view
     - Split config options into multiple tabs
-    - Select theme / stylesheet for tree views
     - User styles text widget
     - Configure server URL and type
       - None (local manual snapshots only)

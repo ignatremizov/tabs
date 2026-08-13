@@ -22,15 +22,6 @@ export class NodeView extends Node {
     this.$nodes = null;  // <ul>
   }
 
-  async newNodeId () {
-    // NodeView.newNodeId() and NodeStore.newNodeId()
-    // are totally different, and Node.newNodeId() doesn't exist
-    //super.newNodeId();  // unnecessary, doesn't exist
-    const nextId = await emit('bkgd_newNodeId');
-    //debug('NodeView.newNodeId():', nextId);
-    return nextId;
-  }
-
   $render () {
     //debug('NodeView.$render');
     if (!this.tree.document) return;
@@ -41,13 +32,14 @@ export class NodeView extends Node {
     if (! this.$) this.$ = doc.createElement('li');
     this.$.id = `node${this.id}`;
     this.$.classList.add('node');
-    if (this.hasKids() && this.isExpanded()) {
-      this.$.classList.add('expanded');
-      this.$.classList.remove('collapsed', 'leaf');
-    }
-    else if (this.hasKids() && this.isCollapsed()) {
-      this.$.classList.add('collapsed');
-      this.$.classList.remove('expanded', 'leaf');
+    if (this.hasKids()) {
+      if (this.isExpanded()) {
+        this.$.classList.add('expanded');
+        this.$.classList.remove('collapsed', 'leaf');
+      } else {
+        this.$.classList.add('collapsed');
+        this.$.classList.remove('expanded', 'leaf');
+      }
     }
     else {
       this.$.classList.add('leaf');
@@ -96,6 +88,29 @@ export class NodeView extends Node {
       this.$renderDetails(this.tree.$detailsBox);
     }
 
+    if (this.nodeClasses) {  // doc page style overrides
+      this.$.classList.add(...this.nodeClasses);
+    }
+
+    // maybe add a mouse cursor (for documentation pages)
+    if (undefined !== this.pointer) {
+      this.tree.$pointer = doc.createElement('img');
+      const $pointer = this.tree.$pointer;
+      $pointer.classList.add('pointer');
+      if (this.pointerImg)
+        $pointer.src = api.runtime.getURL(`/img/${this.pointerImg}`);
+      else $pointer.src = api.runtime.getURL('/img/pointer.svg');
+      $pointer.style.left = `${this.pointer*100}%`;
+      $pointer.style.top = '33%';
+      $pointer.style.display = 'block';
+      if (this.pointerOpacity) $pointer.style.opacity = this.pointerOpacity;
+      if (! this.pointerSize) this.pointerSize = 1.0;
+      $pointer.style.width = $pointer.style.height = `${this.pointerSize * 3}rem`;
+      this.$row.style.position = 'relative';
+      this.$row.style.overflow = 'visible';
+      this.$row.appendChild($pointer);
+    }
+
     // add to parent (nope, nevermind, let the parent do that on its own)
     // needs a way to specify where to insert the new node
     //if (!this.parent) return;
@@ -105,7 +120,7 @@ export class NodeView extends Node {
   }
 
   $destroy () {
-    debug('NodeView.$destroy');
+    //debug('NodeView.$destroy');
     if (this.$) {
       //debug('remove');
       this.$.remove();
@@ -116,6 +131,8 @@ export class NodeView extends Node {
     // Build DOM safely without innerHTML
     const doc = this.tree.document;
     this.$row.textContent = '';  // start empty
+
+    const cfg = this.tree.cfg;
 
     // reset classes
     //this.$row.className = 'row';
@@ -146,8 +163,9 @@ export class NodeView extends Node {
     else this.$row.classList.remove('frozen');
     if (this.hidden) this.$row.classList.add('tab-hidden');
     else this.$row.classList.remove('tab-hidden');
-    if (this.pinned) this.$row.classList.add('pinned');
-    else this.$row.classList.remove('pinned');
+    // incognito
+    if (this.isIncognito()) this.$row.classList.add('incognito');
+    else this.$row.classList.remove('incognito');
 
     // title row text
     // full row: [3/14] [X] @ Label Text ~ <a href="link">Link Title</a>
@@ -156,42 +174,82 @@ export class NodeView extends Node {
     let urlTitle = this.title ? this.title : this.url;  // handle blank title
 
     // node stats
-    if (this.hasKids() && this.isCollapsed()) {
+    // unsure if always include stats or only when collapsed
+    //if (this.hasKids()) {  // always
+    if (this.hasKids()
+      && (this.isCollapsed() || cfg.alwaysShowNodeStats)
+    ) {  // only when collapsed or user config forces it
+      const nodeStats = [];  // Array<[Number, String]>
+      const totalChildren = this.countNodes();
+      //  count all open descendants
       const openChildren = this.countNodes(
         function (node) { return node.isLoaded(); }
       );
-      const totalChildren = this.countNodes();
-      const $stats = doc.createElement('span');
-      $stats.className = 'node-stats';
-      if (openChildren > 0) {
-        $stats.append('[');
-        const $open = doc.createElement('span');
-        $open.className = 'node-stat-open';
-        $open.textContent = openChildren;
-        $stats.append($open, '/');
-        const $total = doc.createElement('span');
-        $total.className = 'node-stat-total';
-        $total.textContent = totalChildren;
-        $stats.append($total, '] ');
-      } else {
-        $stats.append('[');
-        const $total = doc.createElement('span');
-        $total.className = 'node-stat-total';
-        $total.textContent = totalChildren;
-        $stats.append($total, '] ');
+      nodeStats.push([openChildren, 'open']);
+      const $nodeStats = doc.createElement('span');
+      // count pink tabs, maybe
+      if (cfg.wasLoadedNodeStats) {
+        const wasLoadedChildren = this.countNodes(
+          (n) => n.isWasLoadedTab(),
+          (n) => (! n.isWindow()),
+        );
+        nodeStats.push([wasLoadedChildren, 'was-loaded']);
       }
-      this.$row.append($stats);
+      nodeStats.push([totalChildren, 'total']);
+
+      $nodeStats.className = 'node-stats';
+      $nodeStats.append('[');
+      let segments = 0;
+      for (const [num, type] of nodeStats) {
+        if (num > 0) {
+          segments ++;
+          const $span = doc.createElement('span');
+          $span.className = `node-stat-${type}`;
+          $span.textContent = num;
+          if ((2 == segments) && ('was-loaded' === type)) $nodeStats.append('+');
+          else if (segments > 1) $nodeStats.append('/');
+          $nodeStats.append($span);
+        }
+      }
+      $nodeStats.append('] ');
+      this.$row.append($nodeStats);
+    }
+
+    // pinned tabs and stuff
+    let pinnedState;
+    if (this.isPinnedBranch() && this.hasLoadedTabs()) {
+      // "Pinned" parent label (with loaded tabs, so it's locked in place)
+      pinnedState = { row: ['pinned', 'pinned-branch'],
+        icon: 'pinned-branch-anchored' };
+    } else if (this.isPinnedBranch() && (! this.hasLoadedTabs())) {
+      // "Pinned" parent label (without loaded tabs, so it's not locked)
+      pinnedState = { row: ['pinned', 'pinned-branch'], icon: 'pinned-branch' };
+    } else if (this.isPinned()) {
+      // other pinned node
+      pinnedState = { row: ['pinned'], icon: 'pinned' };
+    }
+    if (pinnedState) {
+      this.$row.classList.add(...pinnedState.row);
+      const $pinnedIcon = doc.createElement('span');
+      $pinnedIcon.className = `icon ${pinnedState.icon}`;
+      if (! this.isPinnedBranch()) {
+        $pinnedIcon.classList.add('node-pin-icon');
+        $pinnedIcon.title = 'Pinned tab';
+        $pinnedIcon.setAttribute('aria-label', 'Pinned tab');
+      }
+      this.$row.append($pinnedIcon);
+    } else {
+      this.$row.classList.remove('pinned', 'pinned-branch');
     }
 
     // checkbox
     if (this.hasCheckbox()) {
       let cbType = this.getCheckboxType();
-      let cbText = this.checkbox;
-      if (' ' === this.checkbox) cbText = '\u00A0';  // non-breaking space
-      if ('percent' === cbType) {
-        if (! this.checkboxPx) this.checkboxPx = 0.0;
-        cbText = String(Math.floor((this.checkboxPx * 100))) + '%';
+      let cbText = this.checkboxText();
+      if (' ' === this.checkbox) cbText = '\u00A0';  // &nbsp;
+      if (['percent', 'ratio'].includes(cbType)) {
         if (this.checkboxPx > 0.999) cbType = cbType + ' done';
+        else if (this.checkboxPx > 0.499) cbType = cbType + ' half-done';
       }
       const $ckbox = doc.createElement('div');
       $ckbox.className = 'node-checkbox ' + cbType;
@@ -199,14 +257,14 @@ export class NodeView extends Node {
       this.$row.append($ckbox);
     }
 
-    // pinned tab marker
-    if (this.pinned) {
-      const $pinIcon = doc.createElement('span');
-      $pinIcon.className = 'node-pin-icon';
-      $pinIcon.textContent = '📌';
-      $pinIcon.title = 'Pinned tab';
-      $pinIcon.setAttribute('aria-label', 'Pinned tab');
-      this.$row.append($pinIcon);
+    // bookmarks (locked saved tabs)
+    if (this.isBookmark()) {
+      this.$row.classList.add('bookmark');
+      const $bookmarkIcon = doc.createElement('span');
+      $bookmarkIcon.className = 'icon bookmark';
+      this.$row.append($bookmarkIcon);
+    } else {
+      this.$row.classList.remove('bookmark');
     }
 
     // favicon
@@ -219,7 +277,7 @@ export class NodeView extends Node {
       this.$row.append($favicon);
     }
 
-    // note icon
+    // indicate when there's a long note attached
     if (this.note) {
       const $noteIcon = doc.createElement('span');
       $noteIcon.className = 'node-note-icon';
@@ -249,10 +307,18 @@ export class NodeView extends Node {
         $title.append($a);
       }
       else {  // label only
-        const $labelSpan = doc.createElement('span');
-        $labelSpan.className = 'node-label';
-        $labelSpan.textContent = this.label;
-        $title.append($labelSpan);
+        // dividers
+        if (['-', '='].includes(this.label)) {
+          const $hr = doc.createElement('hr');
+          $hr.className = 'node-divider1';
+          if ('=' === this.label) $hr.className = 'node-divider2';
+          $title.append($hr);
+        } else {  // normal label
+          const $labelSpan = doc.createElement('span');
+          $labelSpan.className = 'node-label';
+          $labelSpan.textContent = this.label;
+          $title.append($labelSpan);
+        }
       }
     }
     else if (this.url) {  // href only
@@ -282,13 +348,23 @@ export class NodeView extends Node {
     if (this.isWindow() && (! this.isLoaded())) {  // note closed windows
       $title.append(' (closed)');
     }
+    if (this.isWindow() && this.isIncognito()) {
+      $title.append(' (private)');
+    }
     this.$row.append($title);
 
+    // let user drag-n-drop rows to reorganize the tree
     this.$row.setAttribute('draggable', true);
+
+    if (this.rowClasses) {  // doc page style overrides
+      this.$row.classList.add(...this.rowClasses);
+    }
+
   }
 
   $renderDetails ($detailsBox) {
-    if (!this.tree.document) return;
+    if (! $detailsBox) return;
+    if (! this.tree.document) return;
     const doc = this.tree.document;
     const mode = this.tree.detailsState;
 
@@ -391,10 +467,22 @@ export class NodeView extends Node {
     if (mode <= 1) hide($nodeId);
     else setLabeledDetail($nodeId, 'ID', this.id);
 
+    // parent ID
+    //let $parentId = getOrCreate('detail-parent-id', 'div');
+    //if (mode <= 1) hide($parentId);
+    //else setOrHide($parentId, this.parent.id, null,
+    //  'Parent', `${this.parent.id}`);
+
     // tab ID
     let $tabId = getOrCreate('detail-node-tabid', 'div');
     if (mode <= 1) hide($tabId);
     else setLabeledDetail($tabId, 'Tab', this.tabId);
+
+    // window ID
+    let $windowId = getOrCreate('detail-node-windowid', 'div');
+    if (mode <= 1) hide($windowId);
+    else setOrHide($windowId, this.windowId, null, 'Window',
+      `${this.windowId}`);
 
     // ctime, mtime, atime, ...
     for (const tName of ['ctime', 'mtime', 'atime']) {
@@ -423,8 +511,7 @@ export class NodeView extends Node {
   $renderChildren () {
     this.$render();
     if (this.$nodes) this.$nodes.replaceChildren();
-    // FIXME: if ('window' === viewScope),
-    // render and behave as if all child windows are collapsed
+    // this.isExpanded() handles viewScope modes for us
     if (this.isExpanded()) {
       for (const node of this.nodes) {
         this.$insertChild(node, node.indexOf());
@@ -442,6 +529,7 @@ export class NodeView extends Node {
   }
 
   async renderIfChanged (promise, updateParents = false) {
+    await this.tree.treeViewLoaded;
     // do it
     const changed = await promise;
     // show it
@@ -450,16 +538,19 @@ export class NodeView extends Node {
       // update affected parents
       if (updateParents) this.$refreshAncestry();
     }
+    return changed;
   }
 
   async deleteSelf (...extra) {
+    await this.tree.treeViewLoaded;
     if (this.isRoot()) return;  // never delete root
     let newCursor;
     if (this.isCursor()) {
+      const viewRoot = this.tree.viewRoot;
       // move to next row when possible
-      newCursor = this.nextVisibleNode();
+      newCursor = this.nextVisibleNodeNotMyChild(viewRoot);
       // move to prev row if cursor is already on the last row
-      if (newCursor === this) newCursor = this.prevVisibleNode();
+      if (newCursor === this) newCursor = this.prevVisibleNode(viewRoot);
     }
     const oldParent = this.parent;
     const changed = await super.deleteSelf(...extra);
@@ -474,6 +565,7 @@ export class NodeView extends Node {
   }
 
   async addChild (index, details, ...extra) {
+    await this.tree.treeViewLoaded;
     //debug('NodeView.addChild():', details);
     // index is required; assume 1st child if not given
     if (undefined === index) index = 0;
@@ -481,13 +573,16 @@ export class NodeView extends Node {
     const prevNodeAtIndex = this.nodes[index];
 
     // must allocate ID before creating node and emitting notifications
-    if (! details.id) { details.id = await this.newNodeId(); }
+    if (! details.id) { details.id = await this.tree.newNodeId(); }
     // create new Node object
     const newNode = await super.addChild(index, details, ...extra);
     //newNode.window = this.window;  // redundant?
 
     // display it
-    if (details.render && newNode.isChildOf(this.tree.viewRoot, true)) {
+    if (details.render
+      && this.isExpanded()
+      && newNode.isChildOf(this.tree.viewRoot, true)
+    ) {
       // ensure our elements exist before modifying them
       if (! this.$nodes) this.$render();
 
@@ -503,6 +598,8 @@ export class NodeView extends Node {
       } else {
         this.$nodes.appendChild(newNode.$);
       }
+    }
+    if (details.render) {
       // refresh displayed info
       this.$refreshAncestry();
     }
@@ -537,35 +634,35 @@ export class NodeView extends Node {
   }
 
   async setNotes (...args) {
-    await this.renderIfChanged(super.setNotes(...args));
+    // if user edits "Pinned" branch, it needs to update kids too
+    const wasPinned = this.isPinned();
+
+    const changed = await this.renderIfChanged(super.setNotes(...args));
+
+    // if pinned status changed, refresh this node and all children
+    if (wasPinned !== this.isPinned()) this.$renderChildren();
+
+    return changed;
   }
 
   async setCheckbox (...args) {
-    await this.renderIfChanged(super.setCheckbox(...args));
+    return await this.renderIfChanged(super.setCheckbox(...args));
   }
 
   async updateCheckboxes (...args) {
-    await this.renderIfChanged(super.updateCheckboxes(...args));
+    return await this.renderIfChanged(super.updateCheckboxes(...args));
   }
 
   async setTabFields (...args) {
-    await this.renderIfChanged(super.setTabFields(...args), true);
+    return await this.renderIfChanged(super.setTabFields(...args), true);
   }
 
   async load (...args) {
-    await this.renderIfChanged(super.load(...args), true);
+    return await this.renderIfChanged(super.load(...args), true);
   }
 
   async unload (...args) {
-    await this.renderIfChanged(super.unload(...args), true);
-  }
-
-  scrollIntoView () {
-    if (this.$row) this.$row.scrollIntoView({
-      behavior: "instant",  // smooth or instant
-      block: "nearest",  // vertical scroll policy, "nearest" or "center"
-      inline: "start"  // horizontal, left
-    });
+    return await this.renderIfChanged(super.unload(...args), true);
   }
 
   scrollToTop () {
@@ -577,6 +674,7 @@ export class NodeView extends Node {
   }
 
   isCursor () {
+    // TODO: or if classList contains 'cursor' ?
     return (this === this.tree.cursor);
   }
 
@@ -593,13 +691,56 @@ export class NodeView extends Node {
   }
 
   async moveTo (destParent, destIndex, ...extra) {
+    await this.tree.treeViewLoaded;
+    const viewRoot = this.tree.viewRoot;
+    const viewScope = this.tree.viewScope;
+    // save some info before moving...
     const oldParent = this.parent;
+    let wasInViewScope = true;
+    if ('window' === viewScope) wasInViewScope = this.isInViewScope();
+    const wasPinned = this.isPinned();
+    const destWasExpanded = destParent.isExpanded();
+    const wasOverride = this.isExpandedOverride();
+    const wasExpanded = this.isExpanded();
+    const wasVisible = this.isVisible();
+
+    // move it
     const changed = await super.moveTo(destParent, destIndex, ...extra);
-    if (! changed) return;
+    if (! changed) return false;
 
     destParent.$insertChild(this, destIndex);
     // refresh old parent if needed
     if (oldParent != destParent) oldParent.$refreshAncestry();
+
+    let needsKidsRendered = false;
+    // if pinned status changed, refresh this node and all children
+    // (or if there are override shenanigans happening)
+    if ((wasPinned !== this.isPinned()) || wasOverride)
+      needsKidsRendered = true;
+
+    if (((! wasVisible) || (! wasExpanded))
+      && (this.isExpanded())
+    ) needsKidsRendered = true;
+
+    // if destination got expanded by this, re-render it
+    if ((! destWasExpanded) && destParent.isExpanded())
+      destParent.$renderChildren();
+
+    // "this window only" mode needs extra care
+    if ('window' === viewScope) {
+      // if our window node was moved and we're a window-only view,
+      // redraw the tree
+      if (this === viewRoot) this.tree.$renderWholeTree();
+
+      // if old parent outside current view and new parent in current view,
+      // force render
+      else if (this.isInViewScope() && (! wasInViewScope)) {
+        debug(`NodeView.moveTo(): moved into viewScope`);
+        needsKidsRendered = true;
+      }
+    }
+
+    if (needsKidsRendered) this.$renderChildren();
 
     // update the #marked-count widget
     // (can change when nodes move into / out of marked nodes)
@@ -611,56 +752,213 @@ export class NodeView extends Node {
     // (when the user moved tabs via the tab bar)
     this.tree.ensureCursorVisible();
 
-    // "this window only" mode needs extra care
-    if ('window' === this.tree.viewScope) {
-      const viewRoot = this.tree.viewRoot;
-      // if our window node was moved and we're a window-only view,
-      // redraw the tree
-      if (this === viewRoot) this.tree.$renderWholeTree();
-
-      // if old parent outside current view and new parent in current view,
-      // force render
-      else if (this.isChildOf(viewRoot)
-        && (! oldParent.isChildOf(viewRoot))
-      )
-        this.$renderChildren();
-    }
-
     // ensure cursor is in the viewport
-    if (this === this.tree.cursor) this.scrollIntoView();
+    if (this === this.tree.cursor) this.tree.scrollNodeIntoView(this);
+
+    // report success
+    return true;
   }
 
-  async setExpanded (expanded, ...extra) {
-    const wasExpanded = this.expanded;
-    await super.setExpanded(expanded, ...extra);
+  isInViewScope () {
+    // in Session mode, everything is in scope
+    if ('window' !== this.tree.viewScope) return true;
+
+    const viewRoot = this.tree.viewRoot;
+
+    // our root is always visible, by definition
+    if (this === viewRoot) return true;
+
+    // all children of viewRoot are in view scope
+    if (viewRoot.isParentOf(this)) return true;
+
+    // otherwise not in scope
+    return false;
+  }
+
+  isExpandedOverride () {
+    // check if we're overridden
+    for (const [ nodeId, node ]
+      of Object.entries(this.tree.expandOverrides || {})
+    ) {
+      //if (this === node) return node;
+      if (this.isParentOf(node)) return node;
+    }
+    return false;
+  }
+
+  isExpanded (allowOverrides = true) {
+    if (allowOverrides && this.isExpandedOverride()) return true;
+
+    // Session mode is simple, no viewRoot shenanigans needed
+    if ('window' !== this.tree.viewScope) return this.expanded;
+    // in "Window" view mode,
+    // our viewRoot has its own local override, not saved to the DB
+    if (this === this.tree.viewRoot) {
+      // initial value is "expanded"
+      if (undefined === this.viewRootExpanded) this.viewRootExpanded = true;
+      return this.viewRootExpanded;
+    }
+    // all parents of the viewRoot are treated as "expanded"
+    if (this.isParentOf(this.tree.viewRoot)) return true;
+    // otherwise just tell the truth
+    return this.expanded;
+  }
+
+  isCollapsed () {
+    return (! this.isExpanded());
+  }
+
+  async setExpanded (expanded, args) {
+    await this.tree.treeViewLoaded;
+    let wasExpanded;
+    let changed;
+    const overrideNode = this.isExpandedOverride();
+
+    // special case for view root in window mode
+    // (because its expanded state is fake)
+    if ( (this === this.tree.viewRoot)
+      && ('window' === this.tree.viewScope)
+    ) {
+      if ('userAction' === args.reason) {
+        // fake expanded state, this view only
+        wasExpanded = this.isExpanded();
+        this.viewRootExpanded = expanded;
+        changed = (expanded !== wasExpanded);
+      } else {
+        // apply changes to keep tree in sync,
+        // but otherwise pretend it didn't happen
+        // (don't update the view)
+        await super.setExpanded(expanded, args);
+        changed = false;
+      }
+    }
+    // local view-specific override, doesn't change the node
+    else if (args.localOverride
+      && (['userAction','override'].includes(args.reason))
+    ) {
+      // fake expanded state, this view only
+      wasExpanded = this.expanded;
+      //changed = (expanded !== wasExpanded);
+      changed = true;  // always redraw
+      //debug(`localOverride: ${wasExpanded} => ${expanded}`);
+      // un-override it if we set it to the original state
+      //if (expanded === wasExpanded)
+      //  this.tree.expandOverride(this, null);
+    }
+    else if (overrideNode && ('userAction' === args.reason)) {
+      // we are a parent of an override node, so...
+      // un-override it, and override our own parent instead?
+      debug(`parent of override: expand=${expanded}`, this, overrideNode);
+      wasExpanded = this.isExpanded();
+      if (overrideNode !== this) {
+        this.tree.expandOverride(this.parent, true);
+      }
+      this.tree.expandOverride(overrideNode, null);
+      changed = await super.setExpanded(expanded, args)
+        || (expanded !== wasExpanded);
+    }
+    else {
+      wasExpanded = this.isExpanded();
+      // remove node from overrides
+      if (overrideNode) this.tree.expandOverride(overrideNode, null);
+
+      changed = await super.setExpanded(expanded, args)
+        || (expanded !== wasExpanded);
+      //debug(`noOverride: ${wasExpanded} => ${expanded} => ${this.expanded}`);
+    }
 
     // if no change, do nothing
-    if (wasExpanded === this.expanded) return;
+    if (! changed) return;
 
-    // if collapsing, delete subtree and show stats
-    if (wasExpanded) {
-      this.$destroyChildren();
-      // TODO: update + show stats
-      this.$render();
-      // promote the cursor if we just hid it in a fold
-      this.tree.ensureCursorVisible();
+    // only render stuff which is in scope
+    if (this.isInViewScope()) {
+      // if expanding, create subtree and hide stats
+      if (expanded) {
+        //debug(`expand`);
+        this.$renderChildren();
+        this.$render();
+      }
+      // if collapsing, delete subtree and show stats
+      else {
+        //debug(`collapse`);
+        this.$destroyChildren();
+        this.$render();
+        // promote the cursor if we just hid it in a fold
+        this.tree.ensureCursorVisible();
+      }
     }
-    // if expanding, create subtree and hide stats
-    else {
-      this.$renderChildren();
-      // TODO: hide stats
-      this.$render();
-    }
+
+    return changed;
   }
 
   async setMarked (...args) {
-    await this.renderIfChanged(super.setMarked(...args));
+    const changed = await this.renderIfChanged(super.setMarked(...args));
     // update the #marked-count widget
-    this.tree.updateMarkedCount();
+    if (changed) this.tree.updateMarkedCount();
+    return changed;
   }
 
-  async setActive (...args) {
-    await this.renderIfChanged(super.setActive(...args));
+  async setActive (active, args) {
+    await this.tree.treeViewLoaded;
+    let changed;
+    debug(`NodeView.setActive(${active}): ${this.toLine()}`, this);
+    if (args.localOverride) changed = true;
+    else if (args.onWindowRemoved) changed = true;
+    else changed = super.setActive(active, args);
+    // abort on no-op
+    if (! changed) return;
+
+    // move the cursor maybe
+    // if we're in window mode and the new active tab is in OUR window
+    // or if we're in session mode and the new active tab isn't a TreeView
+    // note: setActive() can be called on a window node too, not just a tab
+    //       so we handle window focus changes here too
+    if (this.tree.cfg.cursorFollowsActiveTab) {
+      const myUrl = api.runtime.getURL('/view/sidepanel.html');
+      const sessionMode = ('session' === this.tree.viewScope);
+      let winNode;
+      if ((! sessionMode) || (! this.isWindow())) {
+        winNode = this.getWindowNode();
+      } else {
+        winNode = this;
+        // active?  focus the current tab
+        // deactivated?  un-override the active tab so parents can collapse
+        // (unless new active tab is a TreeView)
+        if (! active) {
+          // check the active tab of the active window, if we can
+          // ... and if it's a TreeView, don't remove our override
+          const activeWinNode = this.tree.nodes[args.focusedNodeId];
+          const activeTab = activeWinNode?.getActiveTab();
+          if (activeTab?.url !== myUrl) {
+            this.tree.expandOverride(winNode.prevActiveTab, null);
+            winNode = null;
+          }
+        }
+      }
+
+      const isOurWindow = (winNode?.windowId === this.tree.windowId);
+      if (winNode && (sessionMode || isOurWindow)) {
+        const activeTab = winNode.getActiveTab();
+        // don't move cursor if we're focusing our own TreeView in Tab mode
+        // (like, in standalone window mode)
+        if (sessionMode && (myUrl === activeTab?.url)) {}
+        else if (activeTab) {
+          if (this.tree.cfg.activeTabExpandsItsParents) {
+            // force expand new active tab
+            this.tree.expandOverride(activeTab, true);
+            // un-override previous active tab
+            if (activeTab !== winNode.prevActiveTab)
+              this.tree.expandOverride(winNode.prevActiveTab, null);
+          }
+          if (activeTab.hasKids()) activeTab.$renderChildren();
+          // wait for expansion changes to take effect before moving cursor
+          // (otherwise scrolling is glitchy sometimes)
+          setTimeout(() => { this.tree.setCursor(activeTab); }, 1);
+          winNode.prevActiveTab = activeTab;
+        }
+      }
+    }
+    return await this.renderIfChanged(changed);
   }
 
 }  // end class NodeView

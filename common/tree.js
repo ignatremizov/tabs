@@ -3,12 +3,19 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 "use strict";
-import { api, isChrome, isFirefox } from '/api.js';
+import {
+  api, isChrome, isFirefox,
+  isEdge, isBrave, isVivaldi, isMaxthon, isZenBrowser
+} from '/api.js';
 
 import * as common from '/common/common.js';
-const { log, debug, warn, error, emit, jsonSchema, dateTupleStrings } = common;
+const {
+  log, debug, warn, error, emit,
+  jsonSchema, dateTupleStrings, isNewTabPage
+} = common;
 import { Node } from '/common/node.js';
 import { Mutex } from '/common/mutex.js';
+import { Config } from '/common/config.js';
 
 
 export class Tree {
@@ -21,7 +28,12 @@ export class Tree {
       this.resolveTreeLoaded = resolve;
     });
 
+    this.onTabCreatedMutex = new Mutex();
     this.onTabReplacedMutex = new Mutex();
+    this.onMessageMutex = new Mutex();
+
+    // don't run more than one backup simultaneously
+    this.localBackupInProgress = false;
 
     this.markedNodes = [];
     this.pendingMoves = new Map();
@@ -35,6 +47,17 @@ export class Tree {
 
     this.reorderTabsOnCreate = true;
     this.windowsClosing = new Set();
+    this.cfg = new Config();
+    this.cfgDefaults = {
+      clientId: null,
+      humanFriendlyBackups: false,
+      localBackupLastTimeCompleted: 0,
+      hideCollapsedTabs: false,
+      hideCollapsedTabGroups: true,
+      pinnedTabsOpenNewTabsPinnedToo: false,
+      convertFromWindowWhenDroppedIntoWindow: true,
+      reorderTabsOnCreate: true,
+    };
 
     this.createRootNode();
 
@@ -51,6 +74,7 @@ export class Tree {
       'note',
       'title',
       'url',
+      'bookmark',
       'faviconUrl',
       'expanded',
       'loaded',
@@ -81,6 +105,7 @@ export class Tree {
       ['+', 'half-done'],
       ['=', 'half-done'],
       ['%', 'percent'],
+      ['/', 'ratio'],
       ['X', 'done'],
       ['*', 'done'],
       ['F', 'fail'],
@@ -138,27 +163,26 @@ export class Tree {
   destroy () {
   }
 
-  init () {
-    // bkgd only: prevent tab reorder storms
-    if (this.bkgd) this.tabReorderMutex = new Mutex();
-
-    this.initListeners();
-
+  async init () {
     if (this.bkgd) {
-      // TODO: consider per-browser defaults for tab placement behavior.
-      api.storage.local.get({ reorderTabsOnCreate: true }).then((result) => {
-        this.reorderTabsOnCreate = result.reorderTabsOnCreate;
-      });
-      api.storage.onChanged.addListener((changes, area) => {
-        if (area !== 'local') return;
-        if (changes.reorderTabsOnCreate) {
-          this.reorderTabsOnCreate = changes.reorderTabsOnCreate.newValue;
-        }
-      });
+      // prevent tab reorder storms
+      this.tabReorderMutex = new Mutex();
+
+      if (isFirefox)
+        this.cfg.watch('hideCollapsedTabs',
+          this.onHideCollapsedTabsChanged.bind(this), 1000);
     }
+    await this.cfg.init(this.cfgDefaults);
+    this.reorderTabsOnCreate = this.cfg.reorderTabsOnCreate;
+    this.cfg.watch('reorderTabsOnCreate', (key, newValue) => {
+      this.reorderTabsOnCreate = newValue;
+    });
+    this.initListeners();
   }
 
   initListeners () {
+    if (this.isInert) return;  // detached trees shouldn't listen
+
     api.runtime.onMessage.addListener( (msg, sender, sendResponse) => {
       try {
         const result = this.onMessage(msg, sender, sendResponse);
@@ -203,6 +227,12 @@ export class Tree {
       //debug(`unmarking "${nodeId}"`);
       await node.setMarked(false, args);
     }
+  }
+
+  async newNodeId () {
+    const nextId = await emit('bkgd_newNodeId');
+    //debug('Tree.newNodeId():', nextId);
+    return nextId;
   }
 
   async loadTreeFromBkgd () {
@@ -288,7 +318,7 @@ export class Tree {
     return numLoaded;
   }
 
-  async makeBackupObject (rootNode, when) {
+  makeBackupObject (rootNode, when) {
     const obj = {};
     // TODO: actually write and publish the schema file
     obj.$schema = jsonSchema;
@@ -297,9 +327,8 @@ export class Tree {
     obj.metadata.exportDate = Number(when);
     obj.metadata.sessionStartDate = Number(rootNode.ctime);
     // attach the client ID
-    let clientId = '??';
-    const result = await api.storage.local.get('clientId');
-    if (result.clientId) clientId = result.clientId;
+    let clientId = this.cfg.clientId;
+    if (! clientId) clientId = '??';
     obj.metadata.clientId = clientId;
     // attach the actual tree / node data
     obj.nodes = this.serializeNodes(true);
@@ -307,16 +336,18 @@ export class Tree {
   }
 
   async downloadBackupNow () {
+    // abort if backup already running
+    if (this.localBackupInProgress) return;
+    this.localBackupInProgress = true;
+
     await this.treeLoaded;  // wait until tree is ready
 
     const when = new Date();
     const whenMs = Number(when);
     // determine whether to pretty-print the data
-    let prettyPrint = 0;
-    const result = await api.storage.local.get('humanFriendlyBackups');
-    if (result.humanFriendlyBackups) prettyPrint = 2;
+    const prettyPrint = this.cfg.humanFriendlyBackups ? 2 : 0;
     // generate the file's raw data
-    const backup = await this.makeBackupObject(this.root, when);
+    const backup = this.makeBackupObject(this.root, when);
     const jsonString = JSON.stringify(backup, null, prettyPrint);
     const blob = new Blob([jsonString], { type: "application/json" });
     // generate the URL to download
@@ -339,54 +370,55 @@ export class Tree {
     // build a filename
     const clientId = backup.metadata.clientId;
     const date = dateTupleStrings(when);
-    const filename = `tktsto.${date[0]}-${date[1]}-${date[2]}_${date[3]}-${date[4]}-${date[5]}.${clientId}.json`;
+    const filenameRequested = `tktsto.${date[0]}-${date[1]}-${date[2]}_${date[3]}-${date[4]}-${date[5]}.${clientId}.json`;
+    let filename = filenameRequested;
 
     // save the file
-    log(`Tree.downloadBackupNow(): saving to "${filename}"`);
+    log(`downloadBackupNow(): saving to "${filename}"`);
     const downloading = api.downloads.download({
       url: url,
       filename: filename,
       saveAs: false
     });
     let downloadId;
-    function onStarted (id) {
-      downloadId = id;
-      api.storage.local.set({ lastBackupTime: whenMs });
-    }
-    function progress (delta) {
+    const onStarted = (id) => { downloadId = id; };
+    const onProgress = (delta) => {
       //debug('Download delta', delta);
-      if ((delta.id === downloadId)
-        && delta.state && delta.state.current === "complete")
-      {
-        //log(`Download succeeded: ${filename}`);
-        api.downloads.onChanged.removeListener(progress);
-        if (downloadId && api.downloads && api.downloads.search) {
-          api.downloads.search({ id: downloadId }).then((items) => {
-            const info = items && items[0];
-            if (info && info.filename && info.filename !== filename) {
-              log(`Tree.downloadBackupNow(): saved as "${info.filename}" (requested "${filename}")`);
-            }
-          }).catch((err) => {
-            warn(`Tree.downloadBackupNow(): download search failed: ${err}`);
-          });
-        }
-        if (this.setStatus) {
+      if (delta.id !== downloadId) return;
+      // filename changed
+      if (delta.filename?.current) {
+        // "/foo/baz.txt" or "C:\foo\baz.txt" -> "baz.txt"
+        filename = delta.filename.current.split(/[/\\]+/).pop();
+        if (filenameRequested !== filename)
+          log(`downloadBackupNow(): filename changed to "${filename}" from "${filenameRequested}"`);
+      }
+      // download succeeded
+      if ('complete' === delta.state?.current) {
+        //log(`downloadBackupNow(): Download succeeded: ${filename}`);
+        api.downloads.onChanged.removeListener(onProgress);
+        this.cfg.set('localBackupLastTimeCompleted', Date.now());
+        api.storage.local.set({ lastBackupTime: whenMs });
+        this.localBackupInProgress = false;
+        if (this.setStatus)
           this.setStatus(`Saved ${blob.size} bytes to "${filename}"`);
-        }
         try {
           // docs recommend cleaning this up
           // but docs also say this is unavailable in service workers
           // so ... do it when possible, and ignore errors otherwise
           URL.revokeObjectURL(url);
-        } catch (err) {
-        }
+        } catch (err) { }
+      } else if (
+        (!!delta.error?.current) || ('interrupted' === delta.state?.current)
+      ) {
+        onFailed(delta.error?.current || 'Download was interrupted');
       }
-    }
-    function onFailed (err) {
-      warn(`Download failed: ${err}`);
-      api.downloads.onChanged.removeListener(progress);
-    }
-    api.downloads.onChanged.addListener(progress.bind(this));
+    };
+    const onFailed = (err) => {
+      warn(`downloadBackupNow(): Download failed: ${err}`);
+      api.downloads.onChanged.removeListener(onProgress);
+      this.localBackupInProgress = false;
+    };
+    api.downloads.onChanged.addListener(onProgress);
     downloading.then(onStarted, onFailed);
   }
 
@@ -541,13 +573,31 @@ export class Tree {
     return index - pinnedPrefixCount;
   }
 
+  getPinnedBranch (windowNode) {
+    const firstChild = windowNode && windowNode.nodes
+      ? windowNode.nodes[0]
+      : null;
+    return firstChild && firstChild.isPinnedBranch()
+      ? firstChild
+      : null;
+  }
+
   getMovableLoadedTabs (windowNode, excludeNode = null) {
+    const pinnedBranch = this.getPinnedBranch(windowNode);
     return windowNode.getLoadedTabs().filter((node) =>
-      (! node.pinned) && (node !== excludeNode)
+      (node !== excludeNode)
+      && (! node.pinned)
+      && ((! pinnedBranch) || (! node.isChildOf(pinnedBranch)))
     );
   }
 
   getPinnedLoadedTabs (windowNode, excludeNode = null) {
+    const pinnedBranch = this.getPinnedBranch(windowNode);
+    if (pinnedBranch) {
+      return pinnedBranch.getLoadedTabs().filter(
+        (node) => node !== excludeNode
+      );
+    }
     return windowNode.getLoadedTabs().filter((node) =>
       node.pinned && (node !== excludeNode)
     );
@@ -559,7 +609,11 @@ export class Tree {
     const pinnedTabs = this.getPinnedLoadedTabs(windowNode, excludeNode);
     if ((! Number.isInteger(pinnedIndex)) || (pinnedIndex <= 0)
       || (pinnedTabs.length === 0)) {
-      return { destParent: windowNode, destIndex: 0 };
+      const pinnedBranch = this.getPinnedBranch(windowNode);
+      return {
+        destParent: pinnedBranch || windowNode,
+        destIndex: 0
+      };
     }
     if (pinnedIndex >= pinnedTabs.length) {
       const lastPinned = pinnedTabs[pinnedTabs.length - 1];
@@ -578,6 +632,9 @@ export class Tree {
   getFirstMovableInsertDestination (windowNode) {
     // Unpinned tabs must start after the pinned prefix, even when there are no
     // other movable tabs in the tree yet.
+    if (this.getPinnedBranch(windowNode)) {
+      return { destParent: windowNode, destIndex: 1 };
+    }
     const pinnedTabs = this.getPinnedLoadedTabs(windowNode);
     if (pinnedTabs.length === 0) {
       return { destParent: windowNode, destIndex: 0 };
@@ -675,7 +732,10 @@ export class Tree {
     }
     // if nothing in the queue, try searching by window ID
     // TODO: unsure if this ever actually happens
-    if (! savedWindowNode) {
+    if ((! savedWindowNode)
+      // special case: Firefox restarted, windowId=1, but not same window
+      && ('mergeOpenWindowsIntoTree' !== args.reason)
+    ) {
       const found = this.root.findNodes((node) =>
         { return node.isWindow() && (node.windowId === window.id); });
       if (found.length > 0) {
@@ -689,8 +749,8 @@ export class Tree {
         type: 'window',
         windowId: window.id,
         loaded: true,
-        //windowState: window.state,  // TODO
-        //incognito: window.incognito,  // TODO
+        windowState: window.state,
+        incognito: window.incognito,
         geometry: [window.width, window.height, window.left, window.top]
       }, { reason: args.reason });
       // in case a parent tab with child tabs has *already* been moved
@@ -703,20 +763,123 @@ export class Tree {
     // otherwise, create a new node for this window
     const destParent = this.root;
     // TODO: maybe insert at beginning instead of end?
+    //       (or after current window, in same parent?)
     const destIndex = this.root.nodes.length;
-    // TODO: handle window.top, .left, .width, .height
-    //       so it can re-open saved windows at same size+position
-    // TODO: handle window types: normal, incognito, pop-up?, ...
+    // TODO: handle window types: normal, panel, pop-up?, ...
     const newNode = await destParent.addChild(destIndex, {
       type: 'window',
       windowId: window.id,
       loaded: true,
-      //windowState: window.state,  // TODO
-      //incognito: window.incognito,  // TODO
+      windowState: window.state,
+      incognito: window.incognito,
       geometry: [window.width, window.height, window.left, window.top]
     }, { reason: args.reason });
     debug('Tree.onWindowCreated() new window node', newNode);
     return newNode;
+  }
+
+  async onWindowBoundsChanged(win, winNode = null) {
+    if (! winNode) winNode = this.root.getWindowId(win.id);
+    // no node = no problem, because a non-browser window may be focused
+    if (! winNode) return;
+
+    function arraysEqual(a, b) {
+      if ((!a) || (!b)) return false;
+      if (a.length !== b.length) return false;
+      for (let i = 0; i < a.length; i++) { if (a[i] !== b[i]) return false; }
+      return true;
+    }
+
+    // update the window geometry and stuff
+    const changes = {};
+    if (win.width && win.height) {
+      const geometry = [ win.width, win.height, win.left, win.top ];
+      if (! arraysEqual(geometry, winNode.geometry))
+        changes.geometry = geometry;
+    }
+    if ((undefined !== win.state)
+      && (win.state !== winNode.windowState))
+      changes.windowState = win.state;
+    if ((undefined !== win.incognito)
+      && (win.incognito !== winNode.incognito))
+      changes.incognito = win.incognito;
+    if (0 === Object.keys(changes).length) return;  // abort if no changes
+    await winNode.setTabFields(changes, { reason: 'onWindowBoundsChanged' });
+  }
+
+  async checkIfVivaldiPanel (tab) {
+    // Only Vivaldi exposes side panels as tab-like objects.  Running this
+    // heuristic in every Chromium browser can drop a real onCreated event when
+    // tabs.query() briefly lags behind the event.
+    if (! isVivaldi) return false;
+    // cache results
+    if (this.tabBlacklist[`${tab.id}`]) { return true; }
+    // cache miss, check the long way
+    let winTabList = await api.tabs.query({ windowId: tab.windowId });
+    // Vivaldi lists tab.windowId as this window,
+    // but doesn't list tab.id in this window's tabs.
+    let found = winTabList.some(t => t.id === tab.id);
+    if (! found) {
+      // A real newly-created tab can take a moment to appear in query results.
+      await new Promise(resolve => setTimeout(resolve, 25));
+      winTabList = await api.tabs.query({ windowId: tab.windowId });
+      found = winTabList.some(t => t.id === tab.id);
+    }
+    if (! found) {
+      // Vivaldi puts sidePanel "tabs" after the regular tabs
+      //if (tab.index >= winTabList.length) {
+      this.tabBlacklist[`${tab.id}`] = true;
+      debug('ignoring tab which looks like a Vivaldi panel', tab);
+      // TODO: this.cfg.set('isVivaldi', true);
+      return true;
+    }
+    return false;
+  }
+
+  takePendingLoadedNode (tab, tabPendingUrl) {
+    const queue = this.bkgd && this.bkgd.nodesLoading;
+    if (! queue || (queue.length <= 0)) return;
+
+    const normalizeUrl = (url) => {
+      if (! url) return '';
+      return url.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+    };
+    const matchesTab = (node) => {
+      const windowNode = node.getWindowNode(false);
+      if (windowNode
+        && (undefined !== windowNode.windowId)
+        && (null !== windowNode.windowId)
+        && (undefined !== tab.windowId)
+        && (windowNode.windowId !== tab.windowId)) {
+        return false;
+      }
+
+      const expectedUrl = node.pendingUrl || node.url;
+      if ((expectedUrl === tabPendingUrl) || (expectedUrl === tab.url)) {
+        return true;
+      }
+      if (normalizeUrl(expectedUrl) === normalizeUrl(tabPendingUrl)) {
+        return true;
+      }
+      // Firefox substitutes about:blank while opening these protected pages.
+      return isFirefox
+        && ('about:blank' === tab.url)
+        && ['about:newtab', 'about:home'].includes(expectedUrl);
+    };
+
+    const index = queue.findIndex(matchesTab);
+    if (index < 0) return;
+    const [savedTabNode] = queue.splice(index, 1);
+    if (savedTabNode.pendingLoadTimer) {
+      clearTimeout(savedTabNode.pendingLoadTimer);
+      delete savedTabNode.pendingLoadTimer;
+    }
+    debug(`Tree.onTabCreated() loadingSavedTab=${savedTabNode.id}`);
+    if ((queue.length <= 0) && this.bkgd.nodesLoadingMutexUnlock) {
+      this.bkgd.nodesLoadingMutexUnlock();
+      this.bkgd.nodesLoadingMutexUnlock = null;
+    }
+    return savedTabNode;
   }
 
   async onTabCreated (tab) {
@@ -742,56 +905,68 @@ export class Tree {
     //   which doesn't exist yet.  :(
     debug(`Tree.onTabCreated(): Window ID: ${tab.windowId} Tab ID: ${tab.id}, URL: ${tab.url}, pendingUrl: ${tab.pendingUrl}`, tab);
 
-    // if tab was already created, do nothing
-    const tabNode = this.getNodeByTabId(tab.id);
-    if (tabNode) return debug(`Tree.onTabCreated(${tab.id}): already exists`);
-
-    // figure out which URL this new tab is going to
-    const tabPendingUrl = this.getTabPendingUrl(tab);
-
-    // Vivaldi sends this event for sidepanels,
-    // but they can't be used like tabs, so ignore them
-    if (('about:blank' === tabPendingUrl) && isChrome) {
-      let pendingTab;  // allow if *we* opened it; ignore otherwise
-      if (this.bkgd && (this.bkgd.nodesLoading.length > 0)) {
-        pendingTab = this.bkgd.nodesLoading[0];
+    const unlock = await this.onTabCreatedMutex.lock();
+    try {
+      if (isZenBrowser) {
+        const tabArray = await api.tabs.query({ windowId: tab.windowId });
+        if (tabArray.length > 0) {
+          const oldIndex = tab.index;
+          const zeroIndex = tabArray[0].index;
+          tab.index = oldIndex - zeroIndex;
+          debug(`onTabCreated(): Zen tab.index ${oldIndex} - ${zeroIndex} => ${tab.index}`);
+          if (oldIndex < zeroIndex) {
+            debug('onTabCreated(): ignoring Zen non-tab');
+            return;
+          }
+        }
       }
-      if ('about:blank' !== pendingTab) {
-        this.tabBlacklist[`${tab.id}`] = true;
-        debug('ignoring tab which looks like a Vivaldi panel');
+
+      // Multiple browser events can describe the same new tab.
+      const existingTabNode = this.getNodeByTabId(tab.id);
+      if (existingTabNode) {
+        return debug(`Tree.onTabCreated(${tab.id}): already exists`);
+      }
+
+      // figure out which URL this new tab is going to
+      const tabPendingUrl = this.getTabPendingUrl(tab);
+
+      // Explicitly-opened saved tabs are known-good browser tabs.  Match them
+      // before the Vivaldi side-panel heuristic, which can briefly see an empty
+      // tab query while a real tab is still being created.
+      const savedTabNode = this.takePendingLoadedNode(tab, tabPendingUrl);
+
+      // Vivaldi sends tab events for side panels, which are not usable tabs.
+      if ((! savedTabNode)
+        && isChrome
+        && await this.checkIfVivaldiPanel(tab)) {
         return;
       }
-    }
 
-    // are we loading a saved tab?
-    let savedTabNode;
-    if (this.bkgd && (this.bkgd.nodesLoading.length > 0)) {
-      savedTabNode = this.bkgd.nodesLoading.shift();
-      debug(`Tree.onTabCreated() loadingSavedTab=${savedTabNode.id}`);
-    }
-
-    // if we're loading a saved tab,
-    // use that node instead of making a new one
-    if (savedTabNode) {
-      debug(`Tree.onTabCreated(): restoring nodeId=${savedTabNode.id}`);
-      // re-attach this tab to the found Node
-      await savedTabNode.setTabFields({
-        tabId: tab.id,
-        windowId: tab.windowId,
-        loaded: true,
-        discarded: tab.discarded,
-        frozen: tab.frozen,
-        hidden: tab.hidden,
-        incognito: tab.incognito,
-        pinned: Boolean(tab.pinned || savedTabNode.pinned)
-      }, { reason: 'onTabCreated' });
-      // If the browser reports the tab as still unpinned during restore, keep
-      // the saved pinned state until a real pinned update or pin failure lands.
-      if (tab.pinned) savedTabNode.pinRestorePending = false;
-      // put the tab in the right position
-      await savedTabNode.reorderAllTabsInThisWindow();
-      return;
-    }
+      // if we're loading a saved tab,
+      // use that node instead of making a new one
+      if (savedTabNode) {
+        debug(`Tree.onTabCreated(): restoring nodeId=${savedTabNode.id}`);
+        // re-attach this tab to the found Node
+        await savedTabNode.setTabFields({
+          tabId: tab.id,
+          windowId: tab.windowId,
+          loaded: true,
+          discarded: tab.discarded,
+          frozen: tab.frozen,
+          hidden: tab.hidden,
+          incognito: tab.incognito,
+          pinned: Boolean(tab.pinned || savedTabNode.isPinned())
+        }, { reason: 'onTabCreated' });
+        // If the browser reports the tab as still unpinned during restore, keep
+        // the saved pinned state until a real pinned update or pin failure lands.
+        if (tab.pinned) {
+          savedTabNode.pinRestorePending = false;
+          savedTabNode.pinRestorePendingAt = 0;
+        }
+        // put the tab in the right position
+        await savedTabNode.reorderAllTabsInThisWindow();
+        return;
+      }
 
     // find the window Node
     let winNode = this.root.getWindowId(tab.windowId);
@@ -851,10 +1026,22 @@ export class Tree {
         active: true, windowId: tab.windowId });
       const activeTab = activeTabs[0];
       const activeTabNode = winNode.getActiveTab();
+      const loadedTabNodes = winNode.getLoadedTabs();
 
       // if the tab is a blank created by the user with C-t...
       // ... make it the 1st child of the active tab
-      if (isNewTabPage(tabPendingUrl)) {
+      if (tab.pinned) {
+        const dest = this.getPinnedInsertDestination(winNode, tab.index);
+        destParent = dest.destParent;
+        destIndex = dest.destIndex;
+      }
+      else if (activeTabNode?.isPinned()
+        && (! this.cfg.pinnedTabsOpenNewTabsPinnedToo)) {
+        const dest = this.getFirstMovableInsertDestination(winNode);
+        destParent = dest.destParent;
+        destIndex = dest.destIndex;
+      }
+      else if (isNewTabPage(tabPendingUrl)) {
         destParent = activeTabNode;
         if (! destParent) destParent = winNode;
         destIndex = 0;
@@ -891,6 +1078,22 @@ export class Tree {
         destIndex = 0;
         debug(`Tree.onTabCreated(parentByIndex) moving new tab to the right of: "${destParent.toLine()}"`);
       }
+      // if a tab is opened at the far right edge, claim it
+      else if (tab.index >= loadedTabNodes.length) {
+        destParent = activeTabNode || winNode;
+        destIndex = 0;
+        debug(`Tree.onTabCreated(farRightCapture) moving new tab to the right of: "${destParent.toLine()}"`);
+      }
+      // if a tab is restored into the middle, place it after its browser peer
+      else if (undefined !== tab.index) {
+        if (0 === tab.index) destParent = winNode;
+        else destParent = loadedTabNodes[tab.index - 1] || winNode;
+        destIndex = 0;
+        debug(`Tree.onTabCreated(tabIndex) new tab is first child of: "${destParent.toLine()}"`);
+      }
+      else {
+        debug('Tree.onTabCreated(default) not moving new tab');
+      }
     }
     // create the tree node
     await destParent.addChild(destIndex, {
@@ -908,6 +1111,8 @@ export class Tree {
       pinned: Boolean(tab.pinned),
       atime: tab.lastAccessed
       }, { reason: 'onTabCreated' });
+    }
+    finally { unlock(); }
   }
 
   async onTabRemoved (tabId, removeInfo) {
@@ -929,8 +1134,11 @@ export class Tree {
     //  and caused a new service worker to spawn)
     if ('unload' === tabNode.tabClosedReason) {
       // finalize the unload now that the browser tab is actually closed
-      tabNode.tabClosedReason = undefined;  // message received, reset it
-      return tabNode.unload({ reason: 'onTabRemoved', detail: 'manualUnload' });
+      tabNode.tabClosedReason = undefined;
+      return await tabNode.unload({
+        reason: 'onTabRemoved',
+        detail: 'manualUnload'
+      });
     }
     let isWindowClosing = removeInfo && removeInfo.isWindowClosing;
     const windowNode = tabNode.getWindowNode();
@@ -964,34 +1172,65 @@ export class Tree {
     // if tab closed only because its window is closing
     if (isWindowClosing) {
       // keep unloaded tab as part of the user's saved window
-      return tabNode.unload({ reason: 'onWindowRemoved', detail: 'saveWindow' });
+      return await tabNode.unload({
+        reason: 'onWindowRemoved',
+        detail: 'saveWindow'
+      });
     }
     // if tab closed manually by user, but it has label/notes
     else if (tabNode.shouldUnloadNotDelete()) {
       // keep tab in tree to preserve its metadata
-      return tabNode.unload({ reason: 'onTabRemoved', detail: 'hasMetadata' });
+      return await tabNode.unload({
+        reason: 'onTabRemoved',
+        detail: 'hasMetadata'
+      });
     }
     // if tab is boring but has kids
     else if (tabNode.hasKids()) {
       // delete the node, but keep its kids
-      return tabNode.deleteSelfAndPromoteKids({ reason: 'onTabRemoved', detail: 'hasKids' });
+      return await tabNode.deleteSelfAndPromoteKids({
+        reason: 'onTabRemoved',
+        detail: 'hasKids'
+      });
     }
     // tab is a leaf node with no label or anything interesting
     else {
       // delete boring tabs on close
-      return tabNode.deleteSelf({ reason: 'onTabRemoved', detail: 'boringLeaf' });
+      return await tabNode.deleteSelf({
+        reason: 'onTabRemoved',
+        detail: 'boringLeaf'
+      });
     }
   }
 
   async onTabActivated (windowId, tabId) {
-    const windowNode = this.root.getWindowId(windowId);
+    // do everything we can to find the correct tab and window nodes...
+    // ... but if that fails, it's almost certainly not an issue
+    // (because for some reason, browsers like Vivaldi fire off this event
+    //  after the tab and window are already closed, so there's nothing to do)
+    let windowNode = this.root.getWindowId(windowId);
+    // look up by tabId if windowId failed
     if (! windowNode) {
+      const tabNode = this.getNodeByTabId(tabId);
+      if (tabNode) { windowNode = tabNode.getWindowNode(); }
+      //debug(`Tree.onTabActivated(${windowId}, ${tabId}):`, windowNode, tabNode);
+    }
+    let tries = 5;
+    while ((! windowNode) && (tries > 0)) {
       // can happen when loading saved tab in saved window,
       // because onWindowCreated doesn't happen until
       // after the onTabActivated event for the first tab
+      debug(`Tree.onTabActivated() waiting for windowId="${windowId}"`);
+      tries --;
+      // wait a few ms
+      await new Promise(resolve => setTimeout(resolve, 10));
+      windowNode = this.root.getWindowId(windowId);
+    }
+    if (! windowNode) {
       if (this.bkgd && (this.bkgd.windowsLoading.length > 0))
         return;  // not an error, just a browser quirk
-      return error(`Tree.onTabActivated() can't find windowId="${windowId}"`);
+      // probably not an error
+      return log(`Tree.onTabActivated() can't find windowId="${windowId}"`);
     }
     await windowNode.setActiveTab({ reason: 'onTabActivated' });
   }
@@ -1003,12 +1242,23 @@ export class Tree {
     // moveInfo.toIndex: number
     // moveInfo.windowId: number
     // get the tabNode and winNode
+
+    // Zen Browser is fucked
+    let zeroIndex = 0;
+    if (isZenBrowser) {
+      const tabArray = await api.tabs.query( { windowId: moveInfo.windowId });
+      zeroIndex = tabArray[0].index;
+      moveInfo.fromIndex -= zeroIndex;
+      moveInfo.toIndex -= zeroIndex;
+    }
+
     const windowNode = this.root.getWindowId(moveInfo.windowId);
     if (! windowNode) {
       // FIXME: WTF, shouldn't happen, big error here
       return error(`Tree.onTabMoved() can't find windowId="${moveInfo.windowId}"`);
     }
     const tabNode = this.getNodeByTabId(tabId);
+    debug(`Tree.onTabMoved(): ${tabNode?.toLine()}`);
     if (! tabNode) {
       // FIXME: also shouldn't happen
       return error(`Tree.onTabMoved() can't find tabId="${tabId}"`);
@@ -1114,9 +1364,32 @@ export class Tree {
     // attachInfo.newPosition: number
     // attachInfo.newWindowId: number
     //   (may refer to a window which doesn't exist yet)
+
+    // Zen Browser is fucked
+    if (isZenBrowser) {
+      debug(`Tree.onTabAttached(Zen, ${tabId})`, attachInfo);
+      let tabArray = await api.tabs.query(
+          { windowId: attachInfo.newWindowId });
+      // attached to new window which doesn't exist yet
+      // (needs a moment to spawn the window)
+      if ((! tabArray) || (0 >= tabArray.length)) {
+        debug(`Tree.onTabAttached(Zen): retrying`);
+        // delay is probably unnecessary, since await above already waited
+        await new Promise(r => setTimeout(r, 10));  // wait 10ms
+        tabArray = await api.tabs.query(
+          { windowId: attachInfo.newWindowId });
+      }
+      if (tabArray.length > 0) {
+        const zeroIndex = tabArray[0].index;
+        attachInfo.newPosition -= zeroIndex;
+        debug(`Tree.onTabAttached(Zen) => index=${attachInfo.newPosition}`);
+      }
+    }
+
     const newIndex = attachInfo.newPosition;
     const windowId = attachInfo.newWindowId;
-    debug(`Tree.onTabAttached(${tabId}) -> ${windowId}, ${newIndex}`);
+
+    debug(`Tree.onTabAttached(tabId=${tabId}) -> windowId=${windowId}, index=${newIndex}`);
 
     // find the tab node
     const tabNode = this.getNodeByTabId(tabId);
@@ -1248,7 +1521,7 @@ export class Tree {
     await windowNode.setActiveTab({ reason: 'onTabAttached' });
   }
 
-  async onTabUpdated(tabId, changeInfo, tab) {
+  async onTabUpdated (tabId, changeInfo, tab) {
     // tabId: number
     // tab: https://developer.chrome.com/docs/extensions/reference/api/tabs#type-Tab
     // changeInfo.title: string
@@ -1265,19 +1538,46 @@ export class Tree {
     // changeInfo.autoDiscardable: boolean
     debug(`Tree.onTabUpdated(tabId=${tabId})`, changeInfo, tab);
 
-    // wait, if a tab is currently being replaced
-    const otrUnlock = await this.onTabReplacedMutex.lock();  otrUnlock();
-
-    // ignore Vivaldi sidepanels and other non-tab "tabs"
-    if (this.tabBlacklist[`${tabId}`]) {
-      debug('ignoring blacklisted tab');
+    // dammit, Zen Browser
+    if (tabId < 0) {
+      debug(`Tree.onTabUpdated(${tabId}): ignoring non-tab (Zen Browser?)`);
       return;
+    }
+
+    // wait, if a tab is currently being created or replaced
+    const otcUnlock = await this.onTabCreatedMutex.lock();  otcUnlock();
+    const otrUnlock = await this.onTabReplacedMutex.lock();  otrUnlock();
+    if (this.bkgd && this.bkgd.nodesLoadingMutex) {
+      const nlUnlock = await this.bkgd.nodesLoadingMutex.lock();
+      nlUnlock();
     }
 
     const tabNode = this.getNodeByTabId(tabId);
 
-    // if tab doesn't exist, do nothing
-    if (! tabNode) return warn(`Tree.onTabUpdated(${tabId}): no tab found`);
+    // detect if it's a Vivaldi sidePanel, and ignore it
+    if ((! tabNode) && isChrome) {
+      if (await this.checkIfVivaldiPanel(tab)) return;
+    }
+
+    // Brave likes to unpin tabs before closing a window,
+    // so detect that and ignore it if it happens
+    if (tabNode && (false === changeInfo.pinned)) {
+      // in my testing, the onTabRemoved({ isWindowClosing: true })
+      // comes about 20ms after onTabUpdated({ pinned: false })
+      debug('waiting to see if unpin is real or isWindowClosing');
+      await new Promise(r => setTimeout(r, 50));  // wait 50ms
+      if (! tabNode.isLoaded()) return;
+    }
+
+    // if tab doesn't exist, create a node for it
+    if (! tabNode) {
+      warn(`Tree.onTabUpdated(${tabId}): no tab found`);
+      return await this.onTabCreated(tab);
+    }
+    else {
+      debug(`Tree.onTabUpdated(${tabId}): ${tabNode.toLine()}`,
+        tabNode, changeInfo);
+    }
 
     // change ... multiple things
     let changes = {};  // only changes we care about
@@ -1393,7 +1693,7 @@ export class Tree {
     finally { unlock(); }
   }
 
-  onMessage (msg, sender, sendResponse) {
+  async onMessage (msg, sender, sendResponse) {
     if (! msg.msg) {
       warn('Tree onMessage invalid', msg);
       sendResponse({error: 'invalid msg type'});
@@ -1412,12 +1712,11 @@ export class Tree {
     if (handler) {
       // actually handle the event
       //debug(`Tree: ${msg.msg}()`);
-      const result = handler.bind(this)(msg, sender, sendResponse);
-      if (result && ('function' === typeof result.catch)) {
-        result.catch((err) => {
-          error(`Tree.${msg.msg}() failed`, err, msg);
-        });
+      const unlock = await this.onMessageMutex.lock();
+      try {
+        await handler.bind(this)(msg, sender, sendResponse);
       }
+      finally { unlock(); }
       // FIXME: on sync error, tree should set an error state
       //   which can be exposed to the user to let them know they should
       //   reload the view or whatever...
@@ -1452,6 +1751,26 @@ export class Tree {
       pendingMsg.reason = 'tree_nodeMoved';
       await node.moveTo(destParent, pendingMsg.destIndex, pendingMsg);
       this.pendingMoves.delete(nodeId);
+    }
+  }
+
+  async onHideCollapsedTabsChanged (key, newValue, oldValue) {
+    if (! isFirefox) return;
+    if (! this.bkgd) return;
+    debug(`hideCollapsedTabs: ${newValue}`);
+    // find all open windows,
+    // and force them to refresh their hidden tab states
+    const windowNodes = this.root.findNodes(
+      (n) => n.isWindow() && n.isLoaded(),
+    );
+    for (const winNode of windowNodes) {
+      if (! newValue) await winNode.syncTabHideState(true);
+      else {
+        const wasExpanded = winNode.expanded;
+        winNode.expanded = true;
+        await winNode.syncTabHideState();
+        winNode.expanded = wasExpanded;
+      }
     }
   }
 
@@ -1544,7 +1863,10 @@ export class Tree {
     // find nodes
     const node = this.nodes[nodeId];
     if (! node) {
-      return error(`tree_nodeChanged(): couldn't find node "${nodeId}"`);
+      // setActive(false) can get called after deletion sometimes,
+      // but it's fine (like, Chrome temp windows which exist only for 1ms)
+      const func = ('setActive' === changeType) ? warn : error;
+      return func(`tree_nodeChanged(${changeType}): couldn't find node "${nodeId}"`);
     }
 
     // while syncing between threads,
@@ -1621,6 +1943,8 @@ export class Tree {
   // broken by which window occurs first in the session tree.
   async findMatchingWindow (window, excludeNodeIds) {
     // find the "needle" (realTabList) in the "haystack"
+    const result = {};  // data to return
+    result.loadedTabNodesWithNoTab = [];
     //const realTabList = [...window.tabs];
     const realTabList = [];
     for (const realTab of window.tabs) {
@@ -1670,7 +1994,7 @@ export class Tree {
         let realTab = realTabList.find((candidate) =>
           (! candidate.attached)
           && (tabNode.url === candidate.url)
-          && (tabNode.pinned === Boolean(candidate.pinned))
+          && (tabNode.isPinned() === Boolean(candidate.pinned))
         );
         if (! realTab) {
           // Fallback for older saved data or changed browser state; the later
@@ -1692,11 +2016,13 @@ export class Tree {
         // if a "loaded" tab node wasn't found, assign it as "wasLoaded"
         if ((! realTab) && tabNode.isLoaded()) {
           await tabNode.unload({ reason: 'mergeOpenWindowsIntoTree' });
+          result.loadedTabNodesWithNoTab.push(tabNode);
         }
       }
-      return bestMatch.winNode;
+      result.winNode = bestMatch.winNode;
+      return result;
     }
-    return null;
+    return result;
   }
 }
 
@@ -1706,7 +2032,7 @@ function tabArraysEqual(a, b) {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
     if (a[i].url !== b[i].url) return false;
-    if (Boolean(a[i].pinned) !== Boolean(b[i].pinned)) return false;
+    if (getPinnedState(a[i]) !== getPinnedState(b[i])) return false;
   }
   return true;
 }
@@ -1716,11 +2042,18 @@ function countPinnedPositionMatches(candidate, needle) {
   let count = 0;
   for (let i = 0; i < limit; i++) {
     if ((candidate[i].url === needle[i].url)
-      && (Boolean(candidate[i].pinned) === Boolean(needle[i].pinned))) {
+      && (getPinnedState(candidate[i]) === getPinnedState(needle[i]))) {
       count += 1;
     }
   }
   return count;
+}
+
+function getPinnedState(item) {
+  if (item && ('function' === typeof item.isPinned)) {
+    return Boolean(item.isPinned());
+  }
+  return Boolean(item && item.pinned);
 }
 
 
@@ -1857,27 +2190,4 @@ function findClosestWindowMatch(needle, haystack) {
   const line = bestCandidate ? bestCandidate.winNode.toLine() : '';
   debug(`findClosestWindowMatch() => ${bestScore}: ${line}`);
   return bestCandidate;
-}
-
-
-function isNewTabPage (url) {
-  const prefixes = [
-    // firefox, librewolf, ...
-    'about:newtab',
-    'about:blank',
-    'about:home',
-    'about://newtab',
-    'about://blank',
-    'about://home',
-    // chrome, chromium, ...
-    'chrome://newtab',
-    // edge
-    'edge://newtab',
-    'edge://new-tab-page',
-    // vivaldi
-    'chrome://vivaldi-webui/startpage',
-  ];
-  for (const prefix of prefixes)
-    if (url.startsWith(prefix)) return true;
-  return false;
 }

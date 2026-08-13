@@ -15,8 +15,29 @@ recommended for maximum privacy.
 
 This extension makes many of the browser's built-in functions wholly or at
 least partially obsolete -- bookmarks, session management, vertical tabs,
-read-later, notes, pinned tabs, stacked tabs, AI tab organizers, etc.  You
-could still use those things, but why bother when you have something better?
+read-later, notes, stacked tabs, AI tab organizers, etc.  You could still use
+those things, but why bother when you have something better?
+
+[TOC]
+
+
+## Screenshots
+
+Just a few pics to give a general idea what this is all about.
+
+Example usage, in dark and light themes:
+
+![Dark theme](https://toykeeper.net/tktsto/gfx/tktsto-dark.1.png)
+![Light theme](https://toykeeper.net/tktsto/gfx/tktsto-light.1.png)
+
+Some of the dialog popups:
+
+![Dialogs](https://toykeeper.net/tktsto/gfx/tktsto-themes.1.png)
+
+Internal documentation / help pages:
+
+![Docs (dark)](https://toykeeper.net/tktsto/gfx/tktsto-docs.1.png)
+![Docs (light)](https://toykeeper.net/tktsto/gfx/tktsto-docs.2.png)
 
 
 ## Tests & Coverage
@@ -124,7 +145,20 @@ Install from your browser's app store, ideally.  It boosts the numbers in the
 app store and helps this extension gain more visibility.  It also allows easier
 updates, in case you want updates when a new version is released.
 
-However, installing from source is possible too:
+These are the stores where TKTSTO is published.  Each link is a redirect to the
+store's extension page:
+
+- Firefox: https://toykeeper.net/tktsto/firefox
+- Chrome: https://toykeeper.net/tktsto/chrome
+- Edge: https://toykeeper.net/tktsto/edge
+
+Please leave a review at the store so "the algorithm" will know to show the
+extension to other people.
+
+## Installing from source
+
+If your browser store isn't added yet, or if you prefer to build the extension
+yourself, here's how:
 
 ### Chrome
 
@@ -339,16 +373,16 @@ Client (browser extension):
     - [x] Edit tasks
 - Tree editing via mouse
     - [x] Move nodes via drag-n-drop
-    - [ ] Move nodes via mark-n-paste
+    - [x] Move nodes via mark-n-paste
     - [x] Hover menu for common operations...
         - [x] Unload
-        - [x] Edit notes
         - [x] Edit tasks
+        - [x] Edit notes
         - [x] Mark
         - [x] Delete
     - [ ] Clickable note icons
     - [x] Clickable task buttons
-    - [ ] Add nodes
+    - [x] Add nodes (can drag text into the tree to make a new label)
     - [x] Expand / collapse
     - [x] Load / unload
     - [x] Switch to tab (double click a tab node)
@@ -363,6 +397,7 @@ Client (browser extension):
     - [ ] Safari (might work, untested)
     - [x] Brave
     - [x] Vivaldi
+    - [x] Maxthon
     - [ ] Ladybird (when the browser is ready for extensions)
     - [ ] ... others?
     - [ ] Usage notes for each browser
@@ -390,7 +425,7 @@ Client (browser extension):
     - [x] Remember view scope per window
     - [ ] Remember panel size per window
     - [x] Remember details/notes/plain mode per browser window
-    - [ ] Zoom buttons (can at least zoom using browser built-in controls)
+    - [x] Zoom buttons (can also zoom using browser built-in controls)
     - [ ] Remember zoom per window
     - [ ] Tab count on extension badge
     - [ ] Sort
@@ -437,10 +472,11 @@ Server:
 
 Misc tools:
 
-- [ ] Convert TKTSTO json files to plain text / markdown
+- [x] Convert TKTSTO json files to plain text / markdown (bin/json2md.py)
 - [x] Import Tabs Outliner json ".tree" exports into TKTSTO
 - [x] Convert Tabs Outliner html exports to TKTSTO json backup files
-- [ ] Compress local backup files and archive from "Downloads/" to somewhere better
+- [x] Compress local backup files and archive from "Downloads/" to somewhere
+      better (Linux only so far)
 - [ ] Super simple backup-only server
 
 
@@ -470,30 +506,38 @@ Run `make todo` to see all TODO's in the code. The following are issues without 
 
 ## Tips / Best practices
 
-Name your windows!
+**Name your windows!**
 
-Put most of your per-window sidebars in "Window" mode, so it'll only show the
-tabs and notes in that specific window.  "Session" mode is only needed
+Put most of your per-window sidebars in **"Window" mode**, so it'll only show the
+tabs and notes in that specific window.  **"Session" mode** is only needed
 occasionally, for doing things like loading a saved window.
 
-Unload the tabs you don't immediately need.  They'll still be available later
-when you have time for them.  Instead of keeping a tab open for weeks or months
+**Unload tabs** you don't immediately need.  They'll still be available later when
+you have time for them.  Instead of keeping a tab open for weeks or months
 until you have time to do it... add a quick note about why it was open, what
 action it needs from you, then unload it.  Much easier than devoting space in
 your head, your RAM, and your tab bar.
 
-Zoom the sidebar to a comfortable size:
+**Zoom the sidebar** to a comfortable size.  There are two ways to do this:
 
-- Chrome: Click the "Options" button in the sidebar, then use Chrome's normal
-  zoom functions in the options page.  It should zoom the sidebar too.  Try
-  Ctrl+Mousewheel, or Ctrl with "=" or "-".
+1. Click the "+" and "-" buttons in the sidebar header.  This affects only the
+   sidepanel.
 
-- Firefox: Focus the sidebar by clicking in it, then use Ctrl+Mousewheel to
-  zoom the sidebar.
+2. Change the browser's zoom setting for the entire extension.  This affects
+   all pages and views in the extension:
 
-When moving stuff between windows, I recommend marking the items in one window,
-then switching to a different window and pasting the items.  I find this much
-easier than trying to drag stuff around with a mouse.
+   - Chrome: Click the "Options" button in the sidebar, then use Chrome's
+     normal zoom functions in the options page.  It should zoom the sidebar
+     too.  Try Ctrl+Mousewheel, or Ctrl with "=" or "-".
+
+   - Firefox: Focus the sidebar by clicking in it, then use Ctrl+Mousewheel to
+     zoom the sidebar.
+
+When moving stuff between windows, use **mark and paste**.  Mark the items in
+one window, then switch to a different window and paste the items.  I find this
+much easier than trying to drag stuff around with a mouse.  Also note: Items
+are pasted in the order you marked them, which might not be the same order they
+were in the tree before pasting.
 
 ### Window wrapping
 
@@ -625,10 +669,57 @@ month, day, and tasks and details for each day.
         - `[X]` get a pizza and hide from the world
         - `[X]` anime
 
+### Keeping Windows Open / More Reliable Crash Recovery
+
+I've started keeping an identifier tab in each window, for two reasons:
+
+- I often wanted to keep a window open even when there were no meaningful
+  tabs in it, so I could browse the session tree and load saved tabs.  So
+  I started adding a lightweight junk page at the top of each window, and
+  giving it a label of "Keep Window Open".
+
+- If you have the same pages open in more than one window, it can be hard for
+  TKTSTO to tell which one is which, and match them to the correct window
+  nodes in the session tree.  Although I've only had it happen when testing
+  crazy configurations I doubt anyone would use, it can occasionally guess
+  wrong and attach the browser window to the wrong window node in the tree.
+  So it's helpful to keep a unique page in each window to help it figure out
+  which window is which.
+
+Because of this, I got into the habit of adding a unique page to each window.
+It only needs to be unique enough to ensure none of *your* other windows will
+ever have that page open.  Ideally something lightweight and fast with no
+scripts or media, so it won't use much memory or CPU.  Then I pin that page
+and ignore it.
+
+What I use for this is a tiny "marker page" I created on my server:
+
+- http://toykeeper.net/tktsto/title?t=Whatever
+
+One of these (with a unique title) goes into each window, pinned and
+collapsed and forgotten.
+
+But you can use whatever.  Can even be discarded or hidden, since it doesn't
+need to be *fully* loaded, and you're not meant to ever *look* at it.  The
+sole purpose is to put some sort of persistent identifier on each window.
+And sometimes to keep the window open when it has no other tabs loaded.
+
+I initially wanted to make an internal page in TKTSTO for this purpose, but
+then I realized it wouldn't work.  Extension pages get closed when the
+extension is reloaded, so the marker page wouldn't stay open reliably... and
+that defeats the whole purpose of it.  So it has to be an external page.
+
+Thus, I created a very minimal page on my site to use for this.
+
+You're welcome to use mine if you want, but it's not private.  It'll log
+a page load on my server every time you open it.  Granted, I almost never
+look at my web server logs, and the old logs get deleted after a couple
+weeks, but still.  It's the principle of the thing.
+
 
 ## FAQ
 
-**What's Tiki Tiestio?**  It's just a cute way to say "TKTSTO".
+**What is Tiki Tiestio?**  It's just a cute way to say "TKTSTO".
 
 **Where are my bookmarks?**  This extension does not touch your browser's
 built-in bookmarks.  It is completely separate, and makes the legacy bookmark
@@ -653,7 +744,7 @@ the current project hosting site:
 Installing the extension from source or from web extension stores:
 
 - From source: https://toykeeper.net/tktsto/releases
-- Chrome (TBD): https://toykeeper.net/tktsto/chrome
-- Firefox (TBD): https://toykeeper.net/tktsto/firefox
-- Edge (TBD): https://toykeeper.net/tktsto/edge
+- Chrome: https://toykeeper.net/tktsto/chrome
+- Firefox: https://toykeeper.net/tktsto/firefox
+- Edge: https://toykeeper.net/tktsto/edge
 - Safari (TBD): https://toykeeper.net/tktsto/safari

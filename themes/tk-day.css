@@ -16,15 +16,39 @@ foo {
   color: var(--cursor-fg-override);
 }
 
+/* .cursor.row .icon, .cursor.row .node-note-icon { */
+.cursor.row .icon {
+  background-color: var(--cursor-fg-override);
+}
+
 /* make node stats easier to read on window nodes */
-.window.row .node-stats * {
+.window.row .node-stats *,
+.window.row .icon,
+.window.row .node-note-icon {
   color: var(--window-loaded-fg);
 }
-.window.row.active .node-stats * {
+.window.row.active .node-stats *,
+.window.row.active .icon,
+.window.row.active .node-note-icon {
   color: var(--window-active-fg);
+}
+.window.row .node-stat-was-loaded {
+  color: var(--tab-was-loaded-fg);
 }
 .window.row * {
   text-shadow: var(--window-title-text-shadow);
+}
+
+
+/******************** doc overrides ********************/
+
+.doc b {
+  color: var(--label-loaded-fg);
+}
+
+.doc code {
+  color: var(--label-unloaded-fg);
+  border: 1px solid var(--label-unloaded-fg);
 }
 
 /******************** vars ********************/
@@ -65,6 +89,12 @@ foo {
     #0004  0.03em -0.03em 0.02em,
     #0008  0.05em 0.05em 0.10em, /* shadow */
     #000f  0.10em 0.15em 0.25em;
+  /***** docs *****/
+  --doc-page-bg: linear-gradient(
+    var(--window-branch-top),
+    var(--window-branch-bot));
+  --doc-text-fg: #246;
+  --doc-li-bg: #fff8;
   /***** main tree view *****/
   --tree-view-bg: #e2e2f4;
   --label-loaded-fg: #005400;
@@ -222,6 +252,7 @@ foo {
   --dialog-input-bg: linear-gradient(#eee, #ddd);
   --dialog-input-border: #fff;
   --focus-outline: 4px inset var(--cursor-bg-bot);
+  --unsaved-outline: 4px inset #ff4;
   /***** scrollbar *****/
   --scrollbar-thumb-bg-unfocused: linear-gradient(#bbf, #aaf);
 }

@@ -11,8 +11,6 @@
     <link id="theme-base" rel="stylesheet" type="text/css" href="/themes/tk.css"/>
     <link id="theme-variant" rel="stylesheet" type="text/css" href="/themes/tk-night.css"/>
     <link rel="stylesheet" type="text/css" href="./sidepanel.css"/>
-    <style id="style-options" type="text/css"></style>
-    <style id="user-styles" type="text/css"></style>
   </head>
   <body id="body" class="unfocused">
     <div id="top-area">
@@ -26,18 +24,25 @@
         <div id="undo-btn" class="button greyed-out">
           Undo
         </div>
-        <div id="" class="button greyed-out">
+        <div id="zoom-out-btn" class="button">
           -
         </div>
-        <div id="" class="button greyed-out">
+        <div id="zoom-in-btn" class="button">
           +
         </div>
+      </div>
+      <div id="search-bar" class="search-bar toolbar hidden">
+        <input type="text" id="search-entry" class="search-entry"
+          placeholder="search"></input>
+      </div>
+      <div id="notifications">
+        <div id="search-count" class="search-count hidden"></div>
+        <div id="marked-count" class="marked-count hidden"></div>
       </div>
     </div>
     <div id="tree-view">
       <ul id="tree-root" class="nodes root-nodes">
       </ul>
-      <div id="marked-count" class="hidden"></div>
       <div id="hover-menu" class="hidden"></div>
     </div>
     <div id="bottom-area">
@@ -73,4 +78,3 @@
     <img id="drag-arrow" src="/img/drag-arrow.png" style="display: none;" />
   </body>
 </html>
-

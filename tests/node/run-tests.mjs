@@ -1177,6 +1177,8 @@ test('bkgd_loadSavedNode preserves pinned state while restoring saved tab', asyn
     assertEqual(tab.tabId, 77, 'Saved node should attach to created tab');
     assertEqual(tab.pinned, true,
       'Saved pinned state should not be cleared by restore event');
+    assertEqual(tab.pendingLoadTimer, undefined,
+      'Matching browser event should clear the pending-load failsafe');
 
     await tree.onTabUpdated(77, { pinned: false }, {
       id: 77,
@@ -1199,6 +1201,179 @@ test('bkgd_loadSavedNode preserves pinned state while restoring saved tab', asyn
       'True pinned update should clear restore guard');
   } finally {
     api.tabs.create = originalTabsCreate;
+  }
+});
+
+test('bkgd_loadSavedNode honors an imported Pinned branch', async () => {
+  const originalTabsCreate = api.tabs.create;
+  try {
+    const created = [];
+    api.tabs.create = async (props) => {
+      created.push(props);
+      return { id: 77 };
+    };
+
+    const bkgd = new Bkgd();
+    const tree = createTree(bkgd);
+    tree.createRootNode();
+    bkgd.tree = tree;
+    bkgd.resolveTreeLoaded();
+
+    const windowNode = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      loaded: true,
+      windowId: 1
+    });
+    const pinnedBranch = await addChild(windowNode, {
+      id: 'pinned-branch',
+      label: 'Pinned'
+    });
+    const tab = await addChild(pinnedBranch, {
+      id: 't1',
+      url: 'https://example.com/pinned-branch',
+      loaded: false,
+      pinned: false
+    });
+
+    const pinnedDest = tree.getPinnedInsertDestination(windowNode, 0);
+    assertEqual(pinnedDest.destParent, pinnedBranch,
+      'First pinned tab should be inserted inside the Pinned branch');
+    const movableDest = tree.getFirstMovableInsertDestination(windowNode);
+    assertEqual(movableDest.destParent, windowNode,
+      'Unpinned tabs should remain outside the Pinned branch');
+    assertEqual(movableDest.destIndex, 1,
+      'Unpinned tabs should be inserted after the Pinned branch');
+
+    await bkgd.bkgd_loadSavedNode({ nodeId: tab.id, reason: 'userAction' });
+
+    assertEqual(created.length, 1, 'Should create one browser tab');
+    assertEqual(created[0].pinned, true,
+      'A saved tab in the Pinned branch should open pinned');
+    assertEqual(created[0].index, 0,
+      'The first Pinned-branch tab should use pinned index zero');
+
+    await tree.onTabCreated({
+      id: 77,
+      index: 0,
+      windowId: 1,
+      pinned: false,
+      url: 'https://example.com/pinned-branch',
+      title: 'Pinned branch tab'
+    });
+    assertEqual(tab.pinned, true,
+      'An early unpinned creation event should preserve branch pin state');
+  } finally {
+    api.tabs.create = originalTabsCreate;
+  }
+});
+
+test('renaming a Pinned branch clears persisted child pin state', async () => {
+  const tree = createTree(null);
+  const win = await addChild(tree.root, {
+    id: 'w1',
+    type: 'window',
+    windowId: 1,
+    loaded: false
+  });
+  const pinnedBranch = await addChild(win, {
+    id: 'pinned-branch',
+    label: 'Pinned'
+  });
+  const tab = await addChild(pinnedBranch, {
+    id: 't1',
+    url: 'https://example.com/pinned-branch',
+    loaded: false,
+    pinned: true
+  });
+
+  await pinnedBranch.setNotes('Not pinned', '', { reason: 'userAction' });
+
+  assertEqual(tab.pinned, false,
+    'Children should no longer persist as pinned after branch rename');
+});
+
+test('tab reorder enforces Pinned branch state and strip order', async () => {
+  const originalWindowsGet = api.windows.get;
+  const originalTabsQuery = api.tabs.query;
+  const originalTabsUpdate = api.tabs.update;
+  const originalTabsMove = api.tabs.move;
+  try {
+    const tree = createTree({});
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const pinnedBranch = await addChild(win, {
+      id: 'pinned-branch',
+      label: 'Pinned'
+    });
+    const pinnedTab = await addChild(pinnedBranch, {
+      id: 'pinned-tab',
+      tabId: 10,
+      windowId: 1,
+      url: 'https://example.com/pinned',
+      loaded: true,
+      pinned: false
+    });
+    await addChild(win, {
+      id: 'regular-tab',
+      tabId: 11,
+      windowId: 1,
+      url: 'https://example.com/regular',
+      loaded: true,
+      pinned: false
+    });
+
+    const browserTabs = [
+      { id: 10, index: 0, windowId: 1, pinned: false },
+      { id: 11, index: 1, windowId: 1, pinned: false }
+    ];
+    const updates = [];
+    const moves = [];
+    api.windows.get = async () => ({ id: 1 });
+    api.tabs.query = async () => browserTabs.map((tab) => ({ ...tab }));
+    api.tabs.update = async (tabId, changes) => {
+      updates.push({ tabId, changes: { ...changes } });
+      const tab = browserTabs.find((item) => item.id === tabId);
+      if (tab && undefined !== changes.pinned) tab.pinned = changes.pinned;
+      return tab ? { ...tab } : {};
+    };
+    api.tabs.move = async (tabIds, moveInfo) => {
+      moves.push({
+        tabIds: Array.isArray(tabIds) ? [...tabIds] : [tabIds],
+        moveInfo: { ...moveInfo }
+      });
+      return {};
+    };
+
+    await win.reorderAllTabsInThisWindow();
+
+    assertEqual(pinnedTab.pinned, true,
+      'Pinned branch child should persist its browser pin state');
+    assertEqual(updates.length, 1,
+      'Should update only the browser tab whose pin state differs');
+    assertEqual(updates[0].tabId, 10,
+      'Should pin the Pinned branch child');
+    assertEqual(updates[0].changes.pinned, true,
+      'Should request native browser pinning');
+    assertEqual(moves.length, 2,
+      'Should order pinned and movable strips separately');
+    assertEqual(moves[0].tabIds.join(','), '10',
+      'Should place pinned tabs at the start of the browser strip');
+    assertEqual(moves[0].moveInfo.index, 0,
+      'Pinned strip should start at browser index zero');
+    assertEqual(moves[1].tabIds.join(','), '11',
+      'Should order unpinned tabs independently');
+    assertEqual(moves[1].moveInfo.index, 1,
+      'Movable strip should start after the pinned prefix');
+  } finally {
+    api.windows.get = originalWindowsGet;
+    api.tabs.query = originalTabsQuery;
+    api.tabs.update = originalTabsUpdate;
+    api.tabs.move = originalTabsMove;
   }
 });
 
@@ -1412,11 +1587,13 @@ test('findMatchingWindow honors exclude list', async () => {
     ]
   };
 
-  const match1 = await tree.findMatchingWindow(realWindow);
+  const result1 = await tree.findMatchingWindow(realWindow);
+  const match1 = result1.winNode;
   assert(match1, 'Should match a window node');
 
   const exclude = new Set([match1.id]);
-  const match2 = await tree.findMatchingWindow(realWindow, exclude);
+  const result2 = await tree.findMatchingWindow(realWindow, exclude);
+  const match2 = result2.winNode;
   assert(match2, 'Should match a second window node');
   assert(match2.id !== match1.id, 'Exclude list should prevent reuse');
   assertEqual(match2.windowId, 101, 'Excluded rematch should attach the other window');
@@ -1450,13 +1627,58 @@ test('findMatchingWindow matches duplicate URLs by pinned state', async () => {
     ]
   };
 
-  const match = await tree.findMatchingWindow(realWindow);
+  const result = await tree.findMatchingWindow(realWindow);
+  const match = result.winNode;
 
   assert(match, 'Should match saved window');
   assertEqual(pinned.tabId, 1,
     'Pinned browser tab should pre-attach to pinned saved duplicate');
   assertEqual(regular.tabId, 2,
     'Unpinned browser tab should pre-attach to unpinned saved duplicate');
+});
+
+test('findMatchingWindow recognizes structural Pinned branch state', async () => {
+  const tree = createTree(null);
+  const win = await addChild(tree.root, { id: 'w1', type: 'window' });
+  const pinnedBranch = await addChild(win, {
+    id: 'pinned-branch',
+    label: 'Pinned'
+  });
+  const pinned = await addChild(pinnedBranch, {
+    id: 'pinned-tab',
+    url: 'https://example.com/pinned',
+    loaded: true,
+    pinned: false
+  });
+  const regular = await addChild(win, {
+    id: 'regular-tab',
+    url: 'https://example.com/regular',
+    loaded: true,
+    pinned: false
+  });
+
+  const result = await tree.findMatchingWindow({
+    id: 102,
+    tabs: [
+      {
+        id: 1,
+        url: 'https://example.com/pinned',
+        pinned: true
+      },
+      {
+        id: 2,
+        url: 'https://example.com/regular',
+        pinned: false
+      }
+    ]
+  });
+
+  assertEqual(result.winNode, win,
+    'Structural pin state should participate in window matching');
+  assertEqual(pinned.tabId, 1,
+    'Pinned browser tab should attach inside the Pinned branch');
+  assertEqual(regular.tabId, 2,
+    'Regular browser tab should attach outside the Pinned branch');
 });
 
 test('findMatchingWindow scores duplicate windows by pinned order', async () => {
@@ -1497,7 +1719,8 @@ test('findMatchingWindow scores duplicate windows by pinned order', async () => 
     ]
   };
 
-  const match = await tree.findMatchingWindow(realWindow);
+  const result = await tree.findMatchingWindow(realWindow);
+  const match = result.winNode;
 
   assertEqual(match.id, rightWin.id,
     'Window match should prefer pinned order when URLs tie');
@@ -2388,6 +2611,76 @@ test('runReconcile drops boring closed tabs', async () => {
 
     assert(!tree.nodes.t1, 'Should delete closed boring tab');
     assert(!tree.nodes.w1, 'Should delete empty window after cleanup');
+  } finally {
+    api.windows.getAll = originalGetAll;
+  }
+});
+
+test('runReconcile repairs pinned state for existing and new tabs', async () => {
+  const originalGetAll = api.windows.getAll;
+  try {
+    const bkgd = new Bkgd();
+    const tree = createTree(bkgd);
+    bkgd.tree = tree;
+    bkgd.resolveTreeLoaded();
+
+    const win = await addChild(tree.root, {
+      id: 'w1',
+      type: 'window',
+      windowId: 1,
+      loaded: true,
+      active: false
+    });
+    const pinnedBranch = await addChild(win, {
+      id: 'pinned-branch',
+      label: 'Pinned'
+    });
+    const existing = await addChild(win, {
+      id: 't1',
+      tabId: 10,
+      windowId: 1,
+      url: 'https://example.com/existing',
+      loaded: true,
+      pinned: false
+    });
+
+    api.windows.getAll = async () => ([{
+      id: 1,
+      focused: true,
+      tabs: [
+        {
+          id: 10,
+          index: 0,
+          windowId: 1,
+          url: 'https://example.com/existing',
+          title: 'Existing',
+          pinned: true
+        },
+        {
+          id: 11,
+          index: 1,
+          windowId: 1,
+          url: 'https://example.com/new',
+          title: 'New',
+          pinned: true
+        }
+      ]
+    }]);
+
+    await runReconcile.call(bkgd, { reason: 'test' });
+
+    assertEqual(existing.pinned, true,
+      'Should repair pinned state on an attached tab');
+    assertEqual(existing.parent, pinnedBranch,
+      'Should move an existing pinned tab into the Pinned branch');
+    assertEqual(win.active, true,
+      'Should repair focused state on an attached window');
+    const discovered = tree.getNodeByTabId(11);
+    assert(discovered, 'Should create a node for a newly discovered tab');
+    assertEqual(discovered.pinned, true,
+      'Should preserve pinned state on a newly discovered tab');
+    assertEqual(discovered.parent, pinnedBranch,
+      'Should create a newly discovered pinned tab in the Pinned branch');
   } finally {
     api.windows.getAll = originalGetAll;
   }
@@ -4111,6 +4404,10 @@ test('initLocalBackupAlarm triggers overdue backup', async () => {
     api.alarms.clear = async () => {};
 
     const bkgd = new Bkgd();
+    bkgd.cfg.localBackupInterval = 1;
+    bkgd.cfg.localBackupLastTimeCompleted = 0;
+    bkgd.cfg.backupOnStartup = true;
+    bkgd.resolveConfigLoaded();
     let backupCalls = 0;
     bkgd.tree = { downloadBackupNow: async () => { backupCalls += 1; } };
     bkgd.resolveTreeLoaded();
@@ -4141,6 +4438,10 @@ test('initLocalBackupAlarm respects backupOnStartup false', async () => {
     api.alarms.create = async () => {};
 
     const bkgd = new Bkgd();
+    bkgd.cfg.localBackupInterval = 1;
+    bkgd.cfg.localBackupLastTimeCompleted = 0;
+    bkgd.cfg.backupOnStartup = false;
+    bkgd.resolveConfigLoaded();
     let backupCalls = 0;
     bkgd.tree = { downloadBackupNow: async () => { backupCalls += 1; } };
     bkgd.resolveTreeLoaded();

@@ -3,6 +3,9 @@
   "name": "Ignat's copy of TK's Tree Style Tab Outliner",
   "description": "Outliner, tree-style tabs, bookmarks, and notes all in one",
   "version": "0.0.2.55",
+  "author": "Selene ToyKeeper & Ignat Remizov",
+  "homepage_url": "https://github.com/ignatremizov/tabs",
+  "default_locale": "en",
   "minimum_chrome_version": "114.0.0.0",
   "icons": {
     "16": "img/icon-16.png",
@@ -16,12 +19,9 @@
     "storage",
     "downloads",
     "tabs",
-    "alarms",
-    "favicon"
+    "alarms"
   ],
   "optional_permissions": [
-    "clipboardRead",
-    "clipboardWrite"
   ],
   "optional_host_permissions": [
     "http://localhost:*/*",
@@ -58,9 +58,12 @@
       "description": "Unload current tab",
       "suggested_key": { "default": "Alt+U" }
     },
+    "bookmarkCurrentTab": {
+      "description": "Bookmark current tab",
+      "suggested_key": { "default": "Alt+B" }
+    },
     "addNoteToCurrentTab": {
-      "description": "Add highlighted text to current tab's notes",
-      "suggested_key": { "default": "Alt+A" }
+      "description": "Add highlighted text to current tab's notes"
     },
     "cursorUp": {
       "description": "Move cursor up"
@@ -124,6 +127,12 @@
     },
     "moveNodeEnd": {
       "description": "Move highlighted node end (down to last sibling)"
+    },
+    "prevTab": {
+      "description": "Focus the previous tab"
+    },
+    "nextTab": {
+      "description": "Focus the next tab"
     }
   }
 }
