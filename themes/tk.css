@@ -21,6 +21,7 @@ html, body {
   width: 100%;
   overflow-y: auto;
   overflow-x: hidden;
+  scrollbar-width: thin;
   background: var(--tree-view-bg);
   user-select: none;  /* don't let user select text here */
 }
@@ -264,7 +265,7 @@ body:not(.unfocused) *:hover::-webkit-scrollbar-thumb {
   margin-top: 4px;
   margin-bottom: 4px;
   margin-left: 4px;
-  margin-right: 8px;  /* leave room for the scrollbar */
+  margin-right: 0;
 }
 #noderoot.node.root-nodes {
   padding: 0;
