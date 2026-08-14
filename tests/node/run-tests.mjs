@@ -27,6 +27,7 @@ if (!globalThis.chrome) {
     },
     storage: {
       local: { get: async () => ({}), set: async () => ({}) },
+      session: { get: async () => ({}), set: async () => ({}) },
       onChanged: { addListener: () => {} }
     },
     commands: { onCommand: { addListener: () => {} } },

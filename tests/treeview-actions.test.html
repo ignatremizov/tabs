@@ -196,6 +196,19 @@
           }
         };
       }
+      if (!api.storage.session) {
+        const sessionStore = {};
+        api.storage.session = {
+          _store: sessionStore,
+          get: async (key) => {
+            if (! key) return { ...sessionStore };
+            return { [key]: sessionStore[key] };
+          },
+          set: async (items) => {
+            Object.assign(sessionStore, items);
+          }
+        };
+      }
       if (!api.storage.onChanged) api.storage.onChanged = {};
       if (!api.storage.onChanged.addListener) {
         api.storage.onChanged.addListener = () => {};
@@ -2999,6 +3012,91 @@
         assert(branch.$, 'The collapsed branch should be rendered');
         assertEqual(hiddenChild.$, null,
           'A collapsed descendant should not allocate detached DOM');
+      });
+
+      test('presentation state restores cursor and scroll anchor', async () => {
+        const view = createView();
+        const win = await addChild(view.root, {
+          id: 'w1',
+          type: 'window',
+          windowId: 1,
+          expanded: true
+        });
+        const firstTab = await addChild(win, {
+          id: 't1',
+          type: 'tab',
+          label: 'First tab',
+          loaded: true,
+          active: true
+        });
+        const secondTab = await addChild(win, {
+          id: 't2',
+          type: 'tab',
+          label: 'Second tab',
+          loaded: true
+        });
+        view.viewScope = 'session';
+        view.viewType = 'sidepanel';
+        view.windowNode = win;
+        view.viewRoot = view.root;
+        view.cfg.treeViewZoomLevel = 1;
+        view.cfg.cursorFollowsActiveTab = true;
+        view.$renderWholeTree();
+
+        let scrollTop = 0;
+        Object.defineProperty(view.$, 'scrollTop', {
+          configurable: true,
+          get: () => scrollTop,
+          set: (value) => { scrollTop = value; }
+        });
+        const logicalTops = new Map([
+          [view.root, 0],
+          [win, 30],
+          [firstTab, 60],
+          [secondTab, 90]
+        ]);
+        view.$.getBoundingClientRect = () => ({
+          top: 100,
+          bottom: 300,
+          height: 200
+        });
+        for (const [node, logicalTop] of logicalTops) {
+          node.$row.getBoundingClientRect = () => {
+            const top = 100 + logicalTop - view.$.scrollTop;
+            return { top, bottom: top + 20, height: 20 };
+          };
+        }
+
+        view.cursor = secondTab;
+        view.$.scrollTop = 65;
+        const state = view.capturePresentationState();
+        assertEqual(state.cursorId, secondTab.id,
+          'The cursor should be included in presentation state');
+        assertEqual(state.anchorNodeId, firstTab.id,
+          'The first partially visible row should anchor the viewport');
+
+        view.cursor = null;
+        view.$.scrollTop = 0;
+        const restored = await view.restorePresentationState(state);
+
+        assert(restored, 'A valid presentation state should restore');
+        assertEqual(view.cursor, secondTab,
+          'The saved cursor should be restored');
+        assertEqual(view.$.scrollTop, 65,
+          'The saved row offset should restore the viewport');
+
+        view.presentationStateReady = true;
+        await view.savePresentationStateNow();
+        const loaded = await view.loadPresentationState();
+        assertEqual(loaded.cursorId, secondTab.id,
+          'Session storage should retain the sidebar cursor');
+        view.presentationStateReady = false;
+
+        firstTab.active = false;
+        secondTab.active = true;
+        view.cursor = null;
+        assertEqual(await view.restorePresentationState(state), false,
+          'A newly active tab should supersede stale presentation state');
       });
 
       testGroup('Basic Deletes');

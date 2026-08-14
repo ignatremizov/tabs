@@ -75,6 +75,10 @@ export class TreeView extends Tree {
     this.keyBindingsByAction = this.buildActionKeyMap(this.keyBindings);
     this.activeDialogCount = 0;
     this.cursorScrollRequestId = 0;
+    this.presentationStateReady = false;
+    this.presentationSaveDelayMs = 200;
+    this.presentationSaveTimer = null;
+    this.presentationSavePromise = Promise.resolve();
     this.actionLabels = {};
     for (const binding of keyBindingActions) {
       this.actionLabels[binding.action] = binding.label;
@@ -114,6 +118,8 @@ export class TreeView extends Tree {
   }
 
   destroy () {
+    if (this.destroyed) return;
+    this.flushPresentationState();
     this.destroyed = true;
     this.cursorScrollRequestId += 1;
     if (this.bkgdPing) {
@@ -123,6 +129,14 @@ export class TreeView extends Tree {
     if (this.onEmitFailure && this.window && this.window.removeEventListener) {
       this.window.removeEventListener('tktsto_emit_failure', this.onEmitFailure);
       this.onEmitFailure = null;
+    }
+    if (this.onTreeViewScroll && this.$?.removeEventListener) {
+      this.$.removeEventListener('scroll', this.onTreeViewScroll);
+      this.onTreeViewScroll = null;
+    }
+    if (this.onPageHide && this.window?.removeEventListener) {
+      this.window.removeEventListener('pagehide', this.onPageHide);
+      this.onPageHide = null;
     }
   }
 
@@ -341,6 +355,8 @@ export class TreeView extends Tree {
       this.registerWithBkgd();
     }
 
+    const presentationState = await this.loadPresentationState();
+
     this.$renderViewScopeBtn();
 
     this.$renderWholeTree();
@@ -354,8 +370,13 @@ export class TreeView extends Tree {
     // let listeners know the tree is loaded
     this.resolveTreeViewLoaded();
 
-    // ensure the cursor is somewhere sane when sidepanel opens
-    await this.ensureCursorVisible();
+    // Restore the prior sidebar position when possible.  If its cursor was
+    // deleted or hidden while this view was closed, fall back to the active
+    // tab just like a fresh view.
+    const restored = await this.restorePresentationState(presentationState);
+    if (! restored) await this.ensureCursorVisible();
+    this.presentationStateReady = true;
+    this.schedulePresentationStateSave();
   }
 
   applyIncognitoRestrictions () {
@@ -578,6 +599,130 @@ export class TreeView extends Tree {
     // save to config, per window
     const key = `TreeView.${varName}.${this.windowNode.id}`;
     return this.cfg.set(key, value);
+  }
+
+  presentationStateKey () {
+    if (! this.windowNode || ! this.viewType || ! this.viewScope) return null;
+    return [
+      'TreeView.presentation',
+      this.windowNode.id,
+      this.viewType,
+      this.viewScope
+    ].join('.');
+  }
+
+  capturePresentationState () {
+    if (! this.$) return null;
+    const scrollTop = Number(this.$.scrollTop) || 0;
+    const state = {
+      cursorId: this.cursor?.id || null,
+      activeNodeId: this.windowNode?.getActiveTab()?.id || null,
+      scrollTop
+    };
+    if (! this.$treeRoot?.querySelectorAll
+      || ! this.$.getBoundingClientRect) return state;
+
+    const containerRect = this.$.getBoundingClientRect();
+    const zoomLevel = Number(this.cfg.treeViewZoomLevel) || 1;
+    for (const $row of this.$treeRoot.querySelectorAll('.row')) {
+      if (! $row.getBoundingClientRect) continue;
+      const rowRect = $row.getBoundingClientRect();
+      if ((rowRect.height <= 0) || (rowRect.bottom <= containerRect.top))
+        continue;
+      const nodeId = $row.parentElement?.id?.slice(4);
+      if (! nodeId || ! this.nodes[nodeId]) continue;
+      state.anchorNodeId = nodeId;
+      state.anchorOffset = (rowRect.top - containerRect.top) / zoomLevel;
+      break;
+    }
+    return state;
+  }
+
+  async loadPresentationState () {
+    const key = this.presentationStateKey();
+    const storage = api.storage?.session;
+    if (! key || ! storage?.get) return null;
+    try {
+      const result = await storage.get(key);
+      const state = result?.[key];
+      if (state && ('object' === typeof state)) return state;
+    } catch (err) {
+      warn('Unable to load TreeView presentation state:', err);
+    }
+    return null;
+  }
+
+  savePresentationStateNow () {
+    if (! this.presentationStateReady) return this.presentationSavePromise;
+    const key = this.presentationStateKey();
+    const storage = api.storage?.session;
+    const state = this.capturePresentationState();
+    if (! key || ! storage?.set || ! state) return this.presentationSavePromise;
+
+    this.presentationSavePromise = this.presentationSavePromise
+      .catch(() => {})
+      .then(() => storage.set({ [key]: state }))
+      .catch((err) => {
+        warn('Unable to save TreeView presentation state:', err);
+      });
+    return this.presentationSavePromise;
+  }
+
+  schedulePresentationStateSave () {
+    if (! this.presentationStateReady) return;
+    if (this.presentationSaveTimer) clearTimeout(this.presentationSaveTimer);
+    this.presentationSaveTimer = setTimeout(() => {
+      this.presentationSaveTimer = null;
+      this.savePresentationStateNow();
+    }, this.presentationSaveDelayMs);
+  }
+
+  flushPresentationState () {
+    if (this.presentationSaveTimer) {
+      clearTimeout(this.presentationSaveTimer);
+      this.presentationSaveTimer = null;
+    }
+    return this.savePresentationStateNow();
+  }
+
+  restorePresentationScroll (state) {
+    if (! state || ! this.$) return;
+    const anchor = Object.prototype.hasOwnProperty.call(
+      this.nodes,
+      state.anchorNodeId
+    ) ? this.nodes[state.anchorNodeId] : null;
+    if (anchor?.$row
+      && Number.isFinite(state.anchorOffset)
+      && anchor.isVisible(this.viewRoot)
+    ) {
+      const containerRect = this.$.getBoundingClientRect();
+      const rowRect = anchor.$row.getBoundingClientRect();
+      const zoomLevel = Number(this.cfg.treeViewZoomLevel) || 1;
+      const currentOffset = (rowRect.top - containerRect.top) / zoomLevel;
+      this.$.scrollTop += currentOffset - state.anchorOffset;
+      return;
+    }
+    if (Number.isFinite(state.scrollTop)) this.$.scrollTop = state.scrollTop;
+  }
+
+  async restorePresentationState (state) {
+    if (! state?.cursorId) return false;
+    const activeNodeId = this.windowNode?.getActiveTab()?.id || null;
+    if (this.cfg.cursorFollowsActiveTab
+      && (state.activeNodeId !== activeNodeId)
+    ) return false;
+    const cursor = Object.prototype.hasOwnProperty.call(
+      this.nodes,
+      state.cursorId
+    ) ? this.nodes[state.cursorId] : null;
+    if (! cursor
+      || ! cursor.isInViewScope()
+      || ! cursor.isVisible(this.viewRoot)
+    ) return false;
+
+    await this.setCursor(cursor, { instant: true, scroll: false });
+    this.restorePresentationScroll(state);
+    return true;
   }
 
   updateMarkedCount () {
@@ -945,6 +1090,13 @@ export class TreeView extends Tree {
   initBodyHandlers () {
     // absolutely NEVER scroll horizontally
     this.$body.addEventListener('scroll', () => { this.$body.scrollLeft = 0; });
+    this.onTreeViewScroll = () => {
+      this.$.scrollLeft = 0;
+      this.schedulePresentationStateSave();
+    };
+    this.$.addEventListener('scroll', this.onTreeViewScroll);
+    this.onPageHide = () => { this.flushPresentationState(); };
+    this.window.addEventListener('pagehide', this.onPageHide);
     //
     this.window.addEventListener('focus', () => {
       this.$body.classList.remove('unfocused');
@@ -3368,6 +3520,7 @@ export class TreeView extends Tree {
     if (this.cursor && (node !== this.cursor)) this.cursor.removeCursor();
     if (node        && (node !== this.cursor)) node.addCursor();
     this.cursor = node;
+    this.schedulePresentationStateSave();
 
     // details box
     if (node) {
@@ -3383,8 +3536,10 @@ export class TreeView extends Tree {
       }
 
       // ensure node is visible
-      if (args?.instant) scrollDuration = 0;
-      this.scrollNodeIntoView(node, scrollDuration);
+      if (args?.scroll !== false) {
+        if (args?.instant) scrollDuration = 0;
+        this.scrollNodeIntoView(node, scrollDuration);
+      }
     }
     else {
       this.hideDetailsBox();
@@ -3715,14 +3870,20 @@ export class TreeView extends Tree {
   }
 
   async onViewScopeBtnClick () {
+    this.flushPresentationState();
+    this.presentationStateReady = false;
     if ('session' === this.viewScope) this.viewScope = 'window';
     else this.viewScope = 'session';
     // save button state to config storage, per window
     await this.setWindowConfig('viewScope', this.viewScope);
+    const presentationState = await this.loadPresentationState();
     // update the display
     this.$renderViewScopeBtn();
     this.$renderWholeTree();
-    await this.ensureCursorVisible();
+    const restored = await this.restorePresentationState(presentationState);
+    if (! restored) await this.ensureCursorVisible();
+    this.presentationStateReady = true;
+    this.schedulePresentationStateSave();
     this.setStatus(`View scope: ${this.viewScope}`);
     // tell bkgd we changed viewScope
     this.registerWithBkgd();
