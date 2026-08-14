@@ -7,7 +7,7 @@
 
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
-import { basename } from 'node:path';
+import { basename, resolve } from 'node:path';
 
 function usage () {
   console.error(
@@ -28,12 +28,39 @@ function isBoringUrlLeaf (node) {
   );
 }
 
+function dedupeContent (node) {
+  return [
+    node.type || '',
+    node.label || '',
+    node.note || '',
+    node.url || '',
+    node.url ? '' : (node.title || ''),
+    Boolean(node.pinned),
+    node.checkbox ?? null,
+    node.checkboxPx ?? null,
+    node.incognito ?? null
+  ];
+}
+
+function hash (value) {
+  return createHash('sha256')
+    .update(JSON.stringify(value))
+    .digest('hex');
+}
+
 function main () {
   const [inputPath, auditPath, outputPath, ...extra] =
     process.argv.slice(2);
   if (! inputPath || ! auditPath || ! outputPath || extra.length > 0) {
     usage();
     process.exit(2);
+  }
+  const resolvedOutput = resolve(outputPath);
+  if (resolvedOutput === resolve(inputPath)) {
+    throw new Error('Refusing to overwrite the source backup');
+  }
+  if (resolvedOutput === resolve(auditPath)) {
+    throw new Error('Refusing to overwrite the audit file');
   }
 
   const inputBytes = readFileSync(inputPath);
@@ -69,6 +96,43 @@ function main () {
     }
   }
 
+  const reachable = new Set();
+  const visiting = new Set();
+  function validateReachable (nodeId) {
+    if (visiting.has(nodeId)) {
+      throw new Error(`Backup contains a cycle at "${nodeId}"`);
+    }
+    if (reachable.has(nodeId)) return;
+    const node = nodes[nodeId];
+    if (! node) throw new Error(`Missing reachable node "${nodeId}"`);
+    visiting.add(nodeId);
+    reachable.add(nodeId);
+    for (const childId of node.nodes || []) validateReachable(childId);
+    visiting.delete(nodeId);
+  }
+  validateReachable('root');
+  if (reachable.size !== Object.keys(nodes).length) {
+    throw new Error('Backup contains unreachable nodes');
+  }
+
+  const subtreeHashes = new Map();
+  const subtreeSizes = new Map();
+  function hashSubtree (nodeId) {
+    if (subtreeHashes.has(nodeId)) return subtreeHashes.get(nodeId);
+    const node = nodes[nodeId];
+    if (! node) throw new Error(`Cannot hash missing node "${nodeId}"`);
+    const childHashes = (node.nodes || []).map(hashSubtree);
+    const subtreeHash = hash([dedupeContent(node), childHashes]);
+    subtreeHashes.set(nodeId, subtreeHash);
+    const subtreeSize = 1 + (node.nodes || []).reduce(
+      (total, childId) => total + subtreeSizes.get(childId),
+      0
+    );
+    subtreeSizes.set(nodeId, subtreeSize);
+    return subtreeHash;
+  }
+  for (const nodeId of Object.keys(nodes)) hashSubtree(nodeId);
+
   const removeIds = new Set();
   const subtreeRootIds = new Set();
   function markSubtree (nodeId) {
@@ -82,6 +146,9 @@ function main () {
   for (const candidate of
     audit.sameContentSiblingSubtrees.candidates || []) {
     const allIds = [candidate.keeperId, ...candidate.duplicateIds];
+    if ((new Set(allIds)).size !== allIds.length) {
+      throw new Error('Subtree candidate repeats a node ID');
+    }
     // A larger duplicate subtree may already contain this whole candidate.
     // Let the maximal cleanup own it so a nested group's independently chosen
     // keeper cannot punch a hole in the retained copy.
@@ -89,6 +156,12 @@ function main () {
     const parentIds = new Set(allIds.map((id) => parents.get(id)));
     if (parentIds.size !== 1 || parentIds.has(undefined)) {
       throw new Error('Subtree candidate is not a sibling group');
+    }
+    const hashes = new Set(allIds.map((id) => subtreeHashes.get(id)));
+    const sizes = new Set(allIds.map((id) => subtreeSizes.get(id)));
+    if (hashes.has(undefined) || hashes.size !== 1
+      || sizes.has(undefined) || sizes.size !== 1) {
+      throw new Error('Subtree candidate content or shape differs');
     }
     for (const duplicateId of candidate.duplicateIds) {
       subtreeRootIds.add(duplicateId);
@@ -100,6 +173,9 @@ function main () {
   for (const candidate of
     audit.sameUrlBoringSiblingLeaves.candidates || []) {
     const allIds = [candidate.keeperId, ...candidate.duplicateIds];
+    if ((new Set(allIds)).size !== allIds.length) {
+      throw new Error('Leaf candidate repeats a node ID');
+    }
     if (allIds.some((id) => removeIds.has(id))) continue;
     const parentIds = new Set(allIds.map((id) => parents.get(id)));
     if (parentIds.size !== 1 || parentIds.has(undefined)) {
@@ -108,10 +184,14 @@ function main () {
     if (! allIds.every((id) => isBoringUrlLeaf(nodes[id]))) {
       throw new Error('Leaf candidate contains protected content');
     }
+    const contentHashes = new Set(
+      allIds.map((id) => hash(dedupeContent(nodes[id])))
+    );
     const urls = new Set(allIds.map((id) => nodes[id].url));
     const pinnedStates = new Set(allIds.map((id) => Boolean(nodes[id].pinned)));
-    if (urls.size !== 1 || pinnedStates.size !== 1) {
-      throw new Error('Leaf candidate URL or pinned state differs');
+    if (contentHashes.size !== 1
+      || urls.size !== 1 || pinnedStates.size !== 1) {
+      throw new Error('Leaf candidate content differs');
     }
     for (const duplicateId of candidate.duplicateIds) {
       if (! removeIds.has(duplicateId)) leafDuplicatesRemoved += 1;
@@ -126,19 +206,19 @@ function main () {
   }
   for (const nodeId of removeIds) delete nodes[nodeId];
 
-  const reachable = new Set();
-  function markReachable (nodeId) {
-    if (reachable.has(nodeId)) return;
+  const cleanedReachable = new Set();
+  function markCleanedReachable (nodeId) {
+    if (cleanedReachable.has(nodeId)) return;
     const node = nodes[nodeId];
     if (! node) throw new Error(`Cleaned graph references missing "${nodeId}"`);
-    reachable.add(nodeId);
-    for (const childId of node.nodes || []) markReachable(childId);
+    cleanedReachable.add(nodeId);
+    for (const childId of node.nodes || []) markCleanedReachable(childId);
   }
-  markReachable('root');
+  markCleanedReachable('root');
   const remainingIds = Object.keys(nodes);
-  if (reachable.size !== remainingIds.length) {
+  if (cleanedReachable.size !== remainingIds.length) {
     throw new Error(
-      `Cleaned graph has ${remainingIds.length - reachable.size} unreachable nodes`
+      `Cleaned graph has ${remainingIds.length - cleanedReachable.size} unreachable nodes`
     );
   }
 
