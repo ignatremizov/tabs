@@ -3,21 +3,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 "use strict";
-import { api, isChrome, isFirefox, isZenBrowser } from '/api.js';
+import { isZenBrowser } from '/api.js';
 
-import { keyBindings } from '/view/treeview.js';
+import { defaultKeyBindings } from '/common/keybindings.js';
 
 
 export async function createNewUserTutorialNodes (tree, parentNode) {
-  const root = tree.root;
-  // build a list of keyBindings
-  const keymapInfo = [
-  ];
-  for (const key of Object.keys(keyBindings)) {
-    const value = keyBindings[key];
-    if ('none' !== value)
-      keymapInfo.push({ label: `${key} : ${value}` });
-  }
+  // Build a list of default key bindings without loading the UI layer into
+  // the background service worker.
+  const keymapInfo = Object.entries(defaultKeyBindings)
+    .filter(([, action]) => 'none' !== action)
+    .map(([key, action]) => ({ label: `${key} : ${action}` }));
   // define the help nodes
   const helpInfo = { label: 'Welcome, new user!', nodes: [
     { label: 'Click in this panel to focus it' },
@@ -189,13 +185,12 @@ export async function createNewUserTutorialNodes (tree, parentNode) {
     );
   }
 
-  async function addItem (parent, index, details) {
-    const newNode = await parent.addChild(index, details,
-      { reason: 'tutorial' });
+  async function addItem (parent, index, details, args) {
+    const newNode = await parent.addChild(index, details, args);
     if (details.nodes) {
       let i = 0;
       for (const kid of details.nodes) {
-        await addItem(newNode, i, kid);
+        await addItem(newNode, i, kid, args);
         i ++;
       }
     }
@@ -209,5 +204,8 @@ export async function createNewUserTutorialNodes (tree, parentNode) {
     // don't move the "Pinned" branch if it exists
     destIndex = 1;
   }
-  await addItem(destParent, destIndex, helpInfo);
+  await tree.runPersistenceBatch(
+    (args) => addItem(destParent, destIndex, helpInfo, args),
+    { reason: 'tutorial' }
+  );
 }

@@ -32,8 +32,8 @@ export class Config {
     // separate list of actual config keys,
     // so we can distinguish which ones are config keys
     // and which ones are class members
-    // Map<key, true>
-    this.keys = new Map();
+    // Set<key>
+    this.keys = new Set();
     // functions to call when a value changes
     // Map<key, Array<{callback, delay}>>
     this.watchers = new Map();
@@ -112,7 +112,7 @@ export class Config {
   async getMany (vars) {
     const items = await api.storage.local.get(vars);
     for (const [key, value] of Object.entries(items)) {
-      this.keys.set(key, true);
+      this.keys.add(key);
       this[key] = value;
       //debug(`${key} => ${value}`);
     }
@@ -123,7 +123,7 @@ export class Config {
     if (undefined === value) value = this.defaults[key];
     const result = await api.storage.local.get(key);
     if (undefined !== result[key]) value = result[key];
-    this.keys.set(key, true);
+    this.keys.add(key);
     this[key] = value;
     return value;
   }
@@ -131,7 +131,7 @@ export class Config {
   async set (key, value) {
     const vars = {};
     vars[key] = value;
-    this.keys.set(key, true);
+    this.keys.add(key);
     this[key] = value;
     return await api.storage.local.set(vars);
   }

@@ -64,8 +64,9 @@ export class TreeView extends Tree {
 
     // table mapping keys to actions
     this.keyEventMutex = new Mutex();
-    this.keyBindngs = { ...defaultKeyBindings };
-    this.keyBindingsByAction = this.buildActionKeyMap(this.keyBindngs);
+    this.keyBindings = { ...defaultKeyBindings };
+    this.keyBindingsByAction = this.buildActionKeyMap(this.keyBindings);
+    this.activeDialogCount = 0;
     this.actionLabels = {};
     for (const binding of keyBindingActions) {
       this.actionLabels[binding.action] = binding.label;
@@ -411,6 +412,10 @@ export class TreeView extends Tree {
     }
   }
 
+  get dialogActive () {
+    return this.activeDialogCount > 0;
+  }
+
   buildActionKeyMap (keyBindings) {
     const byAction = {};
     for (const key of Object.keys(keyBindings)) {
@@ -510,8 +515,8 @@ export class TreeView extends Tree {
       }
     }
 
-    this.keyBindngs = keyBindings;
-    this.keyBindingsByAction = this.buildActionKeyMap(this.keyBindngs);
+    this.keyBindings = keyBindings;
+    this.keyBindingsByAction = this.buildActionKeyMap(this.keyBindings);
   }
 
   async updateKeyBindings () {
@@ -842,34 +847,25 @@ export class TreeView extends Tree {
     }
   }
 
-  async inputDialog (...args) {
-    // disable key event handling while dialog is active
-    this.dialogActive = true;
+  async runDialog (dialogFunction, args) {
+    this.activeDialogCount += 1;
     try {
-      return await inputDialog(...args);
+      return await dialogFunction(...args);
     } finally {
-      this.dialogActive = false;
+      this.activeDialogCount -= 1;
     }
   }
 
-  async nodeEditDialog (...args) {
-    // disable key event handling while dialog is active
-    this.dialogActive = true;
-    try {
-      return await nodeEditDialog(...args);
-    } finally {
-      this.dialogActive = false;
-    }
+  inputDialog (...args) {
+    return this.runDialog(inputDialog, args);
   }
 
-  async checkboxDialog (...args) {
-    // disable key event handling while dialog is active
-    this.dialogActive = true;
-    try {
-      return await checkboxDialog(...args);
-    } finally {
-      this.dialogActive = false;
-    }
+  nodeEditDialog (...args) {
+    return this.runDialog(nodeEditDialog, args);
+  }
+
+  checkboxDialog (...args) {
+    return this.runDialog(checkboxDialog, args);
   }
 
   resolveMoveAction (action) {
@@ -973,7 +969,7 @@ export class TreeView extends Tree {
   async dispatchInputEvent (event) {
     // look up the event name to see if it's mapped to an action
     // ... then call that action
-    const requestedAction = this.keyBindngs[event.processedName];
+    const requestedAction = this.keyBindings[event.processedName];
     const resolvedAction = this.resolveMoveAction(requestedAction);
     if (resolvedAction) {
       // bindable actions detectable by naming convention
@@ -1011,7 +1007,7 @@ export class TreeView extends Tree {
 
     // stop scrolling if mouse left the tree view
     if ((isFirefox && (! event.relatedTarget))
-      || ((0 === event.x) && (0 === event.x)))
+      || ((0 === event.x) && (0 === event.y)))
       this.dragScrollSpeed = 0;
 
     //debug(`mouseEvent(${eventType}):`, event);
@@ -1109,6 +1105,7 @@ export class TreeView extends Tree {
     // decide whether to act on mouse hover node or keyboard cursor node
     // based on the event type
     if ('click' === event.type) return this.mouseNode;
+    if (! this.cursor) return null;
     // do nothing if cursor is outside of viewRoot
     else if (! this.cursor.isInViewScope()) return null;
     // normal keyboard event
@@ -1940,7 +1937,7 @@ export class TreeView extends Tree {
       }
       if ('ask' === dStyle) {
         const result = await this.inputDialog({
-          doc: document,
+          doc: this.document,
           title: 'Delete Nodes',
           input: false,
           description: `Delete one node or all ${numToDelete} nodes?`,
@@ -1970,7 +1967,7 @@ export class TreeView extends Tree {
       // TODO: ask the user for confirmation
       const numToDelete = 1 + toDelete.countNodes();
       const result = await this.inputDialog({
-        doc: document,
+        doc: this.document,
         title: 'Delete Nodes',
         input: false,
         description: `Really delete ${numToDelete} nodes?`,
@@ -2038,7 +2035,7 @@ export class TreeView extends Tree {
           buttons = ['Cancel', 'All'];  // Cancel is default
         }
         const result = await this.inputDialog({
-          doc: document,
+          doc: this.document,
           title: 'Unload Tabs',
           input: false,
           description: description,
@@ -2161,7 +2158,7 @@ export class TreeView extends Tree {
         buttons = ['Cancel', 'All'];  // Cancel is default
       }
       const result = await this.inputDialog({
-        doc: document,
+        doc: this.document,
         title: 'Load Tabs',
         input: false,
         description: description,
@@ -2462,7 +2459,7 @@ export class TreeView extends Tree {
 
     // prompt for new label/note text
     const result = await this.checkboxDialog({
-      doc: document,
+      doc: this.document,
       title: 'Edit Task',
       description: cursor.toLine(),
       value: cursor.checkbox,
@@ -2652,7 +2649,12 @@ export class TreeView extends Tree {
     if (this.windowNode) parentId = this.windowNode.id;
     else if (this.root.nodes.length > 0) parentId = this.root.nodes[0].id;
     else parentId = this.root.id;
-    return await emit('bkgd_generateTutorial', { parentId });
+    // A lost response must not generate a second tutorial branch.
+    return await emit(
+      'bkgd_generateTutorial',
+      { parentId },
+      { retry: false }
+    );
   }
 
   async action_mousePressLeft (event) {
@@ -3035,7 +3037,12 @@ export class TreeView extends Tree {
   async action_wrapNodeInWindow (event) {
     const node = this.whichCursor(event);
     if (! node || node.isRoot()) return;
-    const result = await emit('bkgd_wrapNodeInWindow', { nodeId: node.id });
+    // Replaying this toggle could immediately undo the completed conversion.
+    const result = await emit(
+      'bkgd_wrapNodeInWindow',
+      { nodeId: node.id },
+      { retry: false }
+    );
     if (result && result.error) {
       warn('wrapNodeInWindow error', result.error);
       return;
@@ -3138,7 +3145,7 @@ export class TreeView extends Tree {
     // adjust menu position
     const rect = this.$mouseRow.getBoundingClientRect();
     const zoomLevel = this.cfg.treeViewZoomLevel;
-    let hTop = (rect.top + window.scrollY - (3 * zoomLevel))
+    let hTop = (rect.top + this.window.scrollY - (3 * zoomLevel))
       / zoomLevel;
     this.$hoverMenu.style.top = String(hTop) + 'px';
 
@@ -3188,23 +3195,15 @@ export class TreeView extends Tree {
     //debug(`TreeView.setCursor(): ${node.toLine()}`);
     // ensure cursor is on a visible node in our view scope
     const viewRoot = this.viewRoot;
-    if ((! node.isInViewScope()) || (! node.isVisible(viewRoot))) {
-      if (false) {}  // I was going to handle overrides here, but aborted
-      // might still want to do this later?
-      //if (args?.expand) {
-      //  // un-expand any previous override
-      //  const prevCursor = this.cursor;
-      //}
-      else {
-        // if node is visible, put cursor on it
-        // if node exists but is hidden, put cursor on visible parent
-        // otherwise put cursor on window node
-        let visibleNode = node ? node : viewRoot;
-        if ((visibleNode !== viewRoot) && (! visibleNode.isVisible(viewRoot)))
-          visibleNode = visibleNode.prevVisibleNode(viewRoot);
-        node = visibleNode;
-        //debug(`TreeView.setCursor(-->): ${node.toLine()}`);
-      }
+    if (! node) node = viewRoot;
+    if (node
+      && ((! node.isInViewScope()) || (! node.isVisible(viewRoot)))) {
+      // If the requested node is hidden, use its nearest visible fallback.
+      let visibleNode = node;
+      if ((visibleNode !== viewRoot) && (! visibleNode.isVisible(viewRoot)))
+        visibleNode = visibleNode.prevVisibleNode(viewRoot);
+      node = visibleNode;
+      //debug(`TreeView.setCursor(-->): ${node.toLine()}`);
     }
 
     // update the cursor position
@@ -3630,7 +3629,7 @@ export class TreeView extends Tree {
     // otherwise open in our own window
     let windowId;
     if ('session' === this.viewScope) {
-      const winNode = this.cursor.getWindowNode();
+      const winNode = this.cursor?.getWindowNode();
       if (winNode) windowId = winNode.windowId;
     }
     if (! windowId) {
@@ -3639,10 +3638,13 @@ export class TreeView extends Tree {
     }
     const [tab] = await api.tabs.query({ active: true, windowId });
     debug(`openLinkInNewTab() parent tab:`, tab);
-    createProperties.windowId = tab.windowId;
+    const targetWindowId = tab?.windowId || windowId;
+    if (targetWindowId) createProperties.windowId = targetWindowId;
     // Chrome can't open internal pages in incognito windows
-    if (internal && isChrome && tab.incognito) { }
-    else createProperties.openerTabId = tab.id;
+    if (tab) {
+      if (internal && isChrome && tab.incognito) { }
+      else createProperties.openerTabId = tab.id;
+    }
     return await api.tabs.create(createProperties);
   }
 
@@ -3801,5 +3803,3 @@ export class TreeView extends Tree {
   }
 
 }
-
-export { defaultKeyBindings as keyBindings };

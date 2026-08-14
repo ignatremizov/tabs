@@ -3,17 +3,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 "use strict";
-import { api, isChrome, isFirefox } from '/api.js';
-//import { debug } from '/common/common.js';
 
 
 export function buildEventName (event, eventType) {
-  const shift = (event.shiftKey && (event.key != 'Shift'  )) ? 'Shift+' : '';
-  const ctrl  = (event.ctrlKey  && (event.key != 'Control')) ? 'Ctrl+'  : '';
-  const alt   = (event.altKey   && (event.key != 'Alt'    )) ? 'Alt+'   : '';
-  const meta  = (event.metaKey  && (event.key != 'Meta'   )) ? 'Meta+'  : '';
-
-  //debug(`event`, event);
+  const shift = (event.shiftKey && (event.key !== 'Shift'  )) ? 'Shift+' : '';
+  const ctrl  = (event.ctrlKey  && (event.key !== 'Control')) ? 'Ctrl+'  : '';
+  const alt   = (event.altKey   && (event.key !== 'Alt'    )) ? 'Alt+'   : '';
+  const meta  = (event.metaKey  && (event.key !== 'Meta'   )) ? 'Meta+'  : '';
 
   let eventName;
 
@@ -45,6 +41,10 @@ export function buildEventName (event, eventType) {
     eventName = 'MouseOver';
   }
 
+  if (! eventName) {
+    event.processedName = '';
+    return '';
+  }
   const fullEventName = `${shift}${ctrl}${alt}${meta}${eventName}`;
   event.processedName = fullEventName;
   return fullEventName;

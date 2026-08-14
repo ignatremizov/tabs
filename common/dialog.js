@@ -3,17 +3,54 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 "use strict";
-import { api, isChrome, isFirefox } from '/api.js';
-
-import { log, debug } from '/common/common.js';
 import { buildEventName } from '/common/events.js';
+
+function createDialogFinisher (doc, $dialog, resolve) {
+  let finished = false;
+  return (value) => {
+    if (finished) return;
+    finished = true;
+    if ($dialog.open) $dialog.close();
+    $dialog.remove();
+    doc.activeElement?.blur?.();
+    resolve(value);
+  };
+}
+
+function appendDialogButtons (doc, $form, buttons, onSecondaryButton) {
+  if ((! Array.isArray(buttons)) || (buttons.length === 0)) return;
+  const $buttons = doc.createElement('div');
+  $buttons.id = 'dialogButtons';
+  for (let index = 0; index < buttons.length; index += 1) {
+    const label = buttons[index];
+    const $button = doc.createElement('button');
+    $button.innerText = label;
+    if (index === 0) {
+      $button.type = 'submit';
+    } else {
+      $button.type = 'button';
+      $button.addEventListener('click', () => {
+        onSecondaryButton(label);
+      });
+    }
+    $buttons.appendChild($button);
+  }
+  $form.appendChild($buttons);
+}
+
+function appendDialogText (doc, parent, id, text) {
+  if (! text) return null;
+  const element = doc.createElement('div');
+  element.id = id;
+  element.textContent = text;
+  parent.appendChild(element);
+  return element;
+}
 
 
 class Dialog {
 
-  // TODO: de-duplicate code, make a more generic dialog function
-
-  async inputDialog({
+  inputDialog({
     doc = document,  // maybe unnecessary?
     title = '',
     description = '',
@@ -28,24 +65,18 @@ class Dialog {
       const $dialog = doc.createElement('dialog');
       $dialog.id = 'inputDialog';
       $dialog.className = 'dialog';
+      const finish = createDialogFinisher(doc, $dialog, resolve);
 
-      // optional title widget
-      if (title) {
-        const $title = doc.createElement('div');
-        $title.id = 'dialogTitle';
-        $title.innerText = title;
-        $dialog.appendChild($title);
-      }
+      appendDialogText(doc, $dialog, 'dialogTitle', title);
 
       const $form = doc.createElement('form');
 
-      // optional description widget
-      if (description) {
-        const $description = doc.createElement('div');
-        $description.id = 'dialogDescription';
-        $description.textContent = description;
-        $form.appendChild($description);
-      }
+      appendDialogText(
+        doc,
+        $form,
+        'dialogDescription',
+        description
+      );
 
       // build the widget the user types into
       let $input;
@@ -62,13 +93,12 @@ class Dialog {
       // build the long text entry widget
       let $textArea;
       if (textArea) {
-        // optional label
-        if (textAreaLabel) {
-          const $label = doc.createElement('div');
-          $label.id = 'dialogTextAreaLabel';
-          $label.textContent = textAreaLabel;
-          $form.appendChild($label);
-        }
+        appendDialogText(
+          doc,
+          $form,
+          'dialogTextAreaLabel',
+          textAreaLabel
+        );
 
         $textArea = doc.createElement('textarea');
         $textArea.id = 'dialogTextArea';
@@ -76,41 +106,12 @@ class Dialog {
         $form.appendChild($textArea);
       }
 
-      // add the buttons
-      if (Array.isArray(buttons) && (buttons.length > 0)) {
-        const $buttons = doc.createElement('div');
-        $buttons.id = 'dialogButtons';
-        let first = true;
-        for (const label of buttons) {
-          const $btn = doc.createElement('button');
-          $btn.innerText = label;
-          //$btn.id = `dialogButton${label}`;  // FIXME: unsafe
-          // first button is the 'submit' button
-          // and emits its own special event when clicked
-          if (first) $btn.type = 'submit';
-          // handle clicks on all other buttons
-          else {
-            $btn.type = 'button';
-            $btn.addEventListener('click', (ev) => {
-              // return which button was pressed
-              const result = { button: label };
-              if (input) result.value = $input.value;
-              if (textArea) result.textAreaValue = $textArea.value;
-              // clean up
-              $dialog.close();
-              $dialog.remove();
-              doc.activeElement.blur();  // remove "selected" element outline
-              // return the user's inputs
-              resolve(result);
-            });
-          }
-          first = false;
-          // show the button
-          $buttons.appendChild($btn);
-        }
-        // show all buttons
-        $form.appendChild($buttons);
-      }
+      appendDialogButtons(doc, $form, buttons, (label) => {
+        const result = { button: label };
+        if (input) result.value = $input.value;
+        if (textArea) result.textAreaValue = $textArea.value;
+        finish(result);
+      });
 
       // user pressed Enter to submit the form
       const handleSubmit = (ev) => {
@@ -120,22 +121,15 @@ class Dialog {
         };
         if (input) result.value = $input.value;
         if (textArea) result.textAreaValue = $textArea.value;
-        // clean up
         $form.removeEventListener('submit', handleSubmit);
-        $dialog.close();
-        $dialog.remove();
-        doc.activeElement.blur();  // remove "selected" element outline
-        // return what the user entered
-        resolve(result);
+        finish(result);
       }
       $form.addEventListener('submit', handleSubmit);
       $dialog.appendChild($form);
 
       // if the user pressed Escape to dismiss the dialog
       $dialog.addEventListener('close', () => {
-        $dialog.remove();
-        doc.activeElement.blur();  // remove "selected" element outline
-        resolve(null);
+        finish(null);
       });
 
       // finally, show the actual dialog box
@@ -146,7 +140,7 @@ class Dialog {
     return promise;
   }
 
-  async checkboxDialog({
+  checkboxDialog({
     doc = document,  // maybe unnecessary?
     title = '',
     description = '',
@@ -154,41 +148,28 @@ class Dialog {
     classes,  // should be a Map()
     buttons = ['OK', 'Cancel']
   }={}) {
-    this.oldValue = value;
-    this.newValue = '';
+    let typedValue = '';
     const promise = new Promise((resolve) => {
+      const $dialog = doc.createElement('dialog');
+      $dialog.id = 'checkboxDialog';
+      $dialog.className = 'dialog';
+      const finishDialog = createDialogFinisher(doc, $dialog, resolve);
+
       function finish (value, event) {
         if (undefined !== event) {
           event.preventDefault();
           event.stopPropagation();
         }
-        //$dialog.removeEventListener('keydown', this.keyHandler);
-        // clean up
-        $dialog.close();
-        $dialog.remove();
-        doc.activeElement.blur();  // remove "selected" element outline
-        // return the user's inputs
-        resolve(value);
+        finishDialog(value);
       }
 
-      const $dialog = doc.createElement('dialog');
-      $dialog.id = 'checkboxDialog';
-      $dialog.className = 'dialog';
-
-      // optional title widget
-      if (title) {
-        const $title = doc.createElement('div');
-        $title.id = 'dialogTitle';
-        $title.innerText = title;
-        $dialog.appendChild($title);
-      }
-
-      if (description) {
-        const $description = doc.createElement('div');
-        $description.id = 'dialogDescription';
-        $description.innerText = description;
-        $dialog.appendChild($description);
-      }
+      appendDialogText(doc, $dialog, 'dialogTitle', title);
+      appendDialogText(
+        doc,
+        $dialog,
+        'dialogDescription',
+        description
+      );
 
       const $form = doc.createElement('form');
 
@@ -214,14 +195,9 @@ class Dialog {
         $span.textContent = cboxClass;
         $div.appendChild($span);
 
-        $div.addEventListener('click', (ev) => {
+        $div.addEventListener('click', () => {
           // return which button was pressed
           const result = { checkbox: val };
-          // clean up
-          $dialog.close();
-          $dialog.remove();
-          doc.activeElement.blur();  // remove "selected" element outline
-          // return the user's inputs
           finish(result);
         });
 
@@ -256,41 +232,16 @@ class Dialog {
 
       $form.appendChild($preview);
 
-      // add the buttons
-      if (Array.isArray(buttons) && (buttons.length > 0)) {
-        const $buttons = doc.createElement('div');
-        $buttons.id = 'dialogButtons';
-        let first = true;
-        for (const label of buttons) {
-          const $btn = doc.createElement('button');
-          $btn.innerText = label;
-          // first button is the 'submit' button
-          // and emits its own special event when clicked
-          if (first) $btn.type = 'submit';
-          // handle clicks on all other buttons
-          else {
-            $btn.type = 'button';
-            $btn.addEventListener('click', (ev) => {
-              // return which button was pressed
-              const result = { button: label, checkbox: oldValue };
-              // return the user's inputs
-              finish(result);
-            });
-          }
-          first = false;
-          // show the button
-          $buttons.appendChild($btn);
-        }
-        // show all buttons
-        $form.appendChild($buttons);
-      }
+      appendDialogButtons(doc, $form, buttons, (label) => {
+        finish({ button: label, checkbox: value });
+      });
 
       // user pressed Enter to submit the form
       const handleSubmit = (ev) => {
         ev.preventDefault();
         const result = {
           button: buttons[0],  // pretend 1st/default button was clicked
-          checkbox: oldValue
+          checkbox: value
         };
         // clean up
         $form.removeEventListener('submit', handleSubmit);
@@ -325,7 +276,7 @@ class Dialog {
           if ('Escape' === last) return finish(null, event);
           if ('Enter' === last) {
             // TODO: test what happens if press Enter while Delete is focused
-            if (this.newValue) finish({ checkbox: this.newValue }, event);
+            if (typedValue) finish({ checkbox: typedValue }, event);
             else finish(null, event);
             return;
           }
@@ -335,9 +286,13 @@ class Dialog {
           }
           // manually entering a percent
           if ('1234567890'.includes(last)) {
-            this.newValue = this.newValue + last;
-            if (2 == this.newValue.length)
-              finish({ checkbox: '%', checkboxPx: this.newValue / 100.0 }, event);
+            typedValue += last;
+            if (2 === typedValue.length) {
+              finish(
+                { checkbox: '%', checkboxPx: typedValue / 100.0 },
+                event
+              );
+            }
             return;
           }
           // invert case
@@ -358,7 +313,7 @@ class Dialog {
     return promise;
   }
 
-  async nodeEditDialog ({
+  nodeEditDialog ({
     doc = document,  // maybe unnecessary?
     title = '',
     node = null,
@@ -371,14 +326,9 @@ class Dialog {
       const $dialog = doc.createElement('dialog');
       $dialog.id = 'nodeEditDialog';
       $dialog.className = 'dialog';
+      const finish = createDialogFinisher(doc, $dialog, resolve);
 
-      // optional title widget
-      if (title) {
-        const $title = doc.createElement('div');
-        $title.id = 'dialogTitle';
-        $title.innerText = title;
-        $dialog.appendChild($title);
-      }
+      appendDialogText(doc, $dialog, 'dialogTitle', title);
 
       const $form = doc.createElement('form');
 
@@ -406,10 +356,7 @@ class Dialog {
       // label widget
       let $label;
       if (show.label) {
-        const $labelLabel = doc.createElement('div');
-        $labelLabel.id = 'dialogLabelLabel';
-        $labelLabel.textContent = 'Label';
-        $form.appendChild($labelLabel);
+        appendDialogText(doc, $form, 'dialogLabelLabel', 'Label');
 
         $label = doc.createElement('input');
         $label.id = 'dialogLabelInput';
@@ -423,10 +370,7 @@ class Dialog {
       // note widget
       let $note;
       if (show.note) {
-        const $noteLabel = doc.createElement('div');
-        $noteLabel.id = 'dialogNoteLabel';
-        $noteLabel.textContent = 'Notes';
-        $form.appendChild($noteLabel);
+        appendDialogText(doc, $form, 'dialogNoteLabel', 'Notes');
 
         $note = doc.createElement('textarea');
         $note.id = 'dialogNoteInput';
@@ -462,10 +406,12 @@ class Dialog {
       // title widget
       let $title;
       if (show.title) {
-        const $titleLabel = doc.createElement('div');
-        $titleLabel.id = 'dialogTitleLabel';
-        $titleLabel.textContent = 'Page Title';
-        $form.appendChild($titleLabel);
+        const $titleLabel = appendDialogText(
+          doc,
+          $form,
+          'dialogTitleLabel',
+          'Page Title'
+        );
 
         $title = doc.createElement('input');
         $title.id = 'dialogTitleInput';
@@ -482,10 +428,12 @@ class Dialog {
       // URL widget
       let $url;
       if (show.url) {
-        const $urlLabel = doc.createElement('div');
-        $urlLabel.id = 'dialogURLLabel';
-        $urlLabel.textContent = 'URL';
-        $form.appendChild($urlLabel);
+        const $urlLabel = appendDialogText(
+          doc,
+          $form,
+          'dialogURLLabel',
+          'URL'
+        );
 
         $url = doc.createElement('input');
         $url.id = 'dialogURLInput';
@@ -560,51 +508,17 @@ class Dialog {
         return result;
       }
 
-      // add the buttons
-      if (Array.isArray(buttons) && (buttons.length > 0)) {
-        const $buttons = doc.createElement('div');
-        $buttons.id = 'dialogButtons';
-        let first = true;
-        for (const buttonLabel of buttons) {
-          const $btn = doc.createElement('button');
-          $btn.innerText = buttonLabel;
-          // first button is the 'submit' button
-          // and emits its own special event when clicked
-          if (first) $btn.type = 'submit';
-          // handle clicks on all other buttons
-          else {
-            $btn.type = 'button';
-            $btn.addEventListener('click', (ev) => {
-              // return which button was pressed
-              const result = makeResult(buttonLabel);
-              // clean up
-              $dialog.close();
-              $dialog.remove();
-              doc.activeElement.blur();  // remove "selected" element outline
-              // return the user's inputs
-              resolve(result);
-            });
-          }
-          first = false;
-          // show the button
-          $buttons.appendChild($btn);
-        }
-        // show all buttons
-        $form.appendChild($buttons);
-      }
+      appendDialogButtons(doc, $form, buttons, (buttonLabel) => {
+        finish(makeResult(buttonLabel));
+      });
 
       // user pressed Enter to submit the form
       const handleSubmit = (ev) => {
         ev.preventDefault();
         // pretend 1st/default button was clicked
         const result = makeResult(buttons[0]);
-        // clean up
         $form.removeEventListener('submit', handleSubmit);
-        $dialog.close();
-        $dialog.remove();
-        doc.activeElement.blur();  // remove "selected" element outline
-        // return what the user entered
-        resolve(result);
+        finish(result);
       }
       $form.addEventListener('submit', handleSubmit);
       $dialog.appendChild($form);
@@ -619,9 +533,7 @@ class Dialog {
 
       // if the user pressed Escape to dismiss the dialog
       $dialog.addEventListener('close', () => {
-        $dialog.remove();
-        doc.activeElement.blur();  // remove "selected" element outline
-        resolve(null);
+        finish(null);
       });
 
       // finally, show the actual dialog box
@@ -634,17 +546,15 @@ class Dialog {
 
 }
 
+const dialog = new Dialog();
 
-export async function inputDialog(...args) {
-  const dia = new Dialog();
-  return dia.inputDialog(...args);
+export function inputDialog(...args) {
+  return dialog.inputDialog(...args);
 }
 
-export async function checkboxDialog(...args) {
-  const dia = new Dialog();
-  return dia.checkboxDialog(...args);
+export function checkboxDialog(...args) {
+  return dialog.checkboxDialog(...args);
 }
-export async function nodeEditDialog(...args) {
-  const dia = new Dialog();
-  return dia.nodeEditDialog(...args);
+export function nodeEditDialog(...args) {
+  return dialog.nodeEditDialog(...args);
 }

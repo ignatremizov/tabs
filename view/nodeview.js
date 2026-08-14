@@ -3,9 +3,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 "use strict";
-import { api, isChrome, isFirefox } from '/api.js';
+import { api } from '/api.js';
 
-import { log, debug, error, emit, fmtDate } from '/common/common.js';
+import { debug, error, fmtDate } from '/common/common.js';
 import { Node } from '/common/node.js';
 
 

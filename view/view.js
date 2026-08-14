@@ -3,15 +3,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 "use strict";
-import { api, isChrome, isFirefox } from '/api.js';
-
 import { log, error } from '/common/common.js';
 import { TreeView } from './treeview.js';
 
 log('/view/view.js running');
 
 function init() {
-  let tree = new TreeView();
+  const tree = new TreeView();
   tree.init().catch((err) => {
     error('TreeView initialization failed', err);
     tree.setStatus(`Initialization failed: ${err?.message || err}`);
@@ -22,5 +20,5 @@ function init() {
 
 // init when page is ready
 document.addEventListener('DOMContentLoaded', () => {
-  const tree = init();
+  init();
 });

@@ -4,9 +4,7 @@
 
 "use strict";
 import { api } from '/api.js';
-import {
-  log, debug, warn, error
-} from '/common/common.js';
+import { debug, warn } from '/common/common.js';
 import { Config } from '/common/config.js';
 
 export const themes = {
@@ -156,7 +154,7 @@ export class ThemedPage {
     this.$userStyles = $userStyles;
   }
 
-  async updateTheme () {
+  updateTheme () {
     let themeName = this.cfg.theme;
     debug(`theme = ${themeName}`);
     if (! themes[themeName]) {

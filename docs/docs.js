@@ -3,12 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 "use strict";
-console.log('docs.js loading...');
-import { api, isChrome, isFirefox } from '/api.js';
-
-import {
-  emit, log, debug, warn, error
-} from '/common/common.js';
+import { emit, log, error } from '/common/common.js';
 import { ThemedPage } from '/themes/themes.js';
 import { TreeView } from '/view/treeview.js';
 
@@ -119,4 +114,4 @@ document.addEventListener('DOMContentLoaded', () => {
   docs.init();
 });
 
-console.log('docs.js loaded');
+log('docs.js loaded');

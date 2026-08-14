@@ -301,10 +301,11 @@ class OptionsPage extends ThemedPage {
           try {
             const fileContent = await readFileAsText(file);
             const data = JSON.parse(fileContent);
+            // A lost response must not import the same backup a second time.
             const response = await emit(signalName, {
               data,
               filename: file.name,
-            });
+            }, { retry: false });
             if (response && response.error) {
               throw new Error(response.error);
             }
