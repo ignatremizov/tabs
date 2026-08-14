@@ -3189,7 +3189,7 @@ export class TreeView extends Tree {
     else this.$hoverMenuLoad.style.display = 'none';
 
     // show or hide the 'task' button
-    if ((! mouseNode.hasCheckbox()) && (! mouseNode.isRoot()))
+    if (! mouseNode.isRoot())
       this.$hoverMenuTask.style.display = 'inline-block';
     else this.$hoverMenuTask.style.display = 'none';
 
