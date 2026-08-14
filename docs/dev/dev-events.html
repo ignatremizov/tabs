@@ -46,6 +46,17 @@ code {
   matches its own to prevent feedback loops.
   </p>
 
+  <h3>Mutation completion</h3>
+  <p>
+  The background <code>TreeStore</code> claims <code>tree_*</code> mutation
+  messages and keeps the runtime response channel open until the corresponding
+  IndexedDB transaction commits. Failed mutations return an error instead of
+  a false success, and retried node-add messages are idempotent by node ID.
+  Browser structural events, active-state application, and scheduled
+  reconciliation share an in-memory mutation boundary so they cannot persist
+  over one another without writing queue records to disk.
+  </p>
+
   <h3>MV3 resilience</h3>
   <p>
   When no views are open, the service worker can be terminated between events.

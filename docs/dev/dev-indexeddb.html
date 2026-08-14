@@ -27,20 +27,21 @@ code {
 
   <h2>Database layout</h2>
   <p>
-  Database name: <code>TKTSTO</code>. Object stores:
+  Database name: <code>TKTSTO</code>. Object store:
   </p>
   <ul>
     <li><code>Nodes</code> — node records keyed by node ID.</li>
-    <li><code>Snapshots</code> — full tree snapshots keyed by name.</li>
-    <li><code>Transactions</code> — reserved for future log/undo support.</li>
   </ul>
 
   <h2>Reconciliation</h2>
   <p>
   Browser events and view requests update the background tree directly, where
-  <code>NodeStore</code> persists each actual change. A reconcile pass runs at
-  startup and on the configurable <code>periodicReconcile</code> alarm to repair
-  events lost while a Manifest V3 service worker was stopped.
+  <code>NodeStore</code> persists each actual change. Related node and parent
+  records are committed in one IndexedDB transaction, and browser events are
+  ordered with an in-memory mutex instead of a durable intent queue. A
+  reconcile pass runs at startup and on the configurable
+  <code>periodicReconcile</code> alarm to repair events lost while a Manifest V3
+  service worker was stopped.
   </p>
   <p>
   Browser state is authoritative for currently loaded tabs and windows; the
@@ -83,11 +84,14 @@ code {
     </li>
     <li>
       Mutations in the background use <code>NodeStore</code>, which calls
-      <code>db.saveNode()</code> after changes.
+      <code>db.writeNodes()</code> after changes. Structural operations batch
+      the changed node, old parent, new parent, and related pin/checkbox state
+      atomically. Stale callbacks cannot save nodes already removed from the
+      live tree.
     </li>
     <li>
       UI changes emit events to the background; background updates nodes and
-      persists them.
+      responds after the write transaction completes.
     </li>
     <li>
       On startup, <code>TreeStore.loadTreeFromDB()</code> loads nodes and

@@ -104,7 +104,7 @@ export class Node {
     }
 
     // unmark if necessary
-    await this.setMarked(false, { reason: 'deleteSelf' });
+    await this.setMarked(false, { ...args, reason: 'deleteSelf' });
 
     // remove this node from its parent
     this.parent.bump('mtime', args);
@@ -1106,8 +1106,10 @@ export class Node {
     // loaded
     else {
       // must let the bkgd handle it, requires stuff a view can't do
+      // Do not replay this toggle if its success response gets lost.
       const result = await emit('bkgd_convertNodeFromLoadedWindow',
-        { nodeId: this.id });
+        { nodeId: this.id },
+        { retry: false });
       if ('ok' === result.result) return true;
       return false;
     }
@@ -1147,8 +1149,10 @@ export class Node {
         return false;
       }
       // move all tabs to new window
+      // Do not open a second window if the first success response gets lost.
       const result = await emit('bkgd_convertNodeToLoadedWindow',
-        { nodeId: this.id });
+        { nodeId: this.id },
+        { retry: false });
       if ('ok' === result.result) return true;
       return false;
     }
@@ -1335,8 +1339,13 @@ export class Node {
 
     // save loaded tabs on window close
     // (and convert loaded -> wasLoaded during crash recovery)
-    if (isWindowClosing || ('mergeOpenWindowsIntoTree' === args.reason))
-      this.wasLoaded = (isWindowClosing || wasActuallyLoaded);
+    if (isWindowClosing) {
+      this.wasLoaded = true;
+    } else if ('mergeOpenWindowsIntoTree' === args.reason) {
+      // Dedupe may clear a stale browser binding before merge cleanup reaches
+      // this branch.  Keep its prior crash-recovery intent when saving it.
+      this.wasLoaded = Boolean(wasActuallyLoaded || this.wasLoaded);
+    }
     // propagate changes from other threads
     else if (undefined !== args.wasLoaded) this.wasLoaded = args.wasLoaded;
     // when unloading a tab manually, mark it as fully unloaded
@@ -1369,7 +1378,7 @@ export class Node {
     if (this.isWindow() && args.keepTabsOnClose) {
       const tabList = this.getLoadedTabs();
       for (const kid of tabList) {
-        await kid.unload({ reason: 'onWindowRemoved' });
+        await kid.unload({ ...args, reason: 'onWindowRemoved' });
       }
     }
     // if this was a window merge operation, ensure kids are unloaded
@@ -1383,7 +1392,13 @@ export class Node {
         (n) => n.tabId,
         (n) => (! n.isWindow())
       );
-      for (const kid of stale) { kid.tabId = undefined; }
+      for (const kid of stale) {
+        await kid.setTabFields({
+          tabId: undefined,
+          windowId: undefined,
+          active: false
+        }, { ...args, reason: 'mergeOpenWindowsIntoTree' });
+      }
       return true;
     }
 
@@ -1430,6 +1445,7 @@ export class Node {
         }
         // just in case, make sure we're not still marked active
         await this.setActive(false, {
+          ...args,
           reason: 'onWindowRemoved', 'onWindowRemoved': true,
         });
       }
@@ -1634,7 +1650,7 @@ export class Node {
         destIndex = this.indexOf() + destIndex + 1;
         debug(`new destination: child ${destIndex} of ${destParent.toLine()}`);
       }
-      await this.promoteKids({ reason: 'moveTo' });
+      await this.promoteKids({ ...args, reason: 'moveTo' });
     }
     const checkboxChangedNodes = [];
     // remove from old parent ...
@@ -1965,8 +1981,11 @@ export class Node {
       // this event means we know it *must* be in a loaded state
       if (active) this.loaded = true;
       // let others know
+      const eventArgs = { ...args };
+      delete eventArgs._persistNodesLater;
+      delete eventArgs._deleteNodeIdsLater;
       await emit('tree_nodeChanged',
-        { ...args, nodeId: this.id, type: 'setActive', active: this.active,
+        { ...eventArgs, nodeId: this.id, type: 'setActive', active: this.active,
           loaded: this.loaded,
           when: this.atime });
 
@@ -2014,6 +2033,21 @@ export class Node {
       return null;
     }
     return tabNode;
+  }
+
+  async applyActiveTabUpdates (tabList, activeTabNode, args) {
+    let changed = false;
+    for (const node of tabList) {
+      if ((node !== activeTabNode) && node.isActive()) {
+        await node.setActive(false, args);
+        changed = true;
+      }
+    }
+    if (activeTabNode && (! activeTabNode.active)) {
+      await activeTabNode.setActive(true, args);
+      changed = true;
+    }
+    return changed;
   }
 
   async setActiveTab (args, runMutation) {
@@ -2086,17 +2120,7 @@ export class Node {
                 warn(`Node.setActiveTab(): can't find tab "${tab.id}"`);
             }
 
-            // mark all other active tabs in this window as not-active
-            for (const node of tabList) {
-              if ((node !== tabNode) && node.isActive()) {
-                await node.setActive(false, args);
-                changed = true;
-              }
-            }
-
-            // mark the new tab as active
-            if (tabNode && (! tabNode.active)) {
-              await tabNode.setActive(true, args);
+            if (await this.applyActiveTabUpdates(tabList, tabNode, args)) {
               changed = true;
             }
           };

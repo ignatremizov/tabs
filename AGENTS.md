@@ -208,8 +208,6 @@ Database name: `TKTSTO`
 | Object Store | Key | Purpose |
 |-------------|-----|---------|
 | `Nodes` | node ID | Individual node data (JSON) |
-| `Snapshots` | session name | Full tree snapshots |
-| `Transactions` | key | Transaction log (future) |
 
 ---
 

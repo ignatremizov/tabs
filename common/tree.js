@@ -5,7 +5,7 @@
 "use strict";
 import {
   api, isChrome, isFirefox,
-  isEdge, isBrave, isVivaldi, isMaxthon, isZenBrowser
+  isVivaldi, isZenBrowser
 } from '/api.js';
 
 import * as common from '/common/common.js';
@@ -178,6 +178,10 @@ export class Tree {
       this.reorderTabsOnCreate = newValue;
     });
     this.initListeners();
+  }
+
+  async runPersistenceBatch (mutator, args) {
+    return await mutator(args);
   }
 
   initListeners () {
@@ -510,7 +514,6 @@ export class Tree {
   }
 
   getNodeByTabId (tabId, root)  {
-    // TODO: maybe move this function to Node.getNodeByTabId() ?
     if (! root) root = this.root;
     const directMatches = root.findNodes((node) =>
       { return (node.tabId === tabId); }
@@ -534,28 +537,63 @@ export class Tree {
     return preferred;
   }
 
-  choosePreferredTabNode (nodes) {
+  choosePreferredTabNode (nodes, preferredWindowId) {
     if (! nodes || (nodes.length < 1)) return null;
     if (1 === nodes.length) return nodes[0];
-    const scored = nodes.map((node) => ({
-      node,
-      score: [
-        node.isLoaded() ? 1 : 0,
-        node.isActive() ? 1 : 0,
-        node.windowId ? 1 : 0,
-        node.shouldUnloadNotDelete() ? 1 : 0,
-        node.ctime || 0,
-        node.id || ''
-      ]
-    }));
-    scored.sort((a, b) => {
-      for (let i = 0; i < a.score.length; i++) {
-        if (a.score[i] < b.score[i]) return 1;
-        if (a.score[i] > b.score[i]) return -1;
+    const hasPreferredWindow = (
+      (undefined !== preferredWindowId)
+      && (null !== preferredWindowId)
+    );
+    const getScore = (node) => (
+      hasPreferredWindow
+        ? [
+            (node.windowId === preferredWindowId) ? 1 : 0,
+            node.isLoaded() ? 1 : 0,
+            node.shouldUnloadNotDelete() ? 1 : 0,
+            node.ctime || 0,
+            node.id || ''
+          ]
+        : [
+            node.isLoaded() ? 1 : 0,
+            node.isActive() ? 1 : 0,
+            ((undefined !== node.windowId)
+              && (null !== node.windowId)) ? 1 : 0,
+            node.shouldUnloadNotDelete() ? 1 : 0,
+            node.ctime || 0,
+            node.id || ''
+          ]
+    );
+    let bestNode = nodes[0];
+    let bestScore = getScore(bestNode);
+    for (let nodeIndex = 1; nodeIndex < nodes.length; nodeIndex += 1) {
+      const candidate = nodes[nodeIndex];
+      const candidateScore = getScore(candidate);
+      for (let scoreIndex = 0; scoreIndex < bestScore.length; scoreIndex += 1) {
+        if (candidateScore[scoreIndex] < bestScore[scoreIndex]) break;
+        if (candidateScore[scoreIndex] > bestScore[scoreIndex]) {
+          bestNode = candidate;
+          bestScore = candidateScore;
+          break;
+        }
       }
-      return 0;
-    });
-    return scored[0].node;
+    }
+    return bestNode;
+  }
+
+  buildTabBindingIndex () {
+    const tabNodesById = new Map();
+    const oldTabNodesById = new Map();
+    const add = (map, tabId, node) => {
+      if ((undefined === tabId) || (null === tabId)) return;
+      if (! map.has(tabId)) map.set(tabId, []);
+      map.get(tabId).push(node);
+    };
+    for (const node of Object.values(this.nodes)) {
+      if ((! node) || node.isWindow()) continue;
+      add(tabNodesById, node.tabId, node);
+      add(oldTabNodesById, node.oldTabId, node);
+    }
+    return { tabNodesById, oldTabNodesById };
   }
 
   async ensureUniqueBrowserBindings (targetNode, changes, args) {
@@ -626,14 +664,83 @@ export class Tree {
   getTabPendingUrl (tab) {
     if (tab.pendingUrl) return tab.pendingUrl;  // chrome
     if ('about:blank' === tab.url) {  // firefox
-      if (tab.title && tab.title.includes('/')) {
+      const title = tab.title && tab.title.trim();
+      const looksLikeHost = title
+        && /^[a-z0-9.-]+\.[a-z]{2,}(?::\d+)?$/i.test(title);
+      if (title && (title.includes('/') || looksLikeHost)) {
         // firefox puts the pending URL in the title
         // but strips the protocol://
-        return tab.title;
+        return title;
       }
       return tab.url;
     }
     return tab.url;
+  }
+
+  browserTabToNodeDetails (tab, windowId = tab?.windowId) {
+    return {
+      windowId,
+      tabId: tab?.id,
+      title: tab?.title,
+      url: this.getTabPendingUrl(tab || {}),
+      faviconUrl: tab?.favIconUrl,
+      loaded: true,
+      active: tab?.active,
+      discarded: tab?.discarded,
+      frozen: tab?.frozen,
+      hidden: tab?.hidden,
+      incognito: tab?.incognito,
+      pinned: Boolean(tab?.pinned),
+      atime: tab?.lastAccessed
+    };
+  }
+
+  getBrowserTabChanges (node, tab, windowId = tab?.windowId) {
+    const desired = this.browserTabToNodeDetails(tab, windowId);
+    const changes = {};
+    if ((undefined !== desired.tabId) && (node.tabId !== desired.tabId)) {
+      changes.tabId = desired.tabId;
+    }
+    if ((undefined !== desired.windowId)
+      && (node.windowId !== desired.windowId)) {
+      changes.windowId = desired.windowId;
+    }
+    if ((undefined !== desired.title) && (node.title !== desired.title)) {
+      changes.title = desired.title;
+    }
+    if ((undefined !== desired.url) && (node.url !== desired.url)) {
+      changes.url = desired.url;
+    }
+    if ((undefined !== desired.faviconUrl)
+      && (node.faviconUrl !== desired.faviconUrl)) {
+      changes.favIconUrl = desired.faviconUrl;
+    }
+    if (! node.isLoaded()) changes.loaded = true;
+    for (const field of [
+      'active',
+      'discarded',
+      'frozen',
+      'hidden',
+      'incognito',
+      'atime'
+    ]) {
+      if ((undefined !== desired[field]) && (node[field] !== desired[field])) {
+        changes[field] = desired[field];
+      }
+    }
+    if ((undefined !== tab?.pinned)
+      && (node.pinned !== desired.pinned)) {
+      changes.pinned = desired.pinned;
+    }
+    return changes;
+  }
+
+  tabUrlsMatch (left, right) {
+    return urlsMatch(left, right);
+  }
+
+  getTabUrlMatchKey (url) {
+    return normalizeUrlForMatch(url);
   }
 
   async getWindowPinnedPrefixCount (windowId) {
@@ -861,11 +968,50 @@ export class Tree {
     });
   }
 
+  finishPendingWindowLoad (windowNode, succeeded) {
+    if (this.bkgd?.finishPendingWindowLoad) {
+      this.bkgd.finishPendingWindowLoad(windowNode, succeeded);
+      return;
+    }
+    if (windowNode.pendingWindowLoadTimer) {
+      clearTimeout(windowNode.pendingWindowLoadTimer);
+      delete windowNode.pendingWindowLoadTimer;
+    }
+    windowNode.browserLoadInProgress = false;
+  }
+
   async onWindowCreated (window, args) {
     // are we re-opening a saved window?
-    let savedWindowNode;
-    if (this.bkgd.windowsLoading.length > 0) {
-      savedWindowNode = this.bkgd.windowsLoading.shift();
+    let browserTabs = Array.isArray(window.tabs) ? window.tabs : [];
+    let savedWindowNode = this.findPendingWindowNode(
+      window.id,
+      null,
+      browserTabs,
+      false
+    );
+    if ((! savedWindowNode)
+      && this.bkgd?.windowsLoading?.length
+      && (browserTabs.length === 0)) {
+      try {
+        browserTabs = await api.tabs.query({ windowId: window.id });
+      } catch (err) {
+        debug(`Tree.onWindowCreated(${window.id}) tab lookup failed: ${err}`);
+      }
+      savedWindowNode = this.findPendingWindowNode(
+        window.id,
+        null,
+        browserTabs,
+        false
+      );
+    }
+    if (! savedWindowNode) {
+      savedWindowNode = this.findPendingWindowNode(window.id);
+    }
+    if (savedWindowNode) {
+      const pendingIndex = this.bkgd.windowsLoading.indexOf(savedWindowNode);
+      if (pendingIndex !== -1) {
+        this.bkgd.windowsLoading.splice(pendingIndex, 1);
+      }
       debug(`Tree.onWindowCreated() loadingSavedWindow=${savedWindowNode.id}`);
     }
     // if nothing in the queue, try searching by window ID
@@ -894,24 +1040,14 @@ export class Tree {
           geometry: [window.width, window.height, window.left, window.top]
         }, { reason: args.reason });
         attached = true;
-        if (this.bkgd.finishPendingWindowLoad) {
-          this.bkgd.finishPendingWindowLoad(savedWindowNode, true);
-        }
+        this.finishPendingWindowLoad(savedWindowNode, true);
         // in case a parent tab with child tabs has *already* been moved
         // to this window (which caused the window to be created),
         // reorder the tabs to pull in the child tabs
         await savedWindowNode.reorderAllTabsInThisWindow();
         return savedWindowNode;
       } finally {
-        if (this.bkgd.finishPendingWindowLoad) {
-          this.bkgd.finishPendingWindowLoad(savedWindowNode, attached);
-        } else {
-          if (savedWindowNode.pendingWindowLoadTimer) {
-            clearTimeout(savedWindowNode.pendingWindowLoadTimer);
-            delete savedWindowNode.pendingWindowLoadTimer;
-          }
-          savedWindowNode.browserLoadInProgress = false;
-        }
+        this.finishPendingWindowLoad(savedWindowNode, attached);
       }
     }
 
@@ -931,6 +1067,94 @@ export class Tree {
     }, { reason: args.reason });
     debug('Tree.onWindowCreated() new window node', newNode);
     return newNode;
+  }
+
+  findPendingWindowNode (
+    windowId,
+    tabNode = null,
+    browserTabs = [],
+    allowSingleFallback = true
+  ) {
+    const queue = this.bkgd && this.bkgd.windowsLoading;
+    if (! queue || (queue.length <= 0)) return null;
+
+    let pending = queue.find((node) => node.windowId === windowId);
+    if ((! pending) && tabNode) {
+      const tabWindowNode = tabNode.getWindowNode(false);
+      if (queue.includes(tabWindowNode)) pending = tabWindowNode;
+    }
+    const browserTabIds = new Set(
+      (browserTabs || []).map((tab) => tab && tab.id).filter(
+        (tabId) => (undefined !== tabId) && (null !== tabId)
+      )
+    );
+    if ((! pending) && (browserTabIds.size > 0)) {
+      pending = queue.find((windowNode) =>
+        windowNode.findNodes(
+          (node) => (! node.isWindow()) && browserTabIds.has(node.tabId),
+          (node) => ! node.isWindow()
+        ).length > 0
+      );
+    }
+    if (! pending) {
+      pending = queue.find((windowNode) =>
+        windowNode.findNodes(
+          (node) => (! node.isWindow()) && (node.windowId === windowId),
+          (node) => ! node.isWindow()
+        ).length > 0
+      );
+    }
+    if ((! pending) && allowSingleFallback && (queue.length === 1)) {
+      pending = queue[0];
+    }
+    return pending || null;
+  }
+
+  async getOrCreateWindowNodeForTabAttachment (tabNode, windowId) {
+    const found = this.root.findNodes((node) =>
+      node.isWindow() && (node.windowId === windowId)
+    );
+
+    // Prefer a strong pending-load match over a provisional window node.
+    // onWindowCreated may have fired first while several saved windows were
+    // opening, before the browser exposed enough information to identify one.
+    let pending = this.findPendingWindowNode(
+      windowId,
+      tabNode,
+      [],
+      false
+    );
+    if (pending) {
+      await pending.setTabFields({
+        windowId
+      }, { reason: 'onTabAttached' });
+      for (const conflict of found) {
+        if ((conflict === pending)
+          || conflict.windowId
+          || conflict.hasKids()
+          || conflict.shouldUnloadNotDelete()) {
+          continue;
+        }
+        await conflict.deleteSelf({ reason: 'emptyWindowClosed' });
+      }
+      return pending;
+    }
+    if (found.length > 0) return found[0];
+
+    pending = this.findPendingWindowNode(windowId, tabNode);
+    if (pending) {
+      await pending.setTabFields({
+        windowId
+      }, { reason: 'onTabAttached' });
+      return pending;
+    }
+
+    const windowNode = await this.root.addChild(this.root.nodes.length, {
+      type: 'window',
+      windowId
+    }, { reason: 'onTabAttached' });
+    debug('Tree.onTabAttached(new window)');
+    return windowNode;
   }
 
   async onWindowBoundsChanged(win, winNode = null) {
@@ -995,10 +1219,6 @@ export class Tree {
     const queue = this.bkgd && this.bkgd.nodesLoading;
     if (! queue || (queue.length <= 0)) return;
 
-    const normalizeUrl = (url) => {
-      if (! url) return '';
-      return url.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
-    };
     const matchesTab = (node) => {
       const windowNode = node.getWindowNode(false);
       if (windowNode
@@ -1013,7 +1233,7 @@ export class Tree {
       if ((expectedUrl === tabPendingUrl) || (expectedUrl === tab.url)) {
         return true;
       }
-      if (normalizeUrl(expectedUrl) === normalizeUrl(tabPendingUrl)) {
+      if (this.tabUrlsMatch(expectedUrl, tabPendingUrl)) {
         return true;
       }
       // Firefox substitutes about:blank while opening these protected pages.
@@ -1256,23 +1476,22 @@ export class Tree {
       }
     }
     // create the tree node
-    await destParent.addChild(destIndex, {
-      windowId: tab.windowId,
-      tabId: tab.id,
-      title: tab.title,
-      url: tab.url,
-      faviconUrl: tab.favIconUrl,
-      loaded: true,
-      active: tab.active,
-      discarded: tab.discarded,
-      frozen: tab.frozen,
-      hidden: tab.hidden,  // firefox only?
-      incognito: tab.incognito,
-      pinned: Boolean(tab.pinned),
-      atime: tab.lastAccessed
-      }, { reason: 'onTabCreated' });
+    await destParent.addChild(
+      destIndex,
+      this.browserTabToNodeDetails(tab),
+      { reason: 'onTabCreated' }
+    );
     }
     finally { unlock(); }
+  }
+
+  async unloadNodeForBrowserRemoval (node, args) {
+    return await node.unload(args);
+  }
+
+  async deleteNodeForBrowserRemoval (node, args, promoteKids = false) {
+    if (promoteKids) return await node.deleteSelfAndPromoteKids(args);
+    return await node.deleteSelf(args);
   }
 
   async onTabRemoved (tabId, removeInfo) {
@@ -1295,7 +1514,7 @@ export class Tree {
     if ('unload' === tabNode.tabClosedReason) {
       // finalize the unload now that the browser tab is actually closed
       tabNode.tabClosedReason = undefined;
-      return await tabNode.unload({
+      return await this.unloadNodeForBrowserRemoval(tabNode, {
         reason: 'onTabRemoved',
         detail: 'manualUnload'
       });
@@ -1310,7 +1529,10 @@ export class Tree {
     }
     if (isWindowClosing && windowNode && windowNode.keepTabsOnClose) {
       // Preserve tabs even if the window is boring.
-      return tabNode.unload({ reason: 'onWindowRemoved' });
+      return this.unloadNodeForBrowserRemoval(
+        tabNode,
+        { reason: 'onWindowRemoved' }
+      );
     }
 
     // If the last tab was a boring leaf, remove it and the empty window.
@@ -1320,11 +1542,20 @@ export class Tree {
       const isOnlyWindowChild = (1 === windowNode.nodes.length)
         && (windowNode.nodes[0] === tabNode);
       if (tabIsBoringLeaf && isOnlyWindowChild) {
-        await tabNode.deleteSelf({ reason: 'onTabRemoved' });
+        await this.deleteNodeForBrowserRemoval(
+          tabNode,
+          { reason: 'onTabRemoved' }
+        );
         if (windowNode.shouldUnloadNotDelete()) {
-          await windowNode.unload({ reason: 'onWindowRemoved' });
+          await this.unloadNodeForBrowserRemoval(
+            windowNode,
+            { reason: 'onWindowRemoved' }
+          );
         } else {
-          await windowNode.deleteSelf({ reason: 'onTabRemoved' });
+          await this.deleteNodeForBrowserRemoval(
+            windowNode,
+            { reason: 'onTabRemoved' }
+          );
         }
         return;
       }
@@ -1332,7 +1563,7 @@ export class Tree {
     // if tab closed only because its window is closing
     if (isWindowClosing) {
       // keep unloaded tab as part of the user's saved window
-      return await tabNode.unload({
+      return await this.unloadNodeForBrowserRemoval(tabNode, {
         reason: 'onWindowRemoved',
         detail: 'saveWindow'
       });
@@ -1340,7 +1571,7 @@ export class Tree {
     // if tab closed manually by user, but it has label/notes
     else if (tabNode.shouldUnloadNotDelete()) {
       // keep tab in tree to preserve its metadata
-      return await tabNode.unload({
+      return await this.unloadNodeForBrowserRemoval(tabNode, {
         reason: 'onTabRemoved',
         detail: 'hasMetadata'
       });
@@ -1348,15 +1579,19 @@ export class Tree {
     // if tab is boring but has kids
     else if (tabNode.hasKids()) {
       // delete the node, but keep its kids
-      return await tabNode.deleteSelfAndPromoteKids({
-        reason: 'onTabRemoved',
-        detail: 'hasKids'
-      });
+      return await this.deleteNodeForBrowserRemoval(
+        tabNode,
+        {
+          reason: 'onTabRemoved',
+          detail: 'hasKids'
+        },
+        true
+      );
     }
     // tab is a leaf node with no label or anything interesting
     else {
       // delete boring tabs on close
-      return await tabNode.deleteSelf({
+      return await this.deleteNodeForBrowserRemoval(tabNode, {
         reason: 'onTabRemoved',
         detail: 'boringLeaf'
       });
@@ -1505,21 +1740,6 @@ export class Tree {
         pinned: false
       }
     );
-
-    // old: some thoughts on how this maybe should work
-    // decide on a new position:
-    // - 1st child of prevTabNode
-    // - 1st sibling after prevTabNode
-    // - last child of prevTabNode
-    // - last sibling before nextTabNode
-    // - depends on Node expanded/collapsed states maybe?
-    // - other (after implementing user config options for other placements)
-    // cases...
-    // - if prev and next are siblings, place as sibling between them
-    // - if prev is leaf, place as sibling just after it
-    // - if prev is ancestor of next, place this as 1st child of prev
-    // - if prev is collapsed branch and next not a descendant, place as next sibling?
-    // - if prev is branch, place as 1st child?
   }
 
   async onTabAttached (tabId, attachInfo) {
@@ -1573,33 +1793,12 @@ export class Tree {
       await tabNode.setTabFields(attachmentChanges, { reason: 'onTabAttached' });
     }
 
-    // find or create the window node
-    let windowNode;
-    const found = this.root.findNodes((node) =>
-      { return node.isWindow() && (node.windowId === windowId); });
-    if (found.length > 0) { windowNode = found[0]; }
-    // when moving a loaded tab to an unloaded window,
-    // the browser does onTabAttached before onWindowCreated
-    // so we have to handle part of that process here
-    else if (this.bkgd.windowsLoading.length > 0) {
-      windowNode = this.bkgd.windowsLoading[0];
-      windowNode.windowId = windowId;
-    }
-    // otherwise, create a new window node
-    else {
-      const destParent = this.root;
-      const destIndex = destParent.nodes.length;
-      windowNode = await destParent.addChild(destIndex, {
-        type: 'window',
-        windowId: windowId
-      }, { reason: 'onTabAttached' });
-      // this happens if I drag a tab into nowhere to create a new window,
-      // and it initially has no tabs
-      debug('Tree.onTabAttached(new window)');
-      // is handled below
-      //await tabNode.moveTo(windowNode, 0, { reason: 'onTabAttached' });
-      //return;
-    }
+    // onTabAttached can precede onWindowCreated.  Use the moved tab's saved
+    // ancestry to identify the right pending window when several are opening.
+    const windowNode = await this.getOrCreateWindowNodeForTabAttachment(
+      tabNode,
+      windowId
+    );
 
     if ((browserTab && browserTab.pinned) || tabNode.pinned) {
       const dest = this.getPinnedInsertDestination(
@@ -2144,6 +2343,7 @@ export class Tree {
     for (const realTab of window.tabs) {
       // make an object we can safely modify
       const tabCopy = { ...realTab };
+      tabCopy.url = this.getTabPendingUrl(realTab);
       realTabList.push(tabCopy);
     }
     const haystack = [];
@@ -2160,52 +2360,62 @@ export class Tree {
     // bestMatch may be null if nothing good was found
     if (bestMatch) {
       // attach the window node to the browser window
-      bestMatch.winNode.windowId = window.id;
+      await bestMatch.winNode.setTabFields({
+        windowId: window.id
+      }, { reason: 'mergeOpenWindowsIntoTree' });
       // update the tabId and loaded / wasLoaded state of this window's tabs
       // search loaded tabs first, then wasLoaded, then unloaded
       // (to avoid attaching to an unloaded tab when a loaded tab exists)
-      const tabNodeList = [];
-      // loaded
-      for (const tabNode of bestMatch.winNode.findNodes(
-        (n) => { return n.isLoadedTab(); },
-        (n) => { return (! n.isWindow()); }
-      )) { tabNodeList.push(tabNode); }
-      // wasLoaded
-      for (const tabNode of bestMatch.winNode.findNodes(
-        (n) => { return n.isWasLoadedTab(); },
-        (n) => { return (! n.isWindow()); }
-      )) { tabNodeList.push(tabNode); }
-      // unloaded
-      for (const tabNode of bestMatch.winNode.findNodes(
-        (n) => { return n.isUnloadedTab(); },
-        (n) => { return (! n.isWindow()); }
-      )) { if (! tabNodeList.includes(tabNode)) tabNodeList.push(tabNode); }
+      const loadedTabNodes = [];
+      const wasLoadedTabNodes = [];
+      const unloadedTabNodes = [];
+      for (const node of bestMatch.tabList) {
+        if (node.isLoadedTab()) loadedTabNodes.push(node);
+        else if (node.isWasLoadedTab()) wasLoadedTabNodes.push(node);
+        else unloadedTabNodes.push(node);
+      }
+      const tabNodeList = [
+        ...loadedTabNodes,
+        ...wasLoadedTabNodes,
+        ...unloadedTabNodes
+      ];
+      const { tabNodesById, oldTabNodesById } =
+        this.buildTabBindingIndex();
+      const realTabMatches = buildRealTabMatchIndex(realTabList);
+      const hasBindingConflict = (targetNode, tabId) => {
+        const candidates = [
+          ...(tabNodesById.get(tabId) || []),
+          ...(oldTabNodesById.get(tabId) || [])
+        ];
+        return candidates.some((node) =>
+          (node !== targetNode)
+          && (this.nodes[node.id] === node)
+          && ((node.tabId === tabId) || (node.oldTabId === tabId))
+        );
+      };
       // now attach browser tab IDs to nodes
       for (const tabNode of tabNodeList) {
         // Duplicate URLs are common for apps like Gmail/Drive.  Prefer the
         // saved pinned state so startup pre-attachment does not swap pinned and
         // unpinned copies before the full merge pass runs.
-        let realTab = realTabList.find((candidate) =>
-          (! candidate.attached)
-          && (tabNode.url === candidate.url)
-          && (tabNode.isPinned() === Boolean(candidate.pinned))
+        const realTab = realTabMatches.take(
+          tabNode.url,
+          tabNode.isPinned()
         );
-        if (! realTab) {
-          // Fallback for older saved data or changed browser state; the later
-          // merge pass will refresh pinned state and reposition if needed.
-          realTab = realTabList.find((candidate) =>
-            (! candidate.attached) && (tabNode.url === candidate.url)
-          );
-        }
         if (realTab) {
-          realTab.attached = true;
+          const tabArgs = { reason: 'mergeOpenWindowsIntoTree' };
+          if (! hasBindingConflict(tabNode, realTab.id)) {
+            // The one-time binding index proves this assignment cannot steal a
+            // live ID, so avoid a full-tree uniqueness scan for every tab.
+            tabArgs.ensureUniqueBindings = false;
+          }
           await tabNode.setTabFields({
             tabId: realTab.id,
             windowId: window.id,
             loaded: true,
             wasLoaded: false,
             pinned: Boolean(realTab.pinned)
-          }, { reason: 'mergeOpenWindowsIntoTree' });
+          }, tabArgs);
         }
         // if a "loaded" tab node wasn't found, assign it as "wasLoaded"
         if ((! realTab) && tabNode.isLoaded()) {
@@ -2218,6 +2428,52 @@ export class Tree {
     }
     return result;
   }
+}
+
+function buildRealTabMatchIndex(tabs) {
+  const exactPinned = new Map();
+  const comparablePinned = new Map();
+  const exact = new Map();
+  const comparable = new Map();
+  const add = (map, key, tab) => {
+    if (! map.has(key)) map.set(key, { tabs: [], index: 0 });
+    map.get(key).tabs.push(tab);
+  };
+  const pinnedKey = (url, pinned) =>
+    JSON.stringify([url || '', Boolean(pinned)]);
+  for (const tab of tabs) {
+    const comparableUrl = normalizeUrlForMatch(tab.url);
+    add(exactPinned, pinnedKey(tab.url, tab.pinned), tab);
+    add(comparablePinned, pinnedKey(comparableUrl, tab.pinned), tab);
+    add(exact, tab.url || '', tab);
+    add(comparable, comparableUrl, tab);
+  }
+  const take = (map, key) => {
+    const bucket = map.get(key);
+    if (! bucket) return null;
+    while ((bucket.index < bucket.tabs.length)
+      && bucket.tabs[bucket.index].attached) {
+      bucket.index += 1;
+    }
+    const tab = bucket.tabs[bucket.index];
+    if (! tab) return null;
+    bucket.index += 1;
+    tab.attached = true;
+    return tab;
+  };
+  return {
+    take (url, pinned) {
+      const comparableUrl = normalizeUrlForMatch(url);
+      return (
+        take(exactPinned, pinnedKey(url, pinned))
+        || take(comparablePinned, pinnedKey(comparableUrl, pinned))
+        // Fallback for older saved data or changed browser state; the later
+        // merge pass refreshes pinned state and position.
+        || take(exact, url || '')
+        || take(comparable, comparableUrl)
+      );
+    }
+  };
 }
 
 
@@ -2235,10 +2491,19 @@ function countPinnedPositionMatches(candidate, needle) {
   const limit = Math.min(candidate.length, needle.length);
   let count = 0;
   for (let i = 0; i < limit; i++) {
-    if ((candidate[i].url === needle[i].url)
+    if (urlsMatch(candidate[i].url, needle[i].url)
       && (getPinnedState(candidate[i]) === getPinnedState(needle[i]))) {
       count += 1;
     }
+  }
+  return count;
+}
+
+function countExactUrlPositionMatches(candidate, needle) {
+  const limit = Math.min(candidate.length, needle.length);
+  let count = 0;
+  for (let i = 0; i < limit; i++) {
+    if (candidate[i].url === needle[i].url) count += 1;
   }
   return count;
 }
@@ -2255,7 +2520,7 @@ function getPinnedState(item) {
 function isTabSubSequence(sub, arr) {
   let subIndex = 0;
   for (let i = 0; i < arr.length && subIndex < sub.length; i++) {
-    if (sub[subIndex].url === arr[i].url) {
+    if (urlsMatch(sub[subIndex].url, arr[i].url)) {
       subIndex++;
     }
   }
@@ -2263,11 +2528,31 @@ function isTabSubSequence(sub, arr) {
 }
 
 
-// check if two Tab arrays are identical (same length, same values in order)
-function tabArrayIncludes(arr, value) {
-  for (const item of arr)
-    if (item.url === value.url) return true;
-  return false;
+function countTabUrls(tabs) {
+  const counts = new Map();
+  for (const tab of tabs) {
+    const url = normalizeUrlForMatch(tab.url);
+    counts.set(url, (counts.get(url) || 0) + 1);
+  }
+  return counts;
+}
+
+function tabUrlCountsCover(containerCounts, requestedCounts) {
+  for (const [url, count] of requestedCounts.entries()) {
+    if ((containerCounts.get(url) || 0) < count) return false;
+  }
+  return true;
+}
+
+function normalizeUrlForMatch(url) {
+  if (! url) return '';
+  return String(url).replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+}
+
+function urlsMatch(left, right) {
+  if (left === right) return true;
+  if ((! left) || (! right)) return false;
+  return normalizeUrlForMatch(left) === normalizeUrlForMatch(right);
 }
 
 
@@ -2275,48 +2560,62 @@ function tabArrayIncludes(arr, value) {
 // Args are both [ tab1, tab2, ... ] arrays where each tab has a url.
 // Values are compared by tab.url.
 // Returns { category (lower is better), matchCount (higher is better) }
-// Returns null if the candidate matches fewer than half the needle's values.
-function getWindowCandidateScore(candidate, needle) {
-  // count how many elements of needle occur in candidate
-  const matchCount = needle.reduce(
-    (acc, v) => acc + (tabArrayIncludes(candidate, v) ? 1 : 0),
-    0);
-  const minMatches = Math.ceil(needle.length / 2);
-  // disqualify if fewer than half the values are present
-  //if (matchCount < minMatches) return null;
+// Returns null if the candidate has no URL overlap with the needle.
+function getWindowCandidateScore(
+  candidate,
+  needle,
+  needleCounts = countTabUrls(needle)
+) {
+  // Count a candidate URL only once per occurrence.  Without multiset
+  // matching, one saved Gmail tab looks like a full match for any number of
+  // restored Gmail tabs and can attach the browser window to the wrong node.
+  const candidateCounts = countTabUrls(candidate);
+  let matchCount = 0;
+  for (const [url, count] of needleCounts.entries()) {
+    matchCount += Math.min(count, candidateCounts.get(url) || 0);
+  }
+  // Disqualify windows with no overlap at all.
   if (matchCount < 1) return null;
 
   // check if candidate covers all of needle
-  const fullMatch = needle.every(v => tabArrayIncludes(candidate, v));
+  const fullMatch = tabUrlCountsCover(candidateCounts, needleCounts);
   // check if candidate is exclusively built from needle values
-  const candidateIsSubset = candidate.every(v => tabArrayIncludes(needle, v));
+  const candidateIsSubset = tabUrlCountsCover(needleCounts, candidateCounts);
 
+  const exactUrlPositionMatches =
+    countExactUrlPositionMatches(candidate, needle);
   const pinnedPositionMatches = countPinnedPositionMatches(candidate, needle);
+  const score = (category) => ({
+    category,
+    matchCount,
+    exactUrlPositionMatches,
+    pinnedPositionMatches
+  });
 
   // category 1: exact match
   if (tabArraysEqual(candidate, needle))
-    return { category: 1, matchCount, pinnedPositionMatches };
+    return score(1);
 
   // category 2 or 3: candidate contains all needle elements
   if (fullMatch) {
     // if the needle appears in order in the candidate,
     // it's a superset in order
     if (isTabSubSequence(needle, candidate))
-      return { category: 2, matchCount, pinnedPositionMatches };
+      return score(2);
     else
-      return { category: 3, matchCount, pinnedPositionMatches };
+      return score(3);
   }
 
   // category 4 or 5: candidate is made up solely of needle values
   if (candidateIsSubset) {
     if (isTabSubSequence(candidate, needle))
-      return { category: 4, matchCount, pinnedPositionMatches };
+      return score(4);
     else
-      return { category: 5, matchCount, pinnedPositionMatches };
+      return score(5);
   }
 
   // otherwise, candidate is a partial match that doesn't fit a category
-  return { category: 6, matchCount, pinnedPositionMatches };
+  return score(6);
 }
 
 
@@ -2326,9 +2625,25 @@ function getWindowCandidateScore(candidate, needle) {
 function findClosestWindowMatch(needle, haystack) {
   let bestCandidate = null;
   let bestScore = null;
+  const needleCounts = countTabUrls(needle);
+  const metadataScores = new WeakMap();
+  const getMetadataScore = (candidate) => {
+    const winNode = candidate.winNode;
+    if (metadataScores.has(winNode)) return metadataScores.get(winNode);
+    const score = (winNode.label ? 1 : 0)
+      + (winNode.note ? 1 : 0)
+      + (winNode.checkbox ? 1 : 0)
+      + winNode.countNodes();
+    metadataScores.set(winNode, score);
+    return score;
+  };
 
   for (const candidate of haystack) {
-    const score = getWindowCandidateScore(candidate.tabList, needle);
+    const score = getWindowCandidateScore(
+      candidate.tabList,
+      needle,
+      needleCounts
+    );
     const scoreText = score ? `${score.category}, ${score.matchCount}` : 'null';
     debug(`findClosestWindowMatch(${scoreText}): ${candidate.winNode.toLine()}`);
     // skip candidates that don't meet minimum matching criteria
@@ -2354,6 +2669,17 @@ function findClosestWindowMatch(needle, haystack) {
       // if URLs tie, prefer the candidate whose pinned positions line up.
       else if ((score.category === bestScore.category)
         && (score.matchCount === bestScore.matchCount)
+        && (score.exactUrlPositionMatches
+          > bestScore.exactUrlPositionMatches)
+      ) {
+        bestScore = score;
+        bestCandidate = candidate;
+      }
+      // If exact URL matches tie, prefer matching pinned positions.
+      else if ((score.category === bestScore.category)
+        && (score.matchCount === bestScore.matchCount)
+        && (score.exactUrlPositionMatches
+          === bestScore.exactUrlPositionMatches)
         && (score.pinnedPositionMatches > bestScore.pinnedPositionMatches)
       ) {
         bestScore = score;
@@ -2363,17 +2689,11 @@ function findClosestWindowMatch(needle, haystack) {
       // take the candidate with more metadata and children
       else if ((score.category === bestScore.category)
         && (score.matchCount === bestScore.matchCount)
+        && (score.exactUrlPositionMatches
+          === bestScore.exactUrlPositionMatches)
         && (score.pinnedPositionMatches === bestScore.pinnedPositionMatches)
       ) {
-        const sMeta = (bestCandidate.winNode.label ? 1 : 0)
-          + (bestCandidate.winNode.note ? 1 : 0)
-          + (bestCandidate.winNode.checkbox ? 1 : 0)
-          + bestCandidate.winNode.countNodes();
-        const cMeta = (candidate.winNode.label ? 1 : 0)
-          + (candidate.winNode.note ? 1 : 0)
-          + (candidate.winNode.checkbox ? 1 : 0)
-          + candidate.winNode.countNodes();
-        if (cMeta > sMeta) {
+        if (getMetadataScore(candidate) > getMetadataScore(bestCandidate)) {
           bestScore = score;
           bestCandidate = candidate;
         }
@@ -2382,6 +2702,9 @@ function findClosestWindowMatch(needle, haystack) {
   }
 
   const line = bestCandidate ? bestCandidate.winNode.toLine() : '';
-  debug(`findClosestWindowMatch() => ${bestScore}: ${line}`);
+  const scoreText = bestScore
+    ? `${bestScore.category}, ${bestScore.matchCount}`
+    : 'null';
+  debug(`findClosestWindowMatch() => ${scoreText}: ${line}`);
   return bestCandidate;
 }

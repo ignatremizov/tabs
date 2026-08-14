@@ -28,6 +28,19 @@ export const isVivaldi = isChrome
 // Maxthon
 export const isMaxthon = (typeof maxthon !== 'undefined');
 
+export function compareBrowserVersions (left, right) {
+  const leftParts = String(left || '').match(/\d+/g)?.map(Number) || [];
+  const rightParts = String(right || '').match(/\d+/g)?.map(Number) || [];
+  const count = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < count; index += 1) {
+    const leftPart = leftParts[index] || 0;
+    const rightPart = rightParts[index] || 0;
+    if (leftPart < rightPart) return -1;
+    if (leftPart > rightPart) return 1;
+  }
+  return 0;
+}
+
 // Zen Browser ... sigh.  This is a dirty kludge.
 // https://github.com/zen-browser/desktop/issues/12198
 // (can't be identified at import time without causing other problems,
@@ -42,7 +55,8 @@ if (isFirefox) {
       // Zen 1.18.4? and above
       if (info?.zen) isZenBrowser = true;
       // Firefox newer than Zen 1.18.3b
-      else if (info?.version > '147.0.2') isZenBrowser = false;
+      else if (compareBrowserVersions(info?.version, '147.0.2') > 0)
+        isZenBrowser = false;
       // otherwise, Zen 1.18.3 and below, can't fkn tell
       else isZenBrowser = 'maybe';
       console.log(`isZenBrowser => ${isZenBrowser}`);

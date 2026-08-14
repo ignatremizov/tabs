@@ -27,28 +27,6 @@ function isBoringLeaf(node) {
   return (! node.shouldUnloadNotDelete()) && (! node.hasKids());
 }
 
-function choosePrimaryTabNode(nodes, tabInfo) {
-  if (nodes.length <= 1) return nodes[0];
-  const tabWindowId = tabInfo ? tabInfo.windowId : undefined;
-  const scored = nodes.map((node) => {
-    const windowMatch = (tabWindowId && node.windowId === tabWindowId) ? 1 : 0;
-    const loadedScore = node.isLoaded() ? 1 : 0;
-    const keepScore = node.shouldUnloadNotDelete() ? 1 : 0;
-    return {
-      node,
-      score: [windowMatch, loadedScore, keepScore, node.ctime || 0, node.id]
-    };
-  });
-  scored.sort((a, b) => {
-    for (let i = 0; i < a.score.length; i++) {
-      if (a.score[i] < b.score[i]) return 1;
-      if (a.score[i] > b.score[i]) return -1;
-    }
-    return 0;
-  });
-  return scored[0].node;
-}
-
 function buildWindowChanges(winNode, window) {
   const changes = {};
   if (winNode.type !== 'window') changes.type = 'window';
@@ -76,39 +54,6 @@ function buildWindowChanges(winNode, window) {
   return changes;
 }
 
-function buildTabChanges(node, tabInfo) {
-  const tab = tabInfo.tab;
-  const changes = {};
-  if (node.tabId !== tab.id) changes.tabId = tab.id;
-  if (node.windowId !== tabInfo.windowId) changes.windowId = tabInfo.windowId;
-  if (undefined !== tab.title && node.title !== tab.title) changes.title = tab.title;
-  if (undefined !== tab.url && node.url !== tab.url) changes.url = tab.url;
-  if (undefined !== tab.favIconUrl && node.faviconUrl !== tab.favIconUrl) {
-    changes.favIconUrl = tab.favIconUrl;
-  }
-  if (! node.isLoaded()) changes.loaded = true;
-  if (undefined !== tab.active && node.active !== tab.active) changes.active = tab.active;
-  if (undefined !== tab.pinned && node.pinned !== Boolean(tab.pinned)) {
-    changes.pinned = Boolean(tab.pinned);
-  }
-  if (undefined !== tab.discarded && node.discarded !== tab.discarded) {
-    changes.discarded = tab.discarded;
-  }
-  if (undefined !== tab.frozen && node.frozen !== tab.frozen) {
-    changes.frozen = tab.frozen;
-  }
-  if (undefined !== tab.hidden && node.hidden !== tab.hidden) {
-    changes.hidden = tab.hidden;
-  }
-  if (undefined !== tab.incognito && node.incognito !== tab.incognito) {
-    changes.incognito = tab.incognito;
-  }
-  if (undefined !== tab.lastAccessed && node.atime !== tab.lastAccessed) {
-    changes.atime = tab.lastAccessed;
-  }
-  return changes;
-}
-
 async function detachTabNode(node, reason) {
   if (node.isLoaded()) {
     await node.unload({ reason, wasLoaded: false });
@@ -117,7 +62,8 @@ async function detachTabNode(node, reason) {
   if (node.tabId || node.windowId) {
     await node.setTabFields({
       tabId: undefined,
-      windowId: undefined
+      windowId: undefined,
+      active: false
     }, { reason });
     return true;
   }
@@ -139,7 +85,11 @@ async function cleanupClosedTab(node, reason) {
 
 async function ensureTabNodeAttached(node, winNode, tabInfo, reason) {
   let changed = false;
-  const changes = buildTabChanges(node, tabInfo);
+  const changes = node.tree.getBrowserTabChanges(
+    node,
+    tabInfo.tab,
+    tabInfo.windowId
+  );
   if (Object.keys(changes).length > 0) {
     await node.setTabFields(changes, { reason });
     changed = true;
@@ -187,7 +137,12 @@ export async function runReconcile ({ reason } = {}) {
     for (const window of windows) {
       let winNode = bkgd.tree.root.getWindowId(window.id);
       if (! winNode) {
-        winNode = await bkgd.tree.findMatchingWindow(window, attachedNodeIds);
+        const match = await bkgd.tree.findMatchingWindow(
+          window,
+          attachedNodeIds
+        );
+        winNode = match.winNode;
+        if (winNode) didWork = true;
       }
       if (winNode) {
         const changes = buildWindowChanges(winNode, window);
@@ -211,16 +166,7 @@ export async function runReconcile ({ reason } = {}) {
     const windowNodesById = new Map(
       attachedWindows.map(({ winNode, window }) => [window.id, winNode])
     );
-    const tabNodesById = new Map();
-    const nodes = Object.values(bkgd.tree.nodes);
-    for (const node of nodes) {
-      if (node.tabId) {
-        if (! tabNodesById.has(node.tabId)) {
-          tabNodesById.set(node.tabId, []);
-        }
-        tabNodesById.get(node.tabId).push(node);
-      }
-    }
+    const { tabNodesById } = bkgd.tree.buildTabBindingIndex();
 
     for (const { winNode, window } of attachedWindows) {
       const tabs = tabsByWindowId.get(window.id) || [];
@@ -228,7 +174,10 @@ export async function runReconcile ({ reason } = {}) {
         const tabInfo = tabById.get(tab.id);
         const existing = tabNodesById.get(tab.id);
         if (existing && existing.length > 0) {
-          const primary = choosePrimaryTabNode(existing, tabInfo);
+          const primary = bkgd.tree.choosePreferredTabNode(
+            existing,
+            tabInfo.windowId
+          );
           const wasPinned = Boolean(primary.pinned);
           const changed = await ensureTabNodeAttached(primary, winNode, tabInfo, reason);
           if (changed || primary !== existing[0]) didWork = true;
@@ -277,25 +226,18 @@ export async function runReconcile ({ reason } = {}) {
         } else if (tab.openerTabId && tab.openerTabId !== tab.id) {
           const openerNodes = tabNodesById.get(tab.openerTabId);
           if (openerNodes && openerNodes.length > 0) {
-            destParent = openerNodes[0];
+            destParent = bkgd.tree.choosePreferredTabNode(
+              openerNodes,
+              tabById.get(tab.openerTabId)?.windowId
+            );
             destIndex = destParent.nodes.length;
           }
         }
-        const newNode = await destParent.addChild(destIndex, {
-          windowId: window.id,
-          tabId: tab.id,
-          title: tab.title,
-          url: tabInfo.tab.url,
-          faviconUrl: tab.favIconUrl,
-          loaded: true,
-          active: tab.active,
-          pinned: Boolean(tab.pinned),
-          discarded: tab.discarded,
-          frozen: tab.frozen,
-          hidden: tab.hidden,
-          incognito: tab.incognito,
-          atime: tab.lastAccessed
-        }, { reason });
+        const newNode = await destParent.addChild(
+          destIndex,
+          bkgd.tree.browserTabToNodeDetails(tabInfo.tab, window.id),
+          { reason }
+        );
         if (newNode && newNode.tabId) {
           tabNodesById.set(newNode.tabId, [newNode]);
         }
@@ -306,7 +248,10 @@ export async function runReconcile ({ reason } = {}) {
     for (const [tabId, nodesForTab] of tabNodesById.entries()) {
       if (nodesForTab.length <= 1) continue;
       const tabInfo = tabById.get(tabId);
-      const primary = choosePrimaryTabNode(nodesForTab, tabInfo);
+      const primary = bkgd.tree.choosePreferredTabNode(
+        nodesForTab,
+        tabInfo?.windowId
+      );
       for (const node of nodesForTab) {
         if (node === primary) continue;
         const changed = await detachTabNode(node, reason);
@@ -316,11 +261,12 @@ export async function runReconcile ({ reason } = {}) {
 
     const nodesToCheck = Object.values(bkgd.tree.nodes);
     for (const node of nodesToCheck) {
-      if (node.isWindow() || (! node.url)) continue;
+      if (node.isWindow()) continue;
+      if ((! node.url) && (! node.tabId) && (! node.windowId)) continue;
 
       const tabId = node.tabId;
       const inBrowser = tabId && tabById.has(tabId);
-      if (! inBrowser && (node.isLoaded() || tabId)) {
+      if (! inBrowser && (node.isLoaded() || tabId || node.windowId)) {
         if (node.isLoaded()) {
           await cleanupClosedTab(node, reason);
         } else {
@@ -344,13 +290,24 @@ export async function runReconcile ({ reason } = {}) {
       }
     }
 
-    const windowsToCheck = Object.values(bkgd.tree.nodes);
-    for (const node of windowsToCheck) {
+    // Tab cleanup above can move nodes, but it does not create window nodes,
+    // so reuse the same stable snapshot instead of allocating and traversing
+    // the entire node cache again.
+    for (const node of nodesToCheck) {
       if (! node.isWindow()) continue;
-      if (node.windowId && (! windowById.has(node.windowId))) {
+      const primary = windowNodesById.get(node.windowId);
+      if (primary && (node !== primary)) {
+        await node.setTabFields({
+          windowId: undefined,
+          loaded: false,
+          active: false,
+          wasLoaded: Boolean(node.loaded || node.wasLoaded)
+        }, { reason });
+        didWork = true;
+      } else if (node.windowId && (! windowById.has(node.windowId))) {
         await node.windowClosed({ reason });
         didWork = true;
-      } else if (node.windowId && ! node.isLoaded()) {
+      } else if (primary && ! node.isLoaded()) {
         await node.setTabFields({ loaded: true }, { reason });
         didWork = true;
       }

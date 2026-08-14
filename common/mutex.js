@@ -20,10 +20,11 @@ export class Mutex {
 
   lock () {
     let unlockNext;
-    let willLock = new Promise(resolve => unlockNext = () => { resolve(); });
-    let willUnlock = this._locking.then(() => unlockNext);
+    const willLock = new Promise(resolve => {
+      unlockNext = resolve;
+    });
+    const willUnlock = this._locking.then(() => unlockNext);
     this._locking = this._locking.then(() => willLock);
     return willUnlock;
   }
 }
-

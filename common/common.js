@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 "use strict";
-import { api, isChrome, isFirefox } from '/api.js';
+import { api, isFirefox } from '/api.js';
 
 
 export function _ (...args) {
@@ -189,6 +189,7 @@ export function fmtDate (date) {
 const emitSourceId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 globalThis.__tktstoEmitSourceId = emitSourceId;
 export { emitSourceId };
+let emitRequestCounter = 0;
 
 const emitFailureState = {
   lastWarnAt: 0
@@ -234,15 +235,22 @@ export async function emit (name, args, extra) {
   if ('boolean' === typeof extra) extra = { retry: extra };
   const retry = (undefined === extra?.retry) ? true : extra.retry;
   const port = extra?.port;
-  const requiresResponse = name?.startsWith?.('tree_')
+  const requiresResponse = ((! emit.isBkgd) && name?.startsWith?.('tree_'))
     || (name?.startsWith?.('bkgd_') && ('bkgd_ping' !== name));
 
   // ensure valid args
   if (!((typeof name === 'string') || (name instanceof String)))
     throw new TypeError(`emit(name): name was not a string: ${name}`);
   if (undefined === args) args = {};
+  else args = { ...args };
   args['msg'] = name;
   if (! args.sourceId) args.sourceId = emitSourceId;
+  if (name.startsWith('bkgd_')
+    && ('bkgd_ping' !== name)
+    && (! args.requestId)) {
+    emitRequestCounter += 1;
+    args.requestId = `${emitSourceId}-${emitRequestCounter.toString(36)}`;
+  }
   // debug info except for noisy pings
   if ('bkgd_ping' !== name) debug(1, `emit(${name})`, args, extra);
   // abort if we're the Bkgd script and there are no receivers

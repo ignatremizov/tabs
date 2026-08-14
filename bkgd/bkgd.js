@@ -27,6 +27,62 @@ import { runReconcile } from '/bkgd/reconcile.js';
 
 log('/bkgd/bkgd.js running');
 
+function buildStartupTabCandidateIndex(tree, windowNode) {
+  const all = windowNode.getLoadedAndUnloadedTabs();
+  const pinned = all.filter((node) => node.isPinned());
+  const movable = all.filter((node) => ! node.isPinned());
+  const byTabId = new Map();
+  const byExactUrl = new Map();
+  const byComparableUrl = new Map();
+  const add = (map, key, node) => {
+    if (! map.has(key)) map.set(key, []);
+    map.get(key).push(node);
+  };
+  for (const node of all) {
+    if ((undefined !== node.tabId) && (null !== node.tabId)) {
+      add(byTabId, node.tabId, node);
+    }
+    add(byExactUrl, node.url, node);
+    add(byComparableUrl, tree.getTabUrlMatchKey(node.url), node);
+  }
+
+  const available = (nodes, claimedNodeIds, pinnedState) =>
+    (nodes || []).filter((node) =>
+      (! claimedNodeIds.has(node.id))
+      && ((undefined === pinnedState)
+        || (node.isPinned() === pinnedState))
+    );
+  const choose = (nodes, claimedNodeIds, pinnedState) =>
+    tree.choosePreferredTabNode(
+      available(nodes, claimedNodeIds, pinnedState)
+  );
+
+  return {
+    findByTabId (tabId, claimedNodeIds) {
+      return available(byTabId.get(tabId), claimedNodeIds)[0] || null;
+    },
+    findByUrl (url, pinnedState, claimedNodeIds) {
+      const comparableUrl = tree.getTabUrlMatchKey(url);
+      return (
+        choose(byExactUrl.get(url), claimedNodeIds, pinnedState)
+        || choose(
+          byComparableUrl.get(comparableUrl),
+          claimedNodeIds,
+          pinnedState
+        )
+        || choose(byExactUrl.get(url), claimedNodeIds)
+        || choose(byComparableUrl.get(comparableUrl), claimedNodeIds)
+      );
+    },
+    findFallback (pinnedState, claimedNodeIds) {
+      const nodes = pinnedState ? pinned : movable;
+      return nodes.find((node) =>
+        (! claimedNodeIds.has(node.id)) && (! node.isWindow())
+      ) || null;
+    }
+  };
+}
+
 export class Bkgd {
 
   constructor () {
@@ -51,6 +107,18 @@ export class Bkgd {
     this.nodesLoading = [];
     this.windowsLoading = [];
     this.pendingBrowserLoadTimeoutMs = 5000;
+
+    // Reorder requests are debounced per browser window, then executed
+    // serially because the browser tab strip APIs are shared mutable state.
+    this.pendingTabReorders = new Map();
+    this.tabReorderRequestMutex = new Mutex();
+    this.tabReorderDebounceTime = 100;
+
+    // runtime.sendMessage() can lose its response after the handler commits.
+    // Cache mutation results by caller-generated request ID so transport
+    // retries do not replay imports, tutorial generation, or tree wrapping.
+    this.bkgdRequestResults = new Map();
+    this.bkgdRequestResultLimit = 256;
 
     // internal map of treeId : TreeViewInfo,
     // tracks the port and viewType and viewScope of each open TreeView
@@ -124,7 +192,7 @@ export class Bkgd {
         await this.mergeOpenWindowsIntoTree();
         // and if this is the first boot, add tutorial nodes
         if (this.tree.needsTutorial) {
-          createNewUserTutorialNodes(this.tree);
+          await createNewUserTutorialNodes(this.tree);
         }
         await runReconcile.call(this, { reason: 'startup' });
         // tree is ready to use
@@ -200,9 +268,8 @@ export class Bkgd {
 
   async ensureMoved (payload) {
     const node = this.tree.nodes[payload.nodeId];
-    let destParent = this.tree.nodes[payload.destParentId];
+    const destParent = this.tree.nodes[payload.destParentId];
     if (! node || ! destParent) return;
-    let destIndex = payload.destIndex;
     const args = {
       reason: payload.reason || 'tree_nodeMoved',
       when: payload.when
@@ -216,9 +283,23 @@ export class Bkgd {
     if (payload.skipTabReorder) {
       args.skipTabReorder = true;
     }
+
+    return await this.tree.runPersistenceBatch(
+      (operationArgs) => this.ensureMovedInBatch(
+        payload,
+        node,
+        destParent,
+        payload.destIndex,
+        operationArgs
+      ),
+      args
+    );
+  }
+
+  async ensureMovedInBatch (payload, node, destParent, destIndex, args) {
     if (payload.moveNodeOnly && node.hasKids()) {
       await node.promoteKids({
-        reason: args.reason,
+        ...args,
         skipTabReorder: true
       });
     }
@@ -511,6 +592,9 @@ export class Bkgd {
             } finally {
               this.backupQueued = false;
             }
+          }).catch((err) => {
+            this.backupQueued = false;
+            error('Startup backup failed', err);
           });
         }
       }
@@ -613,9 +697,7 @@ export class Bkgd {
       return error('failed to get list of windows', err);
     }
 
-    if (! globalThis.__TKTSTO_TEST_QUIET__) {
-      console.time('mergeOpenWindowsIntoTree');
-    }
+    const mergeStartedAt = Date.now();
     // attach browser windows to window nodes
     const attachedWindows = [];
     const attachedNodeIds = new Set();
@@ -653,11 +735,22 @@ export class Bkgd {
         winNode: null,
         loadedTabNodesWithNoTab: []
       };
+      let matchedByContents = false;
       if (! winNode) {
         match = await this.tree.findMatchingWindow(window, attachedNodeIds);
         winNode = match.winNode;
+        matchedByContents = Boolean(winNode);
       }
       if (winNode) {
+        // findMatchingWindow() already claimed this browser ID through
+        // setTabFields(), including its uniqueness check.
+        if (! matchedByContents) {
+          await this.tree.clearConflictingWindowBindings(
+            winNode,
+            window.id,
+            { reason: 'mergeOpenWindowsIntoTree' }
+          );
+        }
         //debug('winNode before loading:', winNode.asTextBranch());
         await winNode.load({ reason: 'mergeOpenWindowsIntoTree' });
         // reload any extension pages which failed to re-open
@@ -707,23 +800,64 @@ export class Bkgd {
     const winNodeList = this.tree.root.findNodes(
       (n) => { return n.isWindow(); });
     for (const node of winNodeList) {
-      let found = false;
-      for (const obj of attachedWindows) {
-        if (node.id === obj.winNode.id) found = true;
-      }
       const hasLoadedDesc = node.hasLoadedTabsDeep
         ? node.hasLoadedTabsDeep()
         : node.hasLoadedTabs();
-      if ((! found) && (node.isLoaded() || hasLoadedDesc)) {
+      if ((! attachedNodeIds.has(node.id))
+        && (node.isLoaded() || hasLoadedDesc)) {
         await node.unload({ reason: 'mergeOpenWindowsIntoTree' });
       }
     }
 
     // attach tabs now
     const claimedTabNodeIds = new Set();
+    const {
+      tabNodesById,
+      oldTabNodesById
+    } = this.tree.buildTabBindingIndex();
+    const liveTabNodesById = new Map();
+    const unavailableTabNodeIds = new Set();
+    const getIndexedTabNodes = (tabId) => {
+      const direct = (tabNodesById.get(tabId) || []).filter((node) =>
+        (this.tree.nodes[node.id] === node) && (node.tabId === tabId)
+      );
+      if (direct.length > 0) return direct;
+      return (oldTabNodesById.get(tabId) || []).filter((node) =>
+        (this.tree.nodes[node.id] === node) && (node.oldTabId === tabId)
+      );
+    };
+    const getIndexedTabNode = (tabId) =>
+      this.tree.choosePreferredTabNode(getIndexedTabNodes(tabId));
+    const getIndexedBindingConflicts = (targetNode, tabId) => {
+      const candidates = new Set([
+        ...(tabNodesById.get(tabId) || []),
+        ...(oldTabNodesById.get(tabId) || [])
+      ]);
+      return [...candidates].filter((node) =>
+        (node !== targetNode)
+        && (this.tree.nodes[node.id] === node)
+        && ((node.tabId === tabId) || (node.oldTabId === tabId))
+      );
+    };
     for (const obj of attachedWindows) {
       const winNode = obj.winNode;
       const window = obj.window;
+      const candidates = buildStartupTabCandidateIndex(this.tree, winNode);
+      const sessionTabNodesById = new Map();
+      if (this.tree.getTabNodeFromSession) {
+        const sessionNodes = await Promise.all(
+          window.tabs.map((tab) =>
+            this.tree.getTabNodeFromSession(tab.id)
+          )
+        );
+        for (let index = 0; index < window.tabs.length; index += 1) {
+          const sessionNode = sessionNodes[index];
+          if (sessionNode) {
+            sessionTabNodesById.set(window.tabs[index].id, sessionNode);
+          }
+        }
+      }
+      const rememberTabPromises = [];
       let pinnedPrefixCount = 0;
       for (const browserTab of window.tabs) {
         if (browserTab && browserTab.pinned) pinnedPrefixCount += 1;
@@ -732,16 +866,6 @@ export class Bkgd {
       for (const tab of window.tabs) {
         debug(`Tab ID: ${tab.id}, URL: ${tab.url}`, tab);
         const tabUrl = this.tree.getTabPendingUrl(tab);
-        const localTabList = winNode.getLoadedAndUnloadedTabs();
-        const availableTabList = localTabList.filter(
-          (node) => ! claimedTabNodeIds.has(node.id)
-        );
-        const localPinnedTabList = localTabList.filter(
-          (node) => node.isPinned()
-        );
-        const localMovableTabList = localTabList.filter(
-          (node) => ! node.isPinned()
-        );
         const getTabDestination = (tabNode = null) => {
           // Startup merge receives browser indexes, where pinned tabs occupy a
           // fixed prefix.  Convert those indexes into the correct tree sibling
@@ -765,120 +889,71 @@ export class Bkgd {
         };
         // detect whether tab is already in tree
         // (it usually should be, since findMatchingWindow() attaches tabIds)
-        const attachedTabNode = this.tree.getNodeByTabId(tab.id);
-        let sessionTabNode = null;
-        if (this.tree.getTabNodeFromSession) {
-          sessionTabNode = await this.tree.getTabNodeFromSession(tab.id);
-        }
+        const attachedTabNode = getIndexedTabNode(tab.id);
+        const sessionTabNode = sessionTabNodesById.get(tab.id);
         let tabNode = null;
         if (sessionTabNode
-          && (! claimedTabNodeIds.has(sessionTabNode.id))) {
+          && (! unavailableTabNodeIds.has(sessionTabNode.id))) {
           tabNode = sessionTabNode;
-        }
-        if (! tabNode) {
-          tabNode = availableTabList.find(
-            (node) => node.tabId === tab.id
-          );
         }
         if ((! tabNode)
           && attachedTabNode
-          && (! claimedTabNodeIds.has(attachedTabNode.id))
+          && (! unavailableTabNodeIds.has(attachedTabNode.id))
           && (attachedTabNode.getWindowNode(false) === winNode)) {
           tabNode = attachedTabNode;
         }
         if (! tabNode) {
-          // Try same-pinned-state URL matches before generic URL matches.  This
-          // avoids swapping saved pinned/unpinned duplicates with identical URLs.
-          const localUrlMatches = availableTabList.filter((node) =>
-            node.url === tabUrl
-              && (node.isPinned() === Boolean(tab.pinned)));
-          if (localUrlMatches.length > 0) {
-            tabNode = this.tree.choosePreferredTabNode(localUrlMatches);
-          }
+          tabNode = candidates.findByTabId(
+            tab.id,
+            unavailableTabNodeIds
+          );
         }
         if (! tabNode) {
-          const localUrlMatches = availableTabList.filter((node) =>
-            { return node.url === tabUrl; });
-          if (localUrlMatches.length > 0) {
-            tabNode = this.tree.choosePreferredTabNode(localUrlMatches);
-          }
+          // Match exact URL and pinned state first, then the normalized URL,
+          // before falling back to a pin-agnostic match.
+          tabNode = candidates.findByUrl(
+            tabUrl,
+            Boolean(tab.pinned),
+            unavailableTabNodeIds
+          );
         }
-        if ((! tabNode)
-          && tab.pinned
-          && Number.isInteger(tab.index)
-          && (tab.index >= 0)
-          && (tab.index < localPinnedTabList.length)) {
-          const indexCandidate = localPinnedTabList[tab.index];
-          if (indexCandidate
-            && (! claimedTabNodeIds.has(indexCandidate.id))
-            && (! indexCandidate.isWindow())) {
-            tabNode = indexCandidate;
-          }
-        }
-        if ((! tabNode)
-          && Number.isInteger(tab.index)
-          && ((tab.index - pinnedPrefixCount) >= 0)
-          && ((tab.index - pinnedPrefixCount) < localMovableTabList.length)) {
-          const indexCandidate = localMovableTabList[
-            tab.index - pinnedPrefixCount
-          ];
-          if (indexCandidate
-            && (! claimedTabNodeIds.has(indexCandidate.id))
-            && (! indexCandidate.isWindow())) {
-            tabNode = indexCandidate;
-          }
+        if (! tabNode) {
+          tabNode = candidates.findFallback(
+            Boolean(tab.pinned),
+            unavailableTabNodeIds
+          );
         }
         if ((! tabNode) && attachedTabNode
-          && (! claimedTabNodeIds.has(attachedTabNode.id))) {
+          && (! unavailableTabNodeIds.has(attachedTabNode.id))) {
           tabNode = attachedTabNode;
         }
         if (tabNode) {
           claimedTabNodeIds.add(tabNode.id);
+          unavailableTabNodeIds.add(tabNode.id);
+          const bindingConflicts =
+            getIndexedBindingConflicts(tabNode, tab.id);
+          for (const conflict of bindingConflicts) {
+            unavailableTabNodeIds.add(conflict.id);
+          }
+          const hasBindingConflict = bindingConflicts.length > 0;
           const prevWindowNode = tabNode.getWindowNode(false);
           const prevPinned = tabNode.pinned;
-          const changes = {};
-          if (tabNode.tabId !== tab.id) changes.tabId = tab.id;
-          if (tabNode.windowId !== window.id) changes.windowId = window.id;
-          if (undefined !== tab.title && (tabNode.title !== tab.title)) {
-            changes.title = tab.title;
-          }
-          if (undefined !== tabUrl && (tabNode.url !== tabUrl)) {
-            changes.url = tabUrl;
-          }
-          if ((undefined !== tab.favIconUrl)
-            && (tabNode.faviconUrl !== tab.favIconUrl)) {
-            changes.favIconUrl = tab.favIconUrl;
-          }
-          if (! tabNode.isLoaded()) changes.loaded = true;
-          if (undefined !== tab.active && (tabNode.active !== tab.active)) {
-            changes.active = tab.active;
-          }
-          if ((undefined !== tab.discarded)
-            && (tabNode.discarded !== tab.discarded)) {
-            changes.discarded = tab.discarded;
-          }
-          if ((undefined !== tab.frozen)
-            && (tabNode.frozen !== tab.frozen)) {
-            changes.frozen = tab.frozen;
-          }
-          if ((undefined !== tab.hidden)
-            && (tabNode.hidden !== tab.hidden)) {
-            changes.hidden = tab.hidden;
-          }
-          if ((undefined !== tab.pinned)
-            && (tabNode.pinned !== Boolean(tab.pinned))) {
-            changes.pinned = Boolean(tab.pinned);
-          }
-          if ((undefined !== tab.incognito)
-            && (tabNode.incognito !== tab.incognito)) {
-            changes.incognito = tab.incognito;
-          }
-          if ((undefined !== tab.lastAccessed)
-            && (tabNode.atime !== tab.lastAccessed)) {
-            changes.atime = tab.lastAccessed;
+          const changes = this.tree.getBrowserTabChanges(
+            tabNode,
+            tab,
+            window.id
+          );
+          if (hasBindingConflict && (! ('tabId' in changes))) {
+            // Reasserting the same ID runs the normal uniqueness path, which
+            // batches conflict cleanup with the target-node write.
+            changes.tabId = tab.id;
           }
           if (Object.keys(changes).length > 0) {
-            await tabNode.setTabFields(changes, { reason: 'mergeOpenWindowsIntoTree' });
+            const tabArgs = { reason: 'mergeOpenWindowsIntoTree' };
+            if (! hasBindingConflict) {
+              tabArgs.ensureUniqueBindings = false;
+            }
+            await tabNode.setTabFields(changes, tabArgs);
           }
           const pinnedChanged = prevPinned !== Boolean(tab.pinned);
           const windowChanged = prevWindowNode !== winNode;
@@ -899,8 +974,11 @@ export class Bkgd {
             }
           }
           if (this.tree.rememberTabNode) {
-            await this.tree.rememberTabNode(tabNode, tab.id);
+            rememberTabPromises.push(
+              this.tree.rememberTabNode(tabNode, tab.id)
+            );
           }
+          liveTabNodesById.set(tab.id, tabNode);
           continue;
         }
         // if not, add new tab to the tree
@@ -908,36 +986,46 @@ export class Bkgd {
         let destParent = dest.destParent;
         let destIndex = dest.destIndex;
         if ((! tab.pinned) && tab.openerTabId && (tab.openerTabId !== tab.id)) {
-          let found = this.tree.root.findNodes(
-            (n) => { return (n.tabId === tab.openerTabId); });
-          if (found.length > 0) {
-            destParent = found[0];
+          let openerNode = liveTabNodesById.get(tab.openerTabId);
+          if (! openerNode) {
+            const found = getIndexedTabNodes(tab.openerTabId);
+            const claimed = found.filter(
+              (node) => claimedTabNodeIds.has(node.id)
+            );
+            const sameWindow = found.filter(
+              (node) => node.getWindowNode(false) === winNode
+            );
+            openerNode = this.tree.choosePreferredTabNode(
+              claimed.length > 0
+                ? claimed
+                : (sameWindow.length > 0 ? sameWindow : found)
+            );
+          }
+          if (openerNode) {
+            destParent = openerNode;
             destIndex = destParent.nodes.length;
           } else {
             warn(`tab ${tab.id} has openerTabId ${tab.openerTabId} but no parent found`);
           }
         }
-        const newTabNode = await destParent.addChild(destIndex, {
-          windowId: window.id,
-          tabId: tab.id,
-          title: tab.title,
-          url: tabUrl,
-          faviconUrl: tab.favIconUrl,
-          loaded: true,
-          wasLoaded: false,
-          active: tab.active,
-          discarded: tab.discarded,
-          frozen: tab.frozen,
-          hidden: tab.hidden,  // firefox only?
-          incognito: tab.incognito,
-          pinned: Boolean(tab.pinned),
-          atime: tab.lastAccessed
-          }, { reason: 'mergeOpenWindowsIntoTree' });
+        const newTabNode = await destParent.addChild(
+          destIndex,
+          {
+            ...this.tree.browserTabToNodeDetails(tab, window.id),
+            wasLoaded: false
+          },
+          { reason: 'mergeOpenWindowsIntoTree' }
+        );
         claimedTabNodeIds.add(newTabNode.id);
+        unavailableTabNodeIds.add(newTabNode.id);
+        liveTabNodesById.set(tab.id, newTabNode);
         if (this.tree.rememberTabNode) {
-          await this.tree.rememberTabNode(newTabNode, tab.id);
+          rememberTabPromises.push(
+            this.tree.rememberTabNode(newTabNode, tab.id)
+          );
         }
       }
+      await Promise.all(rememberTabPromises);
 
       // remove stale "active" status if it exists
       // (happens when extension page is active and extension restarted,
@@ -971,9 +1059,9 @@ export class Bkgd {
       }
     }
 
-    if (! globalThis.__TKTSTO_TEST_QUIET__) {
-      console.timeEnd('mergeOpenWindowsIntoTree');
-    }
+    debug(
+      `mergeOpenWindowsIntoTree(): ${Date.now() - mergeStartedAt}ms`
+    );
     log('mergeOpenWindowsIntoTree() done');
   }
 
@@ -1273,7 +1361,24 @@ export class Bkgd {
       //await this.configLoaded;  // wait for config to finish loading
       // actually handle the event
       //debug(`bkgd: ${msg.msg}()`);
-      const result = await handler.bind(this)(msg, sender);
+      const requestKey = this.getBkgdRequestKey(msg);
+      let resultPromise = requestKey
+        ? this.bkgdRequestResults.get(requestKey)
+        : null;
+      if (! resultPromise) {
+        resultPromise = Promise.resolve().then(
+          () => handler.bind(this)(msg, sender)
+        );
+        if (requestKey) {
+          const limit = Math.max(1, this.bkgdRequestResultLimit || 1);
+          while (this.bkgdRequestResults.size >= limit) {
+            const oldest = this.bkgdRequestResults.keys().next().value;
+            this.bkgdRequestResults.delete(oldest);
+          }
+          this.bkgdRequestResults.set(requestKey, resultPromise);
+        }
+      }
+      const result = await resultPromise;
       //debug('bkgd sendResponse:', result);
       sendResponse(result);
       return;
@@ -1286,12 +1391,25 @@ export class Bkgd {
     return error(err);
   }
 
-  async bkgd_ping (msg, sender) {
-    const update = async () => {
-      this.bkgdPort_registerTreeView(msg, sender);
-      this.pruneDeadTreeViews();
-    };
-    update();  // put update on the queue to do after we respond to sender
+  getBkgdRequestKey (msg) {
+    if (! msg?.sourceId || ! msg?.requestId) return null;
+    // These requests are read-only or naturally repeatable, and getTree may
+    // contain megabytes of data which should not be retained in the cache.
+    if (['bkgd_ping', 'bkgd_getTree', 'bkgd_focusWindow'].includes(msg.msg)) {
+      return null;
+    }
+    return `${msg.sourceId}\u0000${msg.requestId}\u0000${msg.msg}`;
+  }
+
+  bkgd_ping (msg, sender) {
+    queueMicrotask(() => {
+      try {
+        this.bkgdPort_registerTreeView(msg, sender);
+        this.pruneDeadTreeViews();
+      } catch (err) {
+        error('bkgd_ping registration failed', err);
+      }
+    });
     return Date.now();
   }
 
@@ -1923,8 +2041,8 @@ export class Bkgd {
     // threads trying to reorder tabs at the same time.  They are all
     // redirected here, so the requests can be processed without interfering
     // with each other.
-    // Duplicate requests are ignored / debounced, since it only needs
-    // to handle *one* event.
+    // Duplicate requests are debounced per window.  Requests which arrive
+    // during execution trigger one follow-up pass so newer tree state wins.
     await this.treeLoaded;  // ensure tree is loaded
     let node = this.tree.nodes[msg.nodeId];
     if (! node) {
@@ -1933,27 +2051,51 @@ export class Bkgd {
       return { error: err };
     }
 
-    // event is already scheduled for handling, nothing further to do
-    if (this.needsTabReorder) return { result: 'ok pending' };
+    const windowNode = node.getWindowNode(false) || node;
+    const reorderKey = windowNode.id || msg.nodeId;
+    const pending = this.pendingTabReorders.get(reorderKey);
+    if (pending) {
+      pending.force = pending.force || Boolean(msg.force);
+      if (pending.running) pending.dirty = true;
+      return { result: 'ok pending' };
+    }
 
-    // debounce new requests until event is handled
-    this.needsTabReorder = true;
-    this.tabReorderDebounceTime = 100;  // ms
-
-    // actually handle the event, but delayed, and only once per batch
-    this.tabReorderTimeout = setTimeout(async () => {
-      try {
-        await node.reorderAllTabsInThisWindow({ force: msg.force });
-      }
-      catch (err) {
-        error(`bkgd_reorderAllTabsInThisWindow error:`, err);
-      }
-      finally {
-        this.needsTabReorder = false;
-      }
+    const request = {
+      node: windowNode,
+      force: Boolean(msg.force),
+      running: false,
+      dirty: false,
+      timer: null
+    };
+    this.pendingTabReorders.set(reorderKey, request);
+    request.timer = setTimeout(() => {
+      this.runPendingTabReorder(reorderKey, request).catch((err) => {
+        error('Pending tab reorder failed', err);
+      });
     }, this.tabReorderDebounceTime);
 
     return { result: 'ok scheduled' };
+  }
+
+  async runPendingTabReorder (reorderKey, request) {
+    const unlock = await this.tabReorderRequestMutex.lock();
+    try {
+      if (this.pendingTabReorders.get(reorderKey) !== request) return;
+      request.running = true;
+      do {
+        request.dirty = false;
+        const force = request.force;
+        request.force = false;
+        await request.node.reorderAllTabsInThisWindow({ force });
+      } while (request.dirty);
+    } catch (err) {
+      error(`bkgd_reorderAllTabsInThisWindow error:`, err);
+    } finally {
+      if (this.pendingTabReorders.get(reorderKey) === request) {
+        this.pendingTabReorders.delete(reorderKey);
+      }
+      unlock();
+    }
   }
 
   async bkgd_importBackupFile (msg) {
@@ -2009,7 +2151,7 @@ export class Bkgd {
       }
     }
     if (changedNodes.length > 0) {
-      await this.tree.db.saveNodes(changedNodes);
+      await this.tree.persistNodes(changedNodes);
     }
 
     log(`bkgd_backfillFavicons: done - updated ${updated}, skipped ${skipped}`);
@@ -2096,7 +2238,7 @@ export class Bkgd {
 
     const importedIds = new Set();
     const visitingIds = new Set();
-    async function createNodes (parent, childIds) {
+    async function createNodes (parent, childIds, args) {
       let firstNode;
       for (const childId of childIds) {
         //debug(`loading "${parent.id}" :: "${childId}"`);
@@ -2113,13 +2255,12 @@ export class Bkgd {
         if (! childDict) continue;
         importedIds.add(childId);
         visitingIds.add(childId);
-        const newNode = await parent.addChild(destIndex, childDict,
-          { reason: 'importFile' });
+        const newNode = await parent.addChild(destIndex, childDict, args);
         // first node created is the "root" of this sub-tree
         if (! firstNode) firstNode = newNode;
         try {
           if (childDict.nodes.length > 0) {
-            await createNodes(newNode, childDict.nodes);
+            await createNodes(newNode, childDict.nodes, args);
           }
         } finally {
           visitingIds.delete(childId);
@@ -2128,20 +2269,23 @@ export class Bkgd {
       return firstNode;
     }
 
-    // actually create the nodes now
-    const sessionRoot = await createNodes(this.tree.root, ['root']);
-    if (! sessionRoot) {
-      throw new Error('TKTSTO backup root could not be imported');
-    }
+    return await this.tree.runPersistenceBatch(async (args) => {
+      // actually create the nodes now
+      const sessionRoot = await createNodes(this.tree.root, ['root'], args);
+      if (! sessionRoot) {
+        throw new Error('TKTSTO backup root could not be imported');
+      }
 
-    // if imported session is older than current session,
-    // set the current session's creation date to the older date
-    if (sessionRoot.ctime < this.tree.root.ctime) {
-      // FIXME: do this through proper channels so it gets saved and emitted
-      this.tree.root.ctime = sessionRoot.ctime;
-    }
+      // if imported session is older than current session,
+      // set the current session's creation date to the older date
+      if (sessionRoot.ctime < this.tree.root.ctime) {
+        await this.tree.root.setTabFields({
+          ctime: sessionRoot.ctime
+        }, args);
+      }
 
-    return sessionRoot.countNodes();
+      return sessionRoot.countNodes();
+    }, { reason: 'importFile' });
   }
 
   async importTabsOutlinerExport(json, filename) {
@@ -2310,32 +2454,34 @@ export class Bkgd {
     // don't import to an incomplete tree
     await this.treeLoaded;
 
-    let rootNode;
-    async function createNodes (parent, children) {
-      for (const node of children) {
-        const destIndex = parent.nodes.length;
-        const newNode = await parent.addChild(destIndex, node,
-          { reason: 'importFile' });
-        // first node created is the "root" of this sub-tree
-        if (! rootNode) rootNode = newNode;
-        if (node.nodes) {
-          await createNodes(newNode, node.nodes);
+    return await this.tree.runPersistenceBatch(async (args) => {
+      let rootNode;
+      async function createNodes (parent, children) {
+        for (const node of children) {
+          const destIndex = parent.nodes.length;
+          const newNode = await parent.addChild(destIndex, node, args);
+          // first node created is the "root" of this sub-tree
+          if (! rootNode) rootNode = newNode;
+          if (node.nodes) {
+            await createNodes(newNode, node.nodes);
+          }
         }
       }
-    }
 
-    // actually create the nodes now
-    await createNodes(this.tree.root, parsedNodes);
+      // actually create the nodes now
+      await createNodes(this.tree.root, parsedNodes);
 
-    // if imported session is older than current session,
-    // set the current session's creation date to the older date
-    if (rootNode.ctime < this.tree.root.ctime) {
-      // FIXME: do this through proper channels so it gets saved and emitted
-      this.tree.root.ctime = rootNode.ctime;
-    }
-    // return the root of the new subtree
-    //debug('rootNode:', rootNode);
-    return rootNode;
+      // if imported session is older than current session,
+      // set the current session's creation date to the older date
+      if (rootNode && (rootNode.ctime < this.tree.root.ctime)) {
+        await this.tree.root.setTabFields({
+          ctime: rootNode.ctime
+        }, args);
+      }
+      // return the root of the new subtree
+      //debug('rootNode:', rootNode);
+      return rootNode;
+    }, { reason: 'importFile' });
   }
 
   async onCommand (command, tab) {
