@@ -514,14 +514,17 @@ export class NodeView extends Node {
 
   $renderChildren () {
     this.$render();
-    if (this.$nodes) this.$nodes.replaceChildren();
+    if (! this.$nodes) return;
+
+    const $children = this.tree.document.createDocumentFragment();
     // this.isExpanded() handles viewScope modes for us
     if (this.isExpanded()) {
       for (const node of this.nodes) {
-        this.$insertChild(node, node.indexOf());
         node.$renderChildren();
+        if (node.$) $children.appendChild(node.$);
       }
     }
+    this.$nodes.replaceChildren($children);
   }
 
   $destroyChildren () {

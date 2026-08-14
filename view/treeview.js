@@ -8,7 +8,7 @@ import { api, isChrome, isFirefox } from '/api.js';
 import {
   emit, log, debug, warn, error
 } from '/common/common.js';
-import { ThemedPage } from '/themes/themes.js';
+import { ThemedPage, themeConfigDefaults } from '/themes/themes.js';
 import { buildEventName } from '/common/events.js';
 import {
   defaultKeyBindings,
@@ -37,7 +37,9 @@ export class TreeView extends Tree {
     // true = static read-only TreeView for demonstration purposes
     this.isInert = Boolean(args.isInert || (! this.document));
 
-    this.cfgDefaults = { ...this.cfgDefaults,
+    this.cfgDefaults = {
+      ...this.cfgDefaults,
+      ...themeConfigDefaults,
       cursorFollowsActiveTab: true,
       activeTabExpandsItsParents: true,
       nodesPerPage: 20,
@@ -200,19 +202,6 @@ export class TreeView extends Tree {
     // node row hover menu
     this.$hoverMenu = doc.getElementById('hover-menu');
 
-    // some functions don't work in incognito windows in Chrome-based browsers
-    // because of its "spanning" vs "split" modes for incognito extensions
-    // (we use "spanning" mode, because "split" mode would break tktsto)
-    if (isChrome && (! this.isInert)) {
-      api.windows.getCurrent({ populate: false}, win => {
-        if (win.incognito) {
-          // grey out buttons to warn the user they won't work as expected
-          if (this.$treeViewInTabBtn) this.$treeViewInTabBtn.classList.add('greyed-out');
-          if (this.$optionsBtn) this.$optionsBtn.classList.add('greyed-out');
-          if (this.$helpBtn) this.$helpBtn.classList.add('greyed-out');
-        }
-      });
-    }
   }
 
   async init () {
@@ -222,7 +211,7 @@ export class TreeView extends Tree {
 
     if (! this.isInert) {
       this.themedPage = new ThemedPage('/view/sidepanel');
-      await this.themedPage.init();
+      await this.themedPage.init(this.cfg);
 
       this.keyEventMutex = new Mutex();
 
@@ -248,7 +237,7 @@ export class TreeView extends Tree {
       this.dropTextNoteMode = ['prepend', 'append'].includes(
         this.cfg.dropTextNoteMode
       ) ? this.cfg.dropTextNoteMode : 'prepend';
-      await this.updateKeyBindings();
+      this.updateKeyBindings();
 
       for (const [key, property] of [
         ['openWindowOnRootMove', 'openWindowOnRootMove'],
@@ -308,18 +297,22 @@ export class TreeView extends Tree {
 
     this.nodeIdMimeType = 'application/x-tktsto-node-id';
     this.nodeOnlyMoveMimeType = 'application/x-tktsto-move-node-only';
-    // get the window this view is attached to
-    this.windowObj = await api.windows.getCurrent();
-    this.windowId = this.windowObj.id;
-
+    const currentWindowPromise = api.windows.getCurrent();
     if (! this.isInert) {
       // init connection to bkgd
-      await this.initBkgdPort();
+      this.initBkgdPort();
       this.initBkgdPing();
-      this.id = await this.newNodeId();
-      // TODO: load the nodes from storage and render them
-      await this.loadTreeFromBkgd(false);
+      this.id = this.newTreeViewId();
+      [this.windowObj] = await Promise.all([
+        currentWindowPromise,
+        this.loadTreeFromBkgd(false),
+        this.detectTabOrSidepanel()
+      ]);
+    } else {
+      this.windowObj = await currentWindowPromise;
     }
+    this.windowId = this.windowObj.id;
+    this.applyIncognitoRestrictions();
 
     //this.root = new NodeView(this, null, this.window);
     this.root.window = this.window;
@@ -338,17 +331,13 @@ export class TreeView extends Tree {
           defaultViewScope = 'session';
         }
       }
-      this.viewScope = await this.getWindowConfig('viewScope', defaultViewScope);
-      if (! this.viewScope) this.viewScope = defaultViewScope;
-      const savedDetailsState = await this.getWindowConfig(
-        'detailsState',
-        this.detailsState
-      );
-      if (undefined !== savedDetailsState) {
-        this.detailsState = savedDetailsState;
-      }
+      const windowConfig = await this.getWindowConfigs({
+        viewScope: defaultViewScope,
+        detailsState: this.detailsState
+      });
+      this.viewScope = windowConfig.viewScope || defaultViewScope;
+      this.detailsState = windowConfig.detailsState;
 
-      await this.detectTabOrSidepanel();
       this.registerWithBkgd();
     }
 
@@ -369,6 +358,20 @@ export class TreeView extends Tree {
     await this.ensureCursorVisible();
   }
 
+  applyIncognitoRestrictions () {
+    // Some functions don't work in Chrome's spanning incognito mode.  Reuse
+    // the window data already needed during startup instead of querying it
+    // once here and once again while initializing the tree.
+    if (! isChrome || ! this.windowObj?.incognito || this.isInert) return;
+    for (const $button of [
+      this.$treeViewInTabBtn,
+      this.$optionsBtn,
+      this.$helpBtn
+    ]) {
+      if ($button) $button.classList.add('greyed-out');
+    }
+  }
+
   async loadTreeFromBkgd (render = true) {
     // save any state which needs to be restored on new Tree
     let oldCursor;
@@ -378,6 +381,9 @@ export class TreeView extends Tree {
 
     // load the tree
     await super.loadTreeFromBkgd();
+    if (undefined !== this.windowId) {
+      this.windowNode = this.root.getWindowId(this.windowId);
+    }
 
     // render ... everything
     if (render) this.$renderWholeTree();
@@ -398,12 +404,13 @@ export class TreeView extends Tree {
     // display only this window
     else if ('window' === this.viewScope)
       this.viewRoot = this.windowNode;
-    // show the nodes
-    this.viewRoot.$render();
+    // Keep the rebuild detached so each visible node is rendered only once
+    // and no intermediate ancestry refreshes trigger browser layout work.
+    this.$treeRoot.replaceChildren();
     this.viewRoot.$renderChildren();
     if (this.root.$) this.root.$.classList.add('root-nodes');
     // add the view root node to the page
-    this.$treeRoot.replaceChildren(this.viewRoot.$);
+    this.$treeRoot.appendChild(this.viewRoot.$);
   }
 
   setStatus (msg) {
@@ -529,19 +536,40 @@ export class TreeView extends Tree {
     this.keyBindingsByAction = this.buildActionKeyMap(this.keyBindings);
   }
 
-  async updateKeyBindings () {
-    const data = await api.storage.local.get({ keyBindings: {} });
-    this.applyKeyBindings(data.keyBindings);
+  updateKeyBindings () {
+    this.applyKeyBindings(this.cfg.keyBindings);
     this.updateHoverMenuLabels();
   }
 
+  newTreeViewId () {
+    const cryptoApi = this.window?.crypto || globalThis.crypto;
+    if (cryptoApi?.randomUUID) return `view-${cryptoApi.randomUUID()}`;
+    return `view-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
+  async getWindowConfigs (defaults) {
+    if (! this.windowNode) return { ...defaults };
+
+    const configKeys = {};
+    const missing = {};
+    for (const [varName, defaultValue] of Object.entries(defaults)) {
+      const key = `TreeView.${varName}.${this.windowNode.id}`;
+      configKeys[varName] = key;
+      if (! this.cfg.keys.has(key) || (undefined === this.cfg[key]))
+        missing[key] = defaultValue;
+    }
+    if (Object.keys(missing).length) await this.cfg.getMany(missing);
+
+    const result = {};
+    for (const [varName, key] of Object.entries(configKeys)) {
+      result[varName] = this.cfg[key];
+    }
+    return result;
+  }
+
   async getWindowConfig (varName, defaultValue) {
-    // can't do anything unless we know which window we are
-    if (! this.windowNode) return;
-    // load from config, per window
-    const key = `TreeView.${varName}.${this.windowNode.id}`;
-    if (this.cfg[key]) return this.cfg[key];
-    else return this.cfg.get(key, defaultValue);
+    const values = await this.getWindowConfigs({ [varName]: defaultValue });
+    return values[varName];
   }
 
   setWindowConfig (varName, value) {
@@ -3381,15 +3409,18 @@ export class TreeView extends Tree {
 
     // move the cursor to this window's active tab
     // (or its nearest visible parent within the view scope)
-    // find our window
     let winNode = viewRoot;
     if ('session' === this.viewScope) {
-      // find the current window in the tree
-      const win = await api.windows.getCurrent();
-      let found = viewRoot.findNodes((node) => {
-        return (node.isWindow() && (win.id === node.windowId));
-      });
-      if (found.length > 0) winNode = found[0];
+      const cachedWindowNode = this.windowNode;
+      if (cachedWindowNode
+        && (this.nodes[cachedWindowNode.id] === cachedWindowNode)
+        && (cachedWindowNode.windowId === this.windowId)
+      ) {
+        winNode = cachedWindowNode;
+      } else {
+        this.windowNode = this.root.getWindowId(this.windowId);
+        if (this.windowNode) winNode = this.windowNode;
+      }
     }
     //winNode.scrollToTop();
     const activeTabNode = winNode.getActiveTab();

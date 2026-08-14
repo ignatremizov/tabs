@@ -2941,13 +2941,13 @@
           windowId: 1,
           expanded: true
         });
-        await addChild(win, {
+        const firstTab = await addChild(win, {
           id: 't1',
           type: 'tab',
           loaded: true,
           label: 'First tab'
         });
-        await addChild(win, {
+        const secondTab = await addChild(win, {
           id: 't2',
           type: 'tab',
           loaded: true,
@@ -2958,6 +2958,15 @@
         view.windowNode = win;
         view.viewRoot = view.root;
 
+        const renderCounts = new Map();
+        for (const node of [view.root, win, firstTab, secondTab]) {
+          const render = node.$render;
+          node.$render = function () {
+            renderCounts.set(node, (renderCounts.get(node) || 0) + 1);
+            return render.call(node);
+          };
+        }
+
         view.$renderWholeTree();
         view.$renderWholeTree();
 
@@ -2965,6 +2974,31 @@
           'Tree root should only contain one rendered root node');
         assertEqual(document.querySelectorAll('#tree-root .row').length, 4,
           'Repeated whole-tree render should not duplicate visible rows');
+        for (const node of [view.root, win, firstTab, secondTab]) {
+          assertEqual(renderCounts.get(node), 2,
+            'Each visible node should render only once per rebuild');
+        }
+      });
+
+      test('whole-tree render skips collapsed descendants', async () => {
+        const view = createView();
+        const branch = await addChild(view.root, {
+          id: 'n1',
+          label: 'Collapsed branch',
+          expanded: false
+        });
+        const hiddenChild = await addChild(branch, {
+          id: 'n2',
+          label: 'Hidden child'
+        });
+        view.viewScope = 'session';
+        view.viewRoot = view.root;
+
+        view.$renderWholeTree();
+
+        assert(branch.$, 'The collapsed branch should be rendered');
+        assertEqual(hiddenChild.$, null,
+          'A collapsed descendant should not allocate detached DOM');
       });
 
       testGroup('Basic Deletes');

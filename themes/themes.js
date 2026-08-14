@@ -12,41 +12,44 @@ export const themes = {
   'TK Day': ['tk', 'tk-day']
 };
 
+export const themeConfigDefaults = Object.freeze({
+  theme: 'TK Night',
+  expandedRowPrefix: false,
+  alwaysShowNodeStats: true,
+  hideTreeLines: false,
+  hideCursorTreeLines: false,
+  hideWindowTreeLines: true,
+  fontFamily: '',
+  fontSize: '1.15rem',
+  rowHeight: '1.5rem',
+  indentWidth: '0.8rem',
+  showFavicons: true,
+  compactMode: false,
+  indentMargin: '',
+  indentMarginWindow: '',
+  indentPadding: '',
+  indentPaddingWindow: '',
+  expandedBranchBottomPadding: '',
+  leafToBranchSpacing: '',
+  windowTopLevelNodeSpacing: '',
+  detailsBoxHeight: '',
+  detailsBoxHeightNotesOnly: '',
+  userStyles: '',
+});
+
 export class ThemedPage {
 
   constructor (...pagePaths) {
     this.$doc = document;
     this.pagePaths = pagePaths;
-    this.defaultTheme = 'TK Night';
+    this.defaultTheme = themeConfigDefaults.theme;
     this.cfg = new Config();
-    this.cfgDefaults = {
-      theme: this.defaultTheme,
-      expandedRowPrefix: false,
-      alwaysShowNodeStats: true,
-      hideTreeLines: false,
-      hideCursorTreeLines: false,
-      hideWindowTreeLines: true,
-      fontFamily: '',
-      fontSize: '1.15rem',
-      rowHeight: '1.5rem',
-      indentWidth: '0.8rem',
-      showFavicons: true,
-      compactMode: false,
-      indentMargin: '',
-      indentMarginWindow: '',
-      indentPadding: '',
-      indentPaddingWindow: '',
-      expandedBranchBottomPadding: '',
-      leafToBranchSpacing: '',
-      windowTopLevelNodeSpacing: '',
-      detailsBoxHeight: '',
-      detailsBoxHeightNotesOnly: '',
-      userStyles: '',
-    };
+    this.cfgDefaults = { ...themeConfigDefaults };
   }
 
-  async init () {
-    await this.cfg.init(this.cfgDefaults);
+  async init (loadedConfig = null) {
+    if (loadedConfig) this.cfg = loadedConfig;
+    else await this.cfg.init(this.cfgDefaults);
     this.initElements();
     this.updateTheme();
     this.updateStyleOptions();

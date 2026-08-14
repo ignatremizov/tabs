@@ -8161,6 +8161,51 @@ async () => {
     'An open leaf should unload');
 });
 
+test('TreeView reuses loaded config and batches window settings',
+async () => {
+  const originalGet = api.storage.local.get;
+  let getCalls = 0;
+  try {
+    api.storage.local.get = async (defaults) => {
+      getCalls += 1;
+      const result = { ...defaults };
+      result['TreeView.detailsState.window-1'] = 0;
+      return result;
+    };
+    const tree = new TreeView({
+      isInert: true,
+      document: null,
+      window: null
+    });
+    tree.cfg.keyBindings = { toggleLoad: 'Ctrl+L' };
+    tree.updateKeyBindings();
+
+    assertEqual(getCalls, 0,
+      'Applying key bindings should use the config already loaded at startup');
+    assertEqual(tree.getKeyBindingForAction('toggleLoad'), 'Ctrl+L',
+      'The cached user binding should be applied');
+
+    tree.windowNode = { id: 'window-1' };
+    const values = await tree.getWindowConfigs({
+      viewScope: 'session',
+      detailsState: 1
+    });
+
+    assertEqual(getCalls, 1,
+      'Per-window settings should be fetched in one storage request');
+    assertEqual(values.viewScope, 'session',
+      'Missing settings should retain their supplied defaults');
+    assertEqual(values.detailsState, 0,
+      'Falsey per-window settings should be retained');
+
+    await tree.getWindowConfig('detailsState', 1);
+    assertEqual(getCalls, 1,
+      'Cached per-window settings should not trigger another storage read');
+  } finally {
+    api.storage.local.get = originalGet;
+  }
+});
+
 test('ThemedPage falls back before creating theme links', async () => {
   const originalDocument = globalThis.document;
   const elements = new Map();
