@@ -8,9 +8,11 @@ import { api, isFirefox } from '/api.js';
 import {
   log, debug, warn, error, emit, sanitizeClientId
 } from '/common/common.js';
-import { buildEventName } from '/common/events.js';
 import {
-  defaultKeyBindings, keyBindingActions
+  buildEventName, normalizeKeyBinding
+} from '/common/events.js';
+import {
+  defaultKeyBindings, keyBindingActions, normalizeKeyBindingOverrides
 } from '/common/keybindings.js';
 import { ThemedPage } from '/themes/themes.js';
 
@@ -100,10 +102,6 @@ class OptionsPage extends ThemedPage {
       'dropTextNoteMode',
     ];
     const lines = [
-      'fontFamily',
-      'fontSize',
-      'rowHeight',
-      'indentWidth',
       'indentMargin',
       'indentMarginWindow',
       'indentPadding',
@@ -113,6 +111,12 @@ class OptionsPage extends ThemedPage {
       'windowTopLevelNodeSpacing',
       'detailsBoxHeight',
       'detailsBoxHeightNotesOnly',
+    ];
+    const presets = [
+      'fontFamily',
+      'fontSize',
+      'rowHeight',
+      'indentWidth',
     ];
 
     this.options = [
@@ -135,6 +139,12 @@ class OptionsPage extends ThemedPage {
         cfgKey,
         inputType: 'line',
         debounceTime: 1000,
+      })),
+      ...presets.map((cfgKey) => new PresetOption(this, {
+        cfgKey,
+        customElementId: `${cfgKey}Custom`,
+        fallbackValue: this.cfgDefaults[cfgKey],
+        debounceTime: 500,
       })),
       new Option(this, {
         cfgKey: 'userStyles',
@@ -333,7 +343,7 @@ class OptionsPage extends ThemedPage {
   }
 }
 
-class Option {
+export class Option {
 
   constructor (page, args) {
     this.page = page;
@@ -395,8 +405,7 @@ class Option {
     this.$elem.value = value ?? '';
   }
 
-  async parseAndSave () {
-    const rawValue = this.getValue();
+  async parseAndSave (rawValue = this.getValue()) {
     let value = rawValue;
     if (this.fromStr) value = this.fromStr(value);
     if (undefined === value) return;
@@ -409,9 +418,101 @@ class Option {
       if (this.toStr) displayValue = this.toStr(displayValue);
       if (displayValue !== rawValue) this.setValue(displayValue);
       this.$elem.classList.remove('unsaved');
+      if (this.$customElem) {
+        this.$customElem.classList.remove('unsaved');
+      }
     } catch (err) {
       warn(`Could not save option "${this.cfgKey}":`, err);
     }
+  }
+}
+
+export class PresetOption extends Option {
+
+  constructor (page, args) {
+    super(page, {
+      ...args,
+      inputType: 'select',
+    });
+    this.customElementId = args.customElementId;
+    this.fallbackValue = args.fallbackValue;
+  }
+
+  init () {
+    this.$elem = this.page.$doc.getElementById(this.elementId);
+    this.$customElem = this.page.$doc.getElementById(this.customElementId);
+    if (! this.$elem || ! this.$customElem) {
+      error(
+        `Missing preset option controls: `
+        + `${this.elementId}, ${this.customElementId}`
+      );
+      return;
+    }
+
+    this.presetValues = new Set(
+      [...this.$elem.options].map((option) => option.value)
+    );
+    if (! this.presetValues.has(this.fallbackValue)) {
+      this.fallbackValue = this.$elem.options[0]?.value ?? '';
+    }
+
+    debug(`preset: ${this.cfgKey} = ${this.cfg[this.cfgKey]}`);
+    this.setValue(this.cfg[this.cfgKey]);
+
+    this.$elem.addEventListener('change', () => {
+      this.cancelDebounce();
+      this.$customElem.value = '';
+      return this.parseAndSave(this.$elem.value);
+    });
+    this.$customElem.addEventListener('input', () => {
+      return this.scheduleCustomSave();
+    });
+    this.$customElem.addEventListener('blur', () => {
+      return this.flushCustomValue();
+    });
+    this.$customElem.addEventListener('keydown', (event) => {
+      if ('Enter' !== event.key) return;
+      event.preventDefault();
+      return this.flushCustomValue();
+    });
+  }
+
+  setValue (value) {
+    const stringValue = value ?? '';
+    if (this.presetValues.has(stringValue)) {
+      this.$elem.value = stringValue;
+      this.$customElem.value = '';
+      return;
+    }
+    this.$elem.value = this.fallbackValue;
+    this.$customElem.value = stringValue;
+  }
+
+  customValue () {
+    return this.$customElem.value.trim() || this.$elem.value;
+  }
+
+  cancelDebounce () {
+    if (this.debounceTimer) clearTimeout(this.debounceTimer);
+    this.debounceTimer = null;
+    this.$customElem.classList.remove('unsaved');
+  }
+
+  scheduleCustomSave () {
+    this.cancelDebounce();
+    this.$customElem.classList.add('unsaved');
+    if (! this.debounceTime) {
+      return this.parseAndSave(this.customValue());
+    }
+    this.debounceTimer = setTimeout(() => {
+      this.debounceTimer = null;
+      this.parseAndSave(this.customValue());
+    }, this.debounceTime);
+  }
+
+  flushCustomValue () {
+    this.cancelDebounce();
+    return this.parseAndSave(this.customValue());
   }
 }
 
@@ -454,9 +555,8 @@ async function initKeyBindingsForm () {
       label: 'Add / Remove',
       actions: [
         'loadOrEditNode',
-        'loadNode',
         'deleteNode',
-        'unloadNode',
+        'toggleLoad',
         'forceToggleLoad',
         'addNodeAsNextVisibleRow',
         'addNodeAsPrevVisibleRow',
@@ -546,7 +646,7 @@ async function initKeyBindingsForm () {
 
   const defaultBindings = buildDefaultBindingsByAction();
   const stored = await api.storage.local.get({ keyBindings: {} });
-  const storedBindings = stored.keyBindings || {};
+  const storedBindings = normalizeKeyBindingOverrides(stored.keyBindings);
   const effectiveBindings = {};
   const inputs = {};
 
@@ -568,7 +668,7 @@ async function initKeyBindingsForm () {
   }
 
   function applyBinding (action, newValue) {
-    const normalized = newValue ? newValue.trim() : '';
+    const normalized = normalizeKeyBinding(newValue);
     if (normalized && normalized !== effectiveBindings[action]) {
       for (const binding of keyBindingActions) {
         const otherAction = binding.action;
@@ -675,12 +775,14 @@ async function initKeyBindingsForm () {
   });
 }
 
-document.addEventListener('DOMContentLoaded', async () => {
-  try {
-    const optionsPage = new OptionsPage();
-    await optionsPage.init();
-    log('options.js loaded');
-  } catch (err) {
-    error('Could not initialize options page:', err);
-  }
-});
+if (! globalThis.__TKTSTO_TEST__) {
+  document.addEventListener('DOMContentLoaded', async () => {
+    try {
+      const optionsPage = new OptionsPage();
+      await optionsPage.init();
+      log('options.js loaded');
+    } catch (err) {
+      error('Could not initialize options page:', err);
+    }
+  });
+}

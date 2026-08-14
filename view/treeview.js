@@ -10,7 +10,11 @@ import {
 } from '/common/common.js';
 import { ThemedPage } from '/themes/themes.js';
 import { buildEventName } from '/common/events.js';
-import { defaultKeyBindings, keyBindingActions } from '/common/keybindings.js';
+import {
+  defaultKeyBindings,
+  keyBindingActions,
+  normalizeKeyBindingOverrides
+} from '/common/keybindings.js';
 import { inputDialog, checkboxDialog, nodeEditDialog } from '/common/dialog.js';
 import { NodeView } from './nodeview.js';
 import { Tree } from '/common/tree.js';
@@ -485,7 +489,8 @@ export class TreeView extends Tree {
   }
 
   updateHoverMenuLabels () {
-    this.setHoverMenuButtonLabel(this.$hoverMenuUnload, 'unloadNode', 'U');
+    this.setHoverMenuButtonLabel(this.$hoverMenuUnload, 'toggleLoad', 'U');
+    this.setHoverMenuButtonLabel(this.$hoverMenuLoad, 'toggleLoad', 'U');
     this.setHoverMenuButtonLabel(this.$hoverMenuTask, 'taskEdit', 'T');
     this.setHoverMenuButtonLabel(this.$hoverMenuEdit, 'editNode', 'E');
     this.setHoverMenuButtonLabel(this.$hoverMenuMark, 'toggleMarked', 'M');
@@ -500,14 +505,15 @@ export class TreeView extends Tree {
       keyBindingActions.map((binding) => binding.action)
     );
 
-    if (userBindings && ('object' === typeof userBindings)) {
-      for (const action of Object.keys(userBindings)) {
+    const normalizedBindings = normalizeKeyBindingOverrides(userBindings);
+    if (normalizedBindings) {
+      for (const action of Object.keys(normalizedBindings)) {
         if (! allowedActions.has(action)) continue;
         const existingKeys = defaultByAction[action] || [];
         for (const existingKey of existingKeys) {
           delete keyBindings[existingKey];
         }
-        const rawKey = userBindings[action];
+        const rawKey = normalizedBindings[action];
         if ('string' === typeof rawKey) {
           const key = rawKey.trim();
           if (key) keyBindings[key] = action;
@@ -2206,6 +2212,17 @@ export class TreeView extends Tree {
     }
   }
 
+  async action_toggleLoad (event) {
+    debug('action_toggleLoad');
+    const cursor = this.whichCursor(event);
+    if (! cursor) return;
+
+    const hasLoadedContent =
+      cursor.isLoaded() || cursor.hasLoadedTabs();
+    if (hasLoadedContent) return this.action_unloadNode(event);
+    return this.action_loadNode(event);
+  }
+
   async action_loadOrEditNode (event, allowEdit = true) {
     debug('action_loadOrEditNode');
     if ('command' !== event.type) {
@@ -2293,16 +2310,16 @@ export class TreeView extends Tree {
   }
 
   // Force load or unload without confirmation dialog
-  // Acts like Enter for unloaded tabs, like 'u' for loaded tabs
+  // Acts like load/unload, but never asks for confirmation.
   async action_forceToggleLoad (event) {
     debug('action_forceToggleLoad');
     let cursor = this.whichCursor(event);
     if (! cursor) return;
 
-    // Determine if we're loading or unloading based on current state
-    const isUnloaded = cursor.isUnloadedTab() || cursor.isUnloadedWindow();
+    const hasLoadedContent =
+      cursor.isLoaded() || cursor.hasLoadedTabs();
 
-    if (isUnloaded) {
+    if (! hasLoadedContent) {
       // Load: use batch load but skip dialog (pass forceNoDialog=true)
       return this.batchLoadCollapsed(cursor, event, false, true);
     } else {

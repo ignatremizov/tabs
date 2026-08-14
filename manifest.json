@@ -89,11 +89,9 @@
     "cursorEnd": {
       "description": "Move cursor end (down to last sibling)"
     },
-    "loadNode": {
-      "description": "Load or switch to highlighted node"
-    },
-    "unloadNode": {
-      "description": "Unload highlighted node"
+    "toggleLoad": {
+      "description": "Load/unload highlighted node or branch",
+      "suggested_key": { "default": "Alt+L" }
     },
     "toggleExpanded": {
       "description": "Expand/Collapse highlighted node"

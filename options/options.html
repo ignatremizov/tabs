@@ -108,11 +108,24 @@
   </div>
 
   <div>
-    <label>
-    <input type="text" id="fontFamily" name="fontFamily"
-      placeholder="Arial, Tahoma, Geneva, sans-serif" />
-    Font family:
-    </label>
+    <label for="fontFamily">Font family:</label>
+    <select id="fontFamily" name="fontFamily">
+      <option value="">Theme default</option>
+      <option value="Arial, Tahoma, Geneva, sans-serif">Arial</option>
+      <option value="'DejaVu Sans', Arial, sans-serif">DejaVu Sans</option>
+      <option value="'Quicksand Medium', Tahoma, Geneva, sans-serif">
+        Quicksand Medium
+      </option>
+      <option value="'Segoe UI', Tahoma, Geneva, sans-serif">Segoe UI</option>
+      <option value="Verdana, Geneva, sans-serif">Verdana</option>
+      <option value="'Trebuchet MS', Arial, sans-serif">Trebuchet MS</option>
+      <option value="Georgia, serif">Georgia</option>
+      <option value="'Courier New', monospace">Courier New (monospace)</option>
+      <option value="monospace">System monospace</option>
+    </select>
+    <label for="fontFamilyCustom">or custom:</label>
+    <input type="text" id="fontFamilyCustom" name="fontFamilyCustom"
+      placeholder="e.g. 'My Font', sans-serif" class="long-input" />
     <small>
     Arial, Georgia, Humor Sans, Comic Sans MS, Quicksand, DejaVu Sans, Verdana,
     Tahoma, Geneva, Trebuchet MS, Latin Modern Roman Caps, URW Gothic, VL
@@ -121,29 +134,45 @@
   </div>
 
   <div>
-    <label>
-    <input type="text" id="fontSize" name="fontSize"
-      placeholder="1.15rem" />
-    Font size
-    </label>
+    <label for="fontSize">Font size:</label>
+    <select id="fontSize" name="fontSize">
+      <option value="0.85rem">Extra small</option>
+      <option value="1rem">Small</option>
+      <option value="1.15rem">Medium (default)</option>
+      <option value="1.3rem">Large</option>
+      <option value="1.5rem">Extra large</option>
+    </select>
+    <label for="fontSizeCustom">or custom:</label>
+    <input type="text" id="fontSizeCustom" name="fontSizeCustom"
+      placeholder="e.g. 14px" class="short-input" />
     <small>Examples: 14px, 1rem, 1.3rem</small>
   </div>
 
   <div>
-    <label>
-    <input type="text" id="rowHeight" name="rowHeight"
-      placeholder="1.5rem" />
-    Row height
-    </label>
+    <label for="rowHeight">Row height:</label>
+    <select id="rowHeight" name="rowHeight">
+      <option value="1.2rem">Compact</option>
+      <option value="1.5rem">Normal (default)</option>
+      <option value="1.8rem">Comfortable</option>
+      <option value="2.2rem">Spacious</option>
+    </select>
+    <label for="rowHeightCustom">or custom:</label>
+    <input type="text" id="rowHeightCustom" name="rowHeightCustom"
+      placeholder="e.g. 20px" class="short-input" />
     <small>Examples: 20px, 1.5rem, 2rem</small>
   </div>
 
   <div>
-    <label>
-    <input type="text" id="indentWidth" name="indentWidth"
-      placeholder="0.8rem" />
-    Indent width
-    </label>
+    <label for="indentWidth">Indent width:</label>
+    <select id="indentWidth" name="indentWidth">
+      <option value="0.5rem">Narrow</option>
+      <option value="0.8rem">Normal (default)</option>
+      <option value="1.2rem">Wide</option>
+      <option value="1.6rem">Extra wide</option>
+    </select>
+    <label for="indentWidthCustom">or custom:</label>
+    <input type="text" id="indentWidthCustom" name="indentWidthCustom"
+      placeholder="e.g. 12px" class="short-input" />
     <small>Examples: 8px, 0.8rem, 1.2rem</small>
   </div>
 

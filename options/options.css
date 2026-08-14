@@ -11,6 +11,11 @@
   min-width: unset;
 }
 
+.options input.long-input {
+  width: 24em;
+  max-width: 100%;
+}
+
 .options button {
   flex: unset;
   margin: unset;

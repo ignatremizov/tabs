@@ -4,31 +4,32 @@
 
 "use strict";
 
+import { normalizeKeyBinding } from '/common/events.js';
+
 export const defaultKeyBindings = {
   // test
-  //'a': 'addNode',
+  //'A': 'addNode',
   // add / remove nodes
   'Enter': 'loadOrEditNode',
-  'd': 'deleteNode',
-  'l': 'loadNode',
-  'u': 'unloadNode',
+  'D': 'deleteNode',
+  'U': 'toggleLoad',
   'Shift+U': 'forceToggleLoad',
-  'o': 'addNodeAsNextVisibleRow',
+  'O': 'addNodeAsNextVisibleRow',
   'Shift+O': 'addNodeAsPrevVisibleRow',
-  'w': 'wrapNodeInWindow',
+  'W': 'wrapNodeInWindow',
   // edit nodes
   'Space': 'toggleExpanded',
-  'e': 'editNode',
+  'E': 'editNode',
   // task status
-  //'x': 'toggleTaskDone',
-  //'t': 'taskLeaderKey',
-  't': 'taskEdit',
+  //'X': 'toggleTaskDone',
+  //'T': 'taskLeaderKey',
+  'T': 'taskEdit',
   // search
   '/': 'beginSearch',
   'Shift+*': 'searchForCurrent',  // match current label, url, or title
-  //'Ctrl+f': 'beginSearch',
-  //'Ctrl+g': 'nextSearchResult',
-  'n': 'nextSearchResult',
+  //'Ctrl+F': 'beginSearch',
+  //'Ctrl+G': 'nextSearchResult',
+  'N': 'nextSearchResult',
   'Shift+N': 'prevSearchResult',
   'Escape': 'endSearch',
   // cursor movement
@@ -56,16 +57,16 @@ export const defaultKeyBindings = {
   'Shift+Home': 'moveNodeHome',
   'Shift+End': 'moveNodeEnd',
   // mark / paste
-  'm': 'toggleMarked',
+  'M': 'toggleMarked',
   'Shift+M': 'unmarkAll',
-  'p': 'pasteMarked',
+  'P': 'pasteMarked',
   'Shift+P': 'pasteMarkedBefore',
   // TODO: leader key for batch processing of other things,
   //   like delete and maybe sort and checkbox actions and ...
   // buttons
-  'b': 'backupSession',
+  'B': 'backupSession',
   // misc
-  'i': 'detailsButton',
+  'I': 'detailsButton',
   'Shift+?': 'generateTutorial',
   'Tab': 'none',
   'none': 'none'
@@ -74,9 +75,8 @@ export const defaultKeyBindings = {
 export const keyBindingActions = [
   { action: 'loadOrEditNode', label: 'Open/load node (or edit label)' },
   { action: 'deleteNode', label: 'Delete node' },
-  { action: 'loadNode', label: 'Load node or branch' },
-  { action: 'unloadNode', label: 'Unload node' },
-  { action: 'forceToggleLoad', label: 'Force load/unload' },
+  { action: 'toggleLoad', label: 'Load/unload node or branch' },
+  { action: 'forceToggleLoad', label: 'Force load/unload (skip prompts)' },
   { action: 'addNodeAsNextVisibleRow', label: 'Add node below' },
   { action: 'addNodeAsPrevVisibleRow', label: 'Add node above' },
   { action: 'wrapNodeInWindow', label: 'Wrap in window / convert label' },
@@ -114,3 +114,30 @@ export const keyBindingActions = [
   { action: 'detailsButton', label: 'Toggle details' },
   { action: 'generateTutorial', label: 'Generate tutorial' }
 ];
+
+export function normalizeKeyBindingOverrides (bindings) {
+  if (! bindings || ('object' !== typeof bindings)) return {};
+
+  const normalized = {};
+  for (const [action, key] of Object.entries(bindings)) {
+    if ('string' !== typeof key) continue;
+    normalized[action] = normalizeKeyBinding(key);
+  }
+
+  if (! Object.prototype.hasOwnProperty.call(normalized, 'toggleLoad')) {
+    const hasLegacyLoad =
+      Object.prototype.hasOwnProperty.call(normalized, 'loadNode');
+    const hasLegacyUnload =
+      Object.prototype.hasOwnProperty.call(normalized, 'unloadNode');
+    if (hasLegacyLoad || hasLegacyUnload) {
+      // Older fork builds exposed separate fields. Prefer the unload binding
+      // when both differ because that was the original fork action.
+      normalized.toggleLoad =
+        normalized.unloadNode || normalized.loadNode || '';
+    }
+  }
+  delete normalized.loadNode;
+  delete normalized.unloadNode;
+
+  return normalized;
+}
