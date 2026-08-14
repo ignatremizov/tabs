@@ -3,6 +3,68 @@
 What changed, and when?  You know the drill.
 
 
+# 0.0.3 (2026-08-15)
+
+This release merges upstream through r0.1.181.0, then restores and hardens the
+fork's tab-management workflow.
+
+Highlights:
+
+- Added **node-only moves**: `Ctrl`-drag a parent to promote its children and
+  move only the selected node.  `Ctrl+Shift+ArrowLeft` promotes children
+  without moving the parent.
+- Added `Ctrl+ArrowUp` and `Ctrl+ArrowDown` navigation to jump between sibling
+  branches or their parent instead of stepping through every visible row.
+- Restored state-based deletion defaults: deleting an expanded parent promotes
+  its children immediately, while deleting a collapsed subtree asks for
+  confirmation.
+- Combined highlighted-node load and unload into one configurable toggle
+  action.  Shortcut names now use consistent casing, and common appearance
+  settings once again offer presets plus direct custom input.
+- Sidebar cursor and scroll state are remembered independently for each browser
+  window and Session/Window scope.
+- Merged upstream features including pinned tabs, search, branch load/unload,
+  Firefox collapsed-tab hiding, expanded appearance settings, and current
+  browser compatibility fixes.
+
+Performance:
+
+- Rebuilt the sidebar through detached fragments and created DOM only for
+  visible rows.  On an 11,122-node session, rendering 325 visible rows dropped
+  from a 411 ms median to 48 ms.
+- Replaced the full object-graph background message with one JSON payload.  On
+  the same roughly 11 MB tree, transfer handling dropped from 742–818 ms to
+  about 257–298 ms, including stringify and parse time.
+- Active-tab updates now change existing row state directly, so rapid
+  `Ctrl+Tab` navigation follows immediately without label flicker or full-row
+  reconstruction.
+
+Reliability and bug fixes:
+
+- Reworked Firefox restore matching around session identity, pinned state,
+  duplicate URL consumption, and concurrent window ancestry.  Reverse-order
+  restore events now reconnect to saved nodes instead of creating duplicates.
+- Reattached restored tutorial and other internal extension pages to their
+  existing nodes instead of briefly creating UUID rows and leaving duplicates.
+- Replaced the durable Ops queue with direct, atomic IndexedDB writes plus
+  startup and periodic reconciliation.  Related node changes commit together,
+  retried messages are idempotent, and mutation callers wait for persistence.
+- Kept session windows stable while Firefox loses OS focus during `Alt+Tab`,
+  fixed delayed cursor scrolling after unloading an active tab, and preserved
+  the current viewport while other rows change.
+- Fixed recursive deletion when removing a restore wrapper, restored the task
+  edit action for existing checkboxes, synchronized pinned-tab moves, and
+  removed the redundant scrollbar gutter.
+- Hardened backup completion and import validation, and added a conservative
+  audit-based tool for removing only provably identical backup subtrees.
+
+Storage note:
+
+- Development builds which created the temporary schema-2 `Ops` store require
+  a JSON export, cleared extension data, and restore when upgrading.  There is
+  intentionally no compatibility migration for that experimental database.
+
+
 # 0.0.2 (2026-01-06)
 
 Highlights:
@@ -17,12 +79,6 @@ Highlights:
 - Added tooling and packaging support (Firefox signing, versioning script,
   backup archive helper, json2md export tool).
 - Updated manifests and README notes for supported versions and permissions.
-
-Storage note:
-
-- Development builds which created the temporary schema-2 `Ops` store require
-  a JSON export, cleared extension data, and restore after upgrading.  There is
-  intentionally no downgrade migration for those builds.
 
 ## 0.1.181.0 (2026-04-06)
 
