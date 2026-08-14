@@ -306,6 +306,7 @@ export class TreeView extends Tree {
     this.cfg.watch('wasLoadedNodeStats', () => this.$renderWholeTree());
 
     this.nodeIdMimeType = 'application/x-tktsto-node-id';
+    this.nodeOnlyMoveMimeType = 'application/x-tktsto-move-node-only';
     // get the window this view is attached to
     this.windowObj = await api.windows.getCurrent();
     this.windowId = this.windowObj.id;
@@ -1010,6 +1011,25 @@ export class TreeView extends Tree {
     }
   }
 
+  getMouseBinding (eventName) {
+    const modifiers = eventName.split('+');
+    const baseEventName = eventName.split('+').pop();
+    const directBinding = this.mouseBindings[eventName];
+    if (directBinding) return directBinding;
+    if (! modifiers.includes('Ctrl')) return;
+    if (! [
+      'MousePressLeft',
+      'MouseClickLeft',
+      'MouseDragStart',
+      'MouseDrag',
+      'MouseDrop',
+      'MouseDragEnd',
+      'MouseDragLeave',
+      'MouseDragOver'
+    ].includes(baseEventName)) return;
+    return this.mouseBindings[baseEventName];
+  }
+
   async mouseEvent (eventType, event) {
     //debug(`TreeView.mouseEvent(${eventType})`, event);
     // don't try to handle mouse events while a dialog is visible
@@ -1092,7 +1112,9 @@ export class TreeView extends Tree {
     //debug(`mouseEvent(): rowXY(${rowX},${rowY}) rowWidHgt(${rowWid}x${rowHgt})`);
 
     // call a handler
-    const handlerName = this.mouseBindings[eventName];
+    // Mouse modifiers describe how an action should behave; they should not
+    // prevent the underlying press/drag/drop handler from running.
+    const handlerName = this.getMouseBinding(eventName);
     if (handlerName) {
       const handler = this[`action_${handlerName}`];
       if (handler) {
@@ -1140,6 +1162,24 @@ export class TreeView extends Tree {
     if (! this.cursor) return await this.setCursor(this.root);
     // move down one row
     await this.setCursor(this.cursor.nextVisibleNode(this.viewRoot));
+  }
+
+  async action_cursorPrevSibling (event) {
+    if (! this.cursor) return await this.setCursor(this.root);
+    if (this.cursor.isRoot() || (this.cursor === this.viewRoot)) return;
+    const index = this.cursor.indexOf();
+    const node = (index > 0)
+      ? this.cursor.parent.nodes[index - 1]
+      : this.cursor.parent;
+    await this.setCursor(node);
+  }
+
+  async action_cursorNextSibling (event) {
+    if (! this.cursor) return await this.setCursor(this.root);
+    if (this.cursor.isRoot() || (this.cursor === this.viewRoot)) return;
+    await this.setCursor(
+      this.cursor.nextVisibleNodeNoKids(this.viewRoot)
+    );
   }
 
   async action_cursorLeft (event) {  // move cursor to parent
@@ -1208,6 +1248,32 @@ export class TreeView extends Tree {
       { reason: 'userAction' });
     if (moved) this.setStatus(`moved ${direction}: ${this.cursor.toLine()}`);
     return moved;
+  }
+
+  async action_promoteChildren (event) {
+    const node = this.whichCursor(event);
+    if (! node || node.isRoot()) return;
+    const childCount = node.nodes.length;
+    if (! childCount) {
+      this.setStatus(`no children to promote: ${node.toLine()}`);
+      return;
+    }
+    if (! node.canPromoteChildren()) {
+      this.setStatus(
+        `cannot detach children from a loaded window: ${node.toLine()}`
+      );
+      return;
+    }
+    const changed = await node.promoteChildren({
+      reason: 'userAction'
+    });
+    if (changed) {
+      this.setStatus(
+        `promoted ${childCount} children: ${node.toLine()}`
+      );
+    } else {
+      this.setStatus(`could not promote children: ${node.toLine()}`);
+    }
   }
 
   getOnlyChildLoadedWindowProxy () {
@@ -2684,6 +2750,7 @@ export class TreeView extends Tree {
     if (! this.mouseNode) return;
     // save for later potential drag-n-drop
     this.mouseDragStartNode = this.mouseNodeNonRoot;
+    this.mouseDragNodeOnly = Boolean(event.ctrlKey);
     // place the cursor (and *don't* await)
     this.runUiAction(
       'Mouse cursor update',
@@ -2745,6 +2812,15 @@ export class TreeView extends Tree {
     const mimeTypeHack = `${this.nodeIdMimeType}-${this.mouseDragStartNode.id}`;
     event.dataTransfer.setData(mimeTypeHack, this.mouseDragStartNode.id);
     event.dataTransfer.setData(this.nodeIdMimeType, this.mouseDragStartNode.id);
+    this.mouseDragNodeOnly = Boolean(
+      this.mouseDragNodeOnly || event.ctrlKey
+    );
+    if (this.mouseDragNodeOnly) {
+      event.dataTransfer.setData(this.nodeOnlyMoveMimeType, '1');
+      this.setStatus(
+        `node-only drag: ${this.mouseDragStartNode.toLine()}`
+      );
+    }
 
     // attach a text representation in case the user drops into a text field
     const plainText = this.mouseDragStartNode.asTextBranch();
@@ -2780,6 +2856,10 @@ export class TreeView extends Tree {
     // internal (from a TreeView in this extension)
     if (types.includes(this.nodeIdMimeType)) {
       result.source = 'internal';
+      result.moveNodeOnly = Boolean(
+        types.includes(this.nodeOnlyMoveMimeType)
+        || event.ctrlKey
+      );
       // drop within a single sidepanel, or from one sidepanel to another
       let nodeId = event.dataTransfer.getData(this.nodeIdMimeType);
       if (! nodeId) {
@@ -2984,10 +3064,23 @@ export class TreeView extends Tree {
       if (wasCursor && (drop.destParent.isCollapsed()))
         await this.setCursor(drop.destParent);
       // move it
-      const moved = await drop.sourceNode.moveTo(
-        drop.destParent, drop.destIndex,
-        { reason: 'userAction' });
-      if (moved) return finish(`moved node: ${drop.sourceNode.toLine()}`);
+      const moved = drop.moveNodeOnly
+        ? await drop.sourceNode.moveNodeOnlyTo(
+          drop.destParent,
+          drop.destIndex,
+          { reason: 'userAction' }
+        )
+        : await drop.sourceNode.moveTo(
+          drop.destParent,
+          drop.destIndex,
+          { reason: 'userAction' }
+        );
+      if (moved) {
+        const qualifier = drop.moveNodeOnly ? ' only' : '';
+        return finish(
+          `moved node${qualifier}: ${drop.sourceNode.toLine()}`
+        );
+      }
       else {
         // undo cursor change if move failed
         if (wasCursor && (this.cursor !== drop.sourceNode))
@@ -3084,6 +3177,7 @@ export class TreeView extends Tree {
       this.mouseDragStartNode.$.classList.remove('dragging');
     // clear data
     this.mouseDragStartNode = undefined;
+    this.mouseDragNodeOnly = false;
     this.clearDropTargetNodeStyles();
     // allow hoverMenu to be displayed again
     this.dragInProgress = false;

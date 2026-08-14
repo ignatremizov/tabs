@@ -122,6 +122,15 @@ test('key binding names use canonical letter and modifier casing', () => {
     'Default letter bindings should use uppercase keys');
   assertEqual(defaultKeyBindings.d, undefined,
     'Lowercase default aliases should not hide casing mismatches');
+  assertEqual(defaultKeyBindings['Ctrl+ArrowUp'], 'cursorPrevSibling',
+    'Ctrl+Up should jump toward a previous sibling or parent');
+  assertEqual(defaultKeyBindings['Ctrl+ArrowDown'], 'cursorNextSibling',
+    'Ctrl+Down should skip the current subtree');
+  assertEqual(
+    defaultKeyBindings['Shift+Ctrl+ArrowLeft'],
+    'promoteChildren',
+    'The child-promotion action should have a power-user default'
+  );
 });
 
 test('legacy load and unload bindings collapse into one toggle binding', () => {
@@ -1627,11 +1636,17 @@ test('TreeStore applies view move directly', async () => {
       nodeId: 'c1',
       destParentId: 'p2',
       destIndex: 0,
-      actionReason: 'userAction'
+      actionReason: 'userAction',
+      moveNodeOnly: true,
+      nodeOnlyDestAdjusted: true
     });
 
     assertEqual(calls.length, 1, 'Should only call ensureMoved');
     assertEqual(calls[0][0], 'ensureMoved', 'Should apply move directly');
+    assertEqual(calls[0][1].moveNodeOnly, true,
+      'Should preserve node-only move semantics');
+    assertEqual(calls[0][1].nodeOnlyDestAdjusted, true,
+      'Should preserve the adjusted-destination marker');
   } finally {
     globalThis.indexedDB = originalIndexedDb;
   }
@@ -1686,6 +1701,80 @@ test('TreeStore applies view delete directly', async () => {
   }
 });
 
+test('TreeStore persists child promotion in one transaction', async () => {
+  const originalIndexedDb = globalThis.indexedDB;
+  const writes = [];
+  try {
+    globalThis.indexedDB = {
+      open: () => {
+        const request = {};
+        setTimeout(() => {
+          if (request.onsuccess) {
+            request.onsuccess({
+              target: {
+                result: {
+                  objectStoreNames: { contains: () => true }
+                }
+              }
+            });
+          }
+        }, 0);
+        return request;
+      }
+    };
+
+    const bkgd = {};
+    const tree = new TreeStore(bkgd);
+    tree.db = {
+      writeNodes: async (nodes, deleteIds) => {
+        writes.push({
+          nodeIds: nodes.map((node) => node.id),
+          deleteIds: [...deleteIds]
+        });
+      }
+    };
+    bkgd.tree = tree;
+    tree.resolveTreeLoaded();
+    const source = await addChild(tree.root, {
+      id: 'persist-promote-source'
+    });
+    const first = await addChild(source, {
+      id: 'persist-promote-first'
+    });
+    const second = await addChild(source, {
+      id: 'persist-promote-second'
+    });
+    let openerUpdates = 0;
+    first.updateOpenerTabId = async () => { openerUpdates += 1; };
+    second.updateOpenerTabId = async () => { openerUpdates += 1; };
+    writes.length = 0;
+
+    await tree.tree_nodeChanged({
+      nodeId: source.id,
+      type: 'promoteKids',
+      actionReason: 'userAction'
+    });
+
+    assertEqual(writes.length, 1,
+      'All promoted records should commit together');
+    assertEqual(source.nodes.length, 0,
+      'The persisted source should no longer own the children');
+    assertEqual(first.parent, tree.root,
+      'The first persisted child should be promoted');
+    assertEqual(second.parent, tree.root,
+      'The second persisted child should be promoted');
+    assertEqual(openerUpdates, 2,
+      'Promoted tabs should refresh their native opener relationships');
+    const persistedIds = new Set(writes[0].nodeIds);
+    for (const node of [tree.root, source, first, second]) {
+      assert(persistedIds.has(node.id),
+        `The promotion transaction should include "${node.id}"`);
+    }
+  } finally {
+    globalThis.indexedDB = originalIndexedDb;
+  }
+});
+
 test('ensureDeleted atomically promotes children before deleting wrapper', async () => {
   const originalSendMessage = api.runtime.sendMessage;
   const messages = [];
@@ -1725,6 +1814,310 @@ test('ensureDeleted atomically promotes children before deleting wrapper', async
     assert(! tree.nodes[wrapper.id], 'Wrapper should be deleted from cache');
     assertEqual(messages.length, 0,
       'Background atomic apply should not rebroadcast partial operations');
+  } finally {
+    api.runtime.sendMessage = originalSendMessage;
+  }
+});
+
+test('promoteChildren keeps its node and emits one atomic mutation',
+async () => {
+  const originalSendMessage = api.runtime.sendMessage;
+  const messages = [];
+  try {
+    api.runtime.sendMessage = async (msg) => {
+      messages.push({ ...msg });
+      return { result: 'ok persisted' };
+    };
+    const tree = createTree(null);
+    const source = await addChild(tree.root, {
+      id: 'promote-source',
+      label: 'Source'
+    });
+    const first = await addChild(source, { id: 'promote-first' });
+    const second = await addChild(source, { id: 'promote-second' });
+    const tail = await addChild(tree.root, { id: 'promote-tail' });
+
+    const changed = await source.promoteChildren({
+      reason: 'userAction'
+    });
+
+    assertEqual(changed, true, 'Promotion should report a change');
+    assertEqual(source.nodes.length, 0,
+      'The source should no longer own its former children');
+    assertEqual(
+      tree.root.nodes.map((node) => node.id).join(','),
+      'promote-source,promote-first,promote-second,promote-tail',
+      'Children should be promoted after the retained source in order'
+    );
+    assertEqual(first.parent, tree.root,
+      'The first child should move to the source parent');
+    assertEqual(second.parent, tree.root,
+      'The second child should move to the source parent');
+    assertEqual(tail.parent, tree.root,
+      'Following siblings should remain in place');
+    const treeMessages = messages.filter((msg) =>
+      msg.msg?.startsWith('tree_')
+    );
+    assertEqual(treeMessages.length, 1,
+      'Promotion should broadcast one tree mutation');
+    assertEqual(treeMessages[0].msg, 'tree_nodeChanged',
+      'Promotion should use the node-change protocol');
+    assertEqual(treeMessages[0].type, 'promoteKids',
+      'The atomic mutation should identify child promotion');
+    assert(! messages.some((msg) => msg.msg === 'tree_nodeMoved'),
+      'Promotion should not emit one move per child');
+  } finally {
+    api.runtime.sendMessage = originalSendMessage;
+  }
+});
+
+test('promoteChildren preserves loaded window containers', async () => {
+  const originalSendMessage = api.runtime.sendMessage;
+  const messages = [];
+  try {
+    api.runtime.sendMessage = async (msg) => {
+      messages.push(msg);
+      return { result: 'ok persisted' };
+    };
+    const tree = createTree(null);
+    const windowNode = await addChild(tree.root, {
+      id: 'loaded-promote-window',
+      type: 'window',
+      loaded: true,
+      windowId: 10
+    });
+    const tabNode = await addChild(windowNode, {
+      id: 'loaded-promote-tab',
+      loaded: true,
+      tabId: 11,
+      windowId: 10
+    });
+
+    const changed = await windowNode.promoteChildren({
+      reason: 'userAction'
+    });
+
+    assertEqual(changed, false,
+      'A loaded window should refuse to detach its children');
+    assertEqual(windowNode.nodes.length, 1,
+      'The loaded window should retain its tab');
+    assertEqual(windowNode.nodes[0], tabNode,
+      'The loaded tab should stay under its browser window');
+    assertEqual(tabNode.parent, windowNode,
+      'The loaded tab parent should remain unchanged');
+    assertEqual(messages.length, 0,
+      'A refused promotion should not broadcast a mutation');
+  } finally {
+    api.runtime.sendMessage = originalSendMessage;
+  }
+});
+
+test('moveNodeOnlyTo promotes children and preserves a later drop target',
+async () => {
+  const originalSendMessage = api.runtime.sendMessage;
+  const messages = [];
+  try {
+    api.runtime.sendMessage = async (msg) => {
+      messages.push({ ...msg });
+      return { result: 'ok persisted' };
+    };
+    const tree = createTree(null);
+    const source = await addChild(tree.root, {
+      id: 'node-only-source',
+      label: 'Source'
+    });
+    const first = await addChild(source, { id: 'node-only-first' });
+    const second = await addChild(source, { id: 'node-only-second' });
+    const target = await addChild(tree.root, { id: 'node-only-target' });
+    const originalDestIndex = target.indexOf() + 1;
+
+    const moved = await source.moveNodeOnlyTo(
+      tree.root,
+      originalDestIndex,
+      { reason: 'userAction' }
+    );
+
+    assertEqual(moved, true, 'Node-only move should report success');
+    assertEqual(source.nodes.length, 0,
+      'Only the source node should move to the target');
+    assertEqual(
+      tree.root.nodes.map((node) => node.id).join(','),
+      'node-only-first,node-only-second,node-only-target,node-only-source',
+      'Promoted children should replace the source before its later target'
+    );
+    assertEqual(first.parent, tree.root,
+      'First child should remain at the old tree location');
+    assertEqual(second.parent, tree.root,
+      'Second child should remain at the old tree location');
+    const treeMessages = messages.filter((msg) =>
+      msg.msg?.startsWith('tree_')
+    );
+    assertEqual(treeMessages.length, 1,
+      'Node-only movement should broadcast one tree mutation');
+    assertEqual(treeMessages[0].msg, 'tree_nodeMoved',
+      'Node-only movement should use the move protocol');
+    assertEqual(treeMessages[0].moveNodeOnly, true,
+      'The move should tell receivers to promote their local children');
+    assertEqual(treeMessages[0].destIndex, originalDestIndex + 2,
+      'The protocol should carry the post-promotion destination');
+    assertEqual(treeMessages[0].nodeOnlyDestAdjusted, true,
+      'The protocol should identify an already-adjusted destination');
+  } finally {
+    api.runtime.sendMessage = originalSendMessage;
+  }
+});
+
+test('tree_nodeMoved applies node-only movement in sibling views',
+async () => {
+  const tree = createTree(null);
+  tree.resolveTreeLoaded();
+  const source = await addChild(tree.root, {
+    id: 'sibling-view-source'
+  });
+  const child = await addChild(source, {
+    id: 'sibling-view-child'
+  });
+  const target = await addChild(tree.root, {
+    id: 'sibling-view-target'
+  });
+
+  await tree.tree_nodeMoved({
+    nodeId: source.id,
+    destParentId: tree.root.id,
+    destIndex: target.indexOf() + 2,
+    moveNodeOnly: true,
+    nodeOnlyDestAdjusted: true
+  });
+
+  assertEqual(
+    tree.root.nodes.map((node) => node.id).join(','),
+    'sibling-view-child,sibling-view-target,sibling-view-source',
+    'Sibling views should reproduce the originating node-only move'
+  );
+  assertEqual(child.parent, tree.root,
+    'Sibling views should promote the source child');
+  assertEqual(source.nodes.length, 0,
+    'Sibling views should leave the moved source empty');
+
+  await tree.tree_nodeMoved({
+    nodeId: source.id,
+    destParentId: tree.root.id,
+    destIndex: target.indexOf() + 2,
+    moveNodeOnly: true,
+    nodeOnlyDestAdjusted: true
+  });
+  assertEqual(
+    tree.root.nodes.map((node) => node.id).join(','),
+    'sibling-view-child,sibling-view-target,sibling-view-source',
+    'Replaying the atomic move should not shift the source again'
+  );
+});
+
+test('moveNodeOnlyTo restores children when the final move is invalid',
+async () => {
+  const originalSendMessage = api.runtime.sendMessage;
+  const messages = [];
+  try {
+    api.runtime.sendMessage = async (msg) => {
+      messages.push(msg);
+      return { result: 'ok persisted' };
+    };
+    const tree = createTree(null);
+    const normalWindow = await addChild(tree.root, {
+      id: 'rollback-normal-window',
+      type: 'window',
+      windowId: 1,
+      loaded: true,
+      incognito: false
+    });
+    const source = await addChild(normalWindow, {
+      id: 'rollback-source',
+      tabId: 10,
+      windowId: 1,
+      loaded: true,
+      incognito: false
+    });
+    const child = await addChild(source, {
+      id: 'rollback-child',
+      tabId: 11,
+      windowId: 1,
+      loaded: true,
+      incognito: false
+    });
+    const privateWindow = await addChild(tree.root, {
+      id: 'rollback-private-window',
+      type: 'window',
+      windowId: 2,
+      loaded: true,
+      incognito: true
+    });
+
+    const moved = await source.moveNodeOnlyTo(
+      privateWindow,
+      0,
+      { reason: 'userAction' }
+    );
+
+    assertEqual(moved, false,
+      'An incognito-boundary move should fail');
+    assertEqual(source.parent, normalWindow,
+      'The source should remain in its original window');
+    assertEqual(source.nodes.length, 1,
+      'A failed node-only move should restore the original subtree');
+    assertEqual(source.nodes[0], child,
+      'The original child order should be restored');
+    assertEqual(child.parent, source,
+      'The child should be reattached to the source');
+    assertEqual(messages.length, 0,
+      'A failed move should not broadcast a partial promotion');
+  } finally {
+    api.runtime.sendMessage = originalSendMessage;
+  }
+});
+
+test('moveNodeOnlyTo restores its old position after a late move failure',
+async () => {
+  const originalSendMessage = api.runtime.sendMessage;
+  try {
+    api.runtime.sendMessage = async () => ({ result: 'ok persisted' });
+    const tree = createTree(null);
+    const before = await addChild(tree.root, {
+      id: 'late-rollback-before'
+    });
+    const source = await addChild(tree.root, {
+      id: 'late-rollback-source'
+    });
+    const child = await addChild(source, {
+      id: 'late-rollback-child'
+    });
+    const target = await addChild(tree.root, {
+      id: 'late-rollback-target'
+    });
+    const originalMoveTo = source.moveTo.bind(source);
+    source.moveTo = async (destParent, destIndex, args) => {
+      const moved = await originalMoveTo(destParent, destIndex, args);
+      if ('userAction' === args.reason) return false;
+      return moved;
+    };
+
+    const moved = await source.moveNodeOnlyTo(
+      tree.root,
+      target.indexOf() + 1,
+      { reason: 'userAction' }
+    );
+
+    assertEqual(moved, false, 'The simulated late failure should propagate');
+    assertEqual(
+      tree.root.nodes.map((node) => node.id).join(','),
+      [before.id, source.id, target.id].join(','),
+      'The source should return to its exact original sibling position'
+    );
+    assertEqual(source.nodes.length, 1,
+      'The source should regain its promoted child');
+    assertEqual(source.nodes[0], child,
+      'The original child order should be restored after a late failure');
+    assertEqual(child.parent, source,
+      'The original child should be reattached to its source');
   } finally {
     api.runtime.sendMessage = originalSendMessage;
   }
@@ -1817,6 +2210,70 @@ test('ensureMoved can move browser tab node without its children', async () => {
   } finally {
     api.tabs.query = originalQuery;
   }
+});
+
+test('ensureMoved idempotently applies an adjusted user node-only move',
+async () => {
+  const bkgd = new Bkgd();
+  const tree = createTree(bkgd);
+  bkgd.tree = tree;
+  const source = await addChild(tree.root, {
+    id: 'user-node-only-source'
+  });
+  const first = await addChild(source, {
+    id: 'user-node-only-first'
+  });
+  const second = await addChild(source, {
+    id: 'user-node-only-second'
+  });
+  const target = await addChild(tree.root, {
+    id: 'user-node-only-target'
+  });
+  const tail = await addChild(tree.root, {
+    id: 'user-node-only-tail'
+  });
+
+  const payload = {
+    nodeId: source.id,
+    destParentId: tree.root.id,
+    destIndex: target.indexOf() + source.nodes.length + 1,
+    reason: 'userAction',
+    moveNodeOnly: true,
+    nodeOnlyDestAdjusted: true,
+    skipTabReorder: true
+  };
+  await bkgd.ensureMoved(payload);
+
+  assertEqual(source.nodes.length, 0,
+    'The background source should no longer own promoted children');
+  assertEqual(
+    tree.root.nodes.map((node) => node.id).join(','),
+    [
+      first.id,
+      second.id,
+      target.id,
+      source.id,
+      tail.id
+    ].join(','),
+    'The pre-promotion drop index should still resolve after the target'
+  );
+  assertEqual(first.parent, tree.root,
+    'The first child should remain in the source location');
+  assertEqual(second.parent, tree.root,
+    'The second child should remain in the source location');
+
+  await bkgd.ensureMoved(payload);
+  assertEqual(
+    tree.root.nodes.map((node) => node.id).join(','),
+    [
+      first.id,
+      second.id,
+      target.id,
+      source.id,
+      tail.id
+    ].join(','),
+    'Replaying the persisted move should leave the source in place'
+  );
 });
 
 test('ensureMoved keeps browser-moved parent under outline parent', async () => {
@@ -7258,6 +7715,137 @@ async () => {
   tree.cursor = null;
   assertEqual(tree.whichCursor({ type: 'keydown' }), null,
     'Keyboard handling should tolerate an unset cursor');
+});
+
+test('TreeView sibling navigation skips subtrees and climbs to parents',
+async () => {
+  const tree = new TreeView({
+    isInert: true,
+    document: null,
+    window: null
+  });
+  tree.resolveTreeViewLoaded();
+  tree.viewScope = 'session';
+  tree.viewRoot = tree.root;
+  const before = await tree.root.addChild(0, {
+    id: 'cursor-before'
+  }, { reason: 'test' });
+  const branch = await tree.root.addChild(1, {
+    id: 'cursor-branch',
+    expanded: true
+  }, { reason: 'test' });
+  const first = await branch.addChild(0, {
+    id: 'cursor-first',
+    expanded: true
+  }, { reason: 'test' });
+  await first.addChild(0, {
+    id: 'cursor-deep'
+  }, { reason: 'test' });
+  const second = await branch.addChild(1, {
+    id: 'cursor-second'
+  }, { reason: 'test' });
+  const after = await tree.root.addChild(2, {
+    id: 'cursor-after'
+  }, { reason: 'test' });
+  tree.setCursor = async (node) => {
+    tree.cursor = node;
+  };
+
+  tree.cursor = second;
+  await tree.action_cursorPrevSibling({ type: 'keydown' });
+  assertEqual(tree.cursor, first,
+    'Ctrl+Up should select the previous sibling, not its descendant');
+
+  await tree.action_cursorPrevSibling({ type: 'keydown' });
+  assertEqual(tree.cursor, branch,
+    'Ctrl+Up from the first child should select its parent');
+
+  await tree.action_cursorPrevSibling({ type: 'keydown' });
+  assertEqual(tree.cursor, before,
+    'Ctrl+Up should resume with the parent previous sibling');
+
+  tree.cursor = branch;
+  await tree.action_cursorNextSibling({ type: 'keydown' });
+  assertEqual(tree.cursor, after,
+    'Ctrl+Down should skip an expanded branch and all descendants');
+
+  tree.cursor = first;
+  await tree.action_cursorNextSibling({ type: 'keydown' });
+  assertEqual(tree.cursor, second,
+    'Ctrl+Down should select the immediate next sibling');
+
+  await tree.action_cursorNextSibling({ type: 'keydown' });
+  assertEqual(tree.cursor, after,
+    'Ctrl+Down should climb until an ancestor has a next sibling');
+
+  await tree.action_cursorNextSibling({ type: 'keydown' });
+  assertEqual(tree.cursor, after,
+    'Ctrl+Down should stop at the final node instead of wrapping');
+});
+
+test('TreeView recognizes modifier-assisted node-only drags',
+async () => {
+  const tree = new TreeView({
+    isInert: true,
+    document: null,
+    window: null
+  });
+  tree.resolveTreeViewLoaded();
+  tree.viewScope = 'session';
+  tree.viewRoot = tree.root;
+  tree.nodeIdMimeType = 'application/x-tktsto-node-id';
+  tree.nodeOnlyMoveMimeType = 'application/x-tktsto-move-node-only';
+  const source = await tree.root.addChild(0, {
+    id: 'drag-node-only-source'
+  }, { reason: 'test' });
+  await source.addChild(0, {
+    id: 'drag-node-only-child'
+  }, { reason: 'test' });
+  const target = await tree.root.addChild(1, {
+    id: 'drag-node-only-target'
+  }, { reason: 'test' });
+  tree.mouseNodeNonRoot = target;
+  tree.$mouseRow = {};
+  tree.$mouseRowWid = 100;
+  tree.$mouseRowX = 0;
+
+  assertEqual(
+    tree.getMouseBinding('Ctrl+MousePressLeft'),
+    'mousePressLeft',
+    'Ctrl should modify a mouse action without disabling its handler'
+  );
+  assertEqual(
+    tree.getMouseBinding('Ctrl+MouseDragStart'),
+    'mouseDragStart',
+    'Ctrl-drag should still dispatch the normal drag-start handler'
+  );
+  assertEqual(
+    tree.getMouseBinding('Shift+MousePressLeft'),
+    undefined,
+    'Unrelated mouse modifiers should retain their existing behavior'
+  );
+  assertEqual(
+    tree.getMouseBinding('Ctrl+MouseDblClickLeft'),
+    undefined,
+    'Ctrl fallback should be limited to the node-only drag lifecycle'
+  );
+
+  const drop = tree.getMouseDragTarget({
+    ctrlKey: false,
+    dataTransfer: {
+      types: [tree.nodeIdMimeType, tree.nodeOnlyMoveMimeType],
+      getData: (type) => (
+        type === tree.nodeIdMimeType ? source.id : ''
+      )
+    }
+  });
+
+  assertEqual(drop.source, 'internal',
+    'The custom drag payload should remain an internal move');
+  assertEqual(drop.sourceNode, source,
+    'The custom drag payload should identify its source node');
+  assertEqual(drop.moveNodeOnly, true,
+    'The custom MIME marker should preserve node-only behavior');
 });
 
 test('TreeView cancels a delayed scroll superseded by a newer cursor',

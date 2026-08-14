@@ -626,6 +626,25 @@
         );
       });
 
+      test('power-user bindings are available by default', async () => {
+        const view = createView();
+        assertEqual(
+          view.keyBindings['Ctrl+ArrowUp'],
+          'cursorPrevSibling',
+          'Ctrl+Up should select the previous sibling or parent'
+        );
+        assertEqual(
+          view.keyBindings['Ctrl+ArrowDown'],
+          'cursorNextSibling',
+          'Ctrl+Down should skip the current subtree'
+        );
+        assertEqual(
+          view.keyBindings['Shift+Ctrl+ArrowLeft'],
+          'promoteChildren',
+          'Ctrl+Shift+Left should promote children'
+        );
+      });
+
       testGroup('Move Nodes');
       test('move down keeps window above sibling leaf', async () => {
         const view = createView();
@@ -2608,6 +2627,107 @@
 
         assertEqual(mover.parent, windowA, 'Node should stay in first window', snap);
         assertEqual(windowA.nodes[0].id, 'n1', 'Node should remain first', snap);
+        return { before, after };
+      });
+
+      testGroup('Power User Moves');
+      test('promote children keeps the current node in place', async () => {
+        const view = createView();
+        const source = await addChild(view.root, {
+          id: 'promote-source',
+          label: 'Source',
+          expanded: true
+        });
+        const first = await addChild(source, {
+          id: 'promote-first'
+        });
+        const second = await addChild(source, {
+          id: 'promote-second'
+        });
+        const tail = await addChild(view.root, {
+          id: 'promote-tail'
+        });
+        view.cursor = source;
+
+        const before = treeSnapshot(view.root);
+        await view.action_promoteChildren({ type: 'command' });
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(source.nodes.length, 0,
+          'The current node should become a leaf', snap);
+        assertEqual(
+          view.root.nodes.map((node) => node.id).join(','),
+          'promote-source,promote-first,promote-second,promote-tail',
+          'Promoted children should follow the retained source in order',
+          snap
+        );
+        assertEqual(first.parent, view.root,
+          'First child should be promoted', snap);
+        assertEqual(second.parent, view.root,
+          'Second child should be promoted', snap);
+        assertEqual(tail.parent, view.root,
+          'Following siblings should remain at root', snap);
+        return { before, after };
+      });
+
+      test('Ctrl-drag moves only the selected node', async () => {
+        const view = createView();
+        view.nodeIdMimeType = 'application/x-tktsto-node-id';
+        view.nodeOnlyMoveMimeType =
+          'application/x-tktsto-move-node-only';
+        const source = await addChild(view.root, {
+          id: 'drag-source',
+          label: 'Source',
+          expanded: true
+        });
+        const first = await addChild(source, {
+          id: 'drag-first'
+        });
+        const second = await addChild(source, {
+          id: 'drag-second'
+        });
+        const target = await addChild(view.root, {
+          id: 'drag-target'
+        });
+        const tail = await addChild(view.root, {
+          id: 'drag-tail'
+        });
+        view.cursor = source;
+        setDropTarget(view, target, false);
+        const event = {
+          preventDefault: () => {},
+          ctrlKey: false,
+          dataTransfer: {
+            types: [
+              view.nodeIdMimeType,
+              view.nodeOnlyMoveMimeType
+            ],
+            getData: (type) => (
+              type === view.nodeIdMimeType ? source.id : ''
+            )
+          }
+        };
+
+        const before = treeSnapshot(view.root);
+        await view.action_mouseDrop(event);
+        const after = treeSnapshot(view.root);
+        const snap = { before, after };
+
+        assertEqual(source.nodes.length, 0,
+          'Dragged source should not retain its children', snap);
+        assertEqual(
+          view.root.nodes.map((node) => node.id).join(','),
+          'drag-first,drag-second,drag-target,drag-source,drag-tail',
+          'Children should remain at the old location while source moves',
+          snap
+        );
+        assertEqual(first.parent, view.root,
+          'First child should stay in the original subtree position', snap);
+        assertEqual(second.parent, view.root,
+          'Second child should stay in the original subtree position', snap);
+        assertEqual(tail.parent, view.root,
+          'Nodes after the drop target should keep their order', snap);
         return { before, after };
       });
 

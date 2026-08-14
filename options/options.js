@@ -590,6 +590,8 @@ async function initKeyBindingsForm () {
       actions: [
         'cursorUp',
         'cursorDown',
+        'cursorPrevSibling',
+        'cursorNextSibling',
         'cursorLeft',
         'cursorRight',
         'cursorPgUp',
@@ -609,6 +611,7 @@ async function initKeyBindingsForm () {
         'moveNodeDownNoDescend',
         'moveNodeLeft',
         'moveNodeRight',
+        'promoteChildren',
         'moveNodeHome',
         'moveNodeEnd',
       ],

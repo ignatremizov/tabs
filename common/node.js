@@ -201,6 +201,221 @@ export class Node {
     return changed;
   }
 
+  async promoteChildren (args) {
+    debug('Node.promoteChildren()');
+    if (! args) {
+      error('Node.promoteChildren(): no args');
+      return false;
+    }
+    if (this.isRoot()
+      || (! this.hasKids())
+      || (! this.canPromoteChildren())) return false;
+
+    // Promoting several children is one user action.  Broadcast one command
+    // after applying it locally so sibling views and the background never see
+    // a partially-promoted branch.
+    const atomicBroadcast = (
+      (args.emit !== false)
+      && ('userAction' === args.reason)
+      && this.tree
+      && (! this.tree.bkgd)
+    );
+    const operationArgs = atomicBroadcast
+      ? { ...args, emit: false }
+      : args;
+    const originalChildren = [...this.nodes];
+    const changed = await this.promoteKids(operationArgs);
+    if ((! changed) || this.hasKids()) {
+      await this.restoreChildrenAfterPromotion(originalChildren, {
+        ...operationArgs,
+        reason: 'promoteChildrenRollback',
+        emit: false,
+        allowWindowProxy: false,
+        skipTabReorder: true
+      });
+      return false;
+    }
+    if (this.tree?.bkgd) {
+      for (const child of originalChildren) {
+        await child.updateOpenerTabId();
+      }
+    }
+    if (atomicBroadcast && changed) {
+      await emit('tree_nodeChanged', {
+        nodeId: this.id,
+        type: 'promoteKids',
+        when: this.parent?.mtime || this.mtime,
+        actionReason: args.reason
+      });
+    }
+    return changed;
+  }
+
+  async restoreChildrenAfterPromotion (children, args) {
+    for (let index = 0; index < children.length; index += 1) {
+      const child = children[index];
+      if ((child.parent === this) && (child.indexOf() === index)) continue;
+      const restored = await child.moveTo(this, index, args);
+      if ((! restored)
+        || (child.parent !== this)
+        || (child.indexOf() !== index)) {
+        throw new Error(
+          `Could not restore child "${child.id}" under "${this.id}"`
+        );
+      }
+    }
+  }
+
+  canPromoteChildren () {
+    if (! this.isWindow()) return true;
+    const hasLoadedDescendants = this.hasLoadedTabsDeep
+      ? this.hasLoadedTabsDeep()
+      : this.hasLoadedTabs();
+    return (! this.isLoaded()) && (! hasLoadedDescendants);
+  }
+
+  getNodeOnlyMoveDestination (destParent, destIndex) {
+    let adjustedIndex = destIndex;
+    if (this.hasKids()
+      && (destParent === this.parent)
+      && Number.isInteger(destIndex)
+      && (destIndex > this.indexOf())) {
+      // Promoted children are inserted immediately after this node, shifting
+      // every later destination in the same parent.
+      adjustedIndex += this.nodes.length;
+    }
+    return { destParent, destIndex: adjustedIndex };
+  }
+
+  async moveNodeOnlyTo (destParent, destIndex, args) {
+    debug(`Node.moveNodeOnlyTo(${args?.reason})`,
+      this, destParent, destIndex);
+    if (! args) {
+      error('Node.moveNodeOnlyTo(): no args');
+      return false;
+    }
+    if (this.isRoot()) return false;
+    if (! this.hasKids()) return await this.moveTo(
+      destParent,
+      destIndex,
+      args
+    );
+    if (! this.canPromoteChildren()) return false;
+
+    const originalDestParent = destParent;
+    const prevParent = this.parent;
+    const prevIndex = this.indexOf();
+    const originalChildren = [...this.nodes];
+    const destination = args.nodeOnlyDestAdjusted
+      ? { destParent, destIndex }
+      : this.getNodeOnlyMoveDestination(destParent, destIndex);
+    const atomicBroadcast = (
+      (args.emit !== false)
+      && ('userAction' === args.reason)
+      && this.tree
+      && (! this.tree.bkgd)
+    );
+    const operationArgs = atomicBroadcast
+      ? { ...args, emit: false }
+      : args;
+    const promoteArgs = {
+      ...operationArgs,
+      emit: false,
+      skipTabReorder: true
+    };
+
+    const rollbackMove = async () => {
+      const rollbackArgs = {
+        ...operationArgs,
+        reason: 'moveNodeOnlyRollback',
+        emit: false,
+        allowWindowProxy: false,
+        skipTabReorder: true
+      };
+      if ((this.parent !== prevParent) || (this.indexOf() !== prevIndex)) {
+        let restoreIndex = prevIndex;
+        if ((this.parent === prevParent) && (this.indexOf() < prevIndex)) {
+          restoreIndex += 1;
+        }
+        const restored = await this.moveTo(
+          prevParent,
+          restoreIndex,
+          rollbackArgs
+        );
+        if ((! restored)
+          || (this.parent !== prevParent)
+          || (this.indexOf() !== prevIndex)) {
+          throw new Error(
+            `Could not restore node "${this.id}" after a failed move`
+          );
+        }
+      }
+      await this.restoreChildrenAfterPromotion(
+        originalChildren,
+        rollbackArgs
+      );
+    };
+
+    const promoted = await this.promoteKids(promoteArgs);
+    if ((! promoted) || this.hasKids()) {
+      await rollbackMove();
+      return false;
+    }
+
+    let moved = true;
+    try {
+      if ((this.parent !== destination.destParent)
+        || (this.indexOf() !== destination.destIndex)) {
+        moved = await this.moveTo(
+          destination.destParent,
+          destination.destIndex,
+          operationArgs
+        );
+      }
+    } catch (err) {
+      await rollbackMove();
+      throw err;
+    }
+    if (! moved) {
+      await rollbackMove();
+      return false;
+    }
+
+    if (atomicBroadcast) {
+      const hasLoadedContent = (
+        this.isLoaded()
+        || (this.hasLoadedTabsDeep
+          ? this.hasLoadedTabsDeep()
+          : this.hasLoadedTabs())
+      );
+      const movingToRoot = (
+        originalDestParent.isRoot()
+        && prevParent
+        && (! prevParent.isRoot())
+      );
+      const moveMsg = {
+        nodeId: this.id,
+        destParentId: destination.destParent.id,
+        // Receivers promote their copy first.  Sending the resulting index
+        // keeps same-parent moves stable if this message is replayed.
+        destIndex: destination.destIndex,
+        moveNodeOnly: true,
+        nodeOnlyDestAdjusted: true,
+        when: originalDestParent.mtime,
+        prevParentId: prevParent ? prevParent.id : null,
+        actionReason: args.reason
+      };
+      if (args.openWindowOnRootMove
+        || (movingToRoot
+          && (this.tree.openWindowOnRootMove
+            || ((! this.isWindow()) && hasLoadedContent)))) {
+        moveMsg.openWindowOnRootMove = true;
+      }
+      await emit('tree_nodeMoved', moveMsg);
+    }
+    return true;
+  }
+
   async promoteKids (args) {
     debug('Node.promoteKids()');
     // root should refuse to promote its kids

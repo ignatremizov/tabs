@@ -416,6 +416,8 @@ export class TreeStore extends Tree {
       reason: actionReason,
       when: msg.when
     };
+    if (msg.moveNodeOnly) payload.moveNodeOnly = true;
+    if (msg.nodeOnlyDestAdjusted) payload.nodeOnlyDestAdjusted = true;
     await this.bkgd.applyTreeMutation('ensureMoved', payload);
     return { result: 'ok immediate' };
   }

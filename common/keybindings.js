@@ -35,6 +35,8 @@ export const defaultKeyBindings = {
   // cursor movement
   'ArrowUp': 'cursorUp',
   'ArrowDown': 'cursorDown',
+  'Ctrl+ArrowUp': 'cursorPrevSibling',
+  'Ctrl+ArrowDown': 'cursorNextSibling',
   'ArrowLeft': 'cursorLeft',
   'ArrowRight': 'cursorRight',
   'PageUp': 'cursorPgUp',
@@ -53,6 +55,7 @@ export const defaultKeyBindings = {
   // move shallower or deeper
   'Shift+ArrowLeft': 'moveNodeLeft',
   'Shift+ArrowRight': 'moveNodeRight',
+  'Shift+Ctrl+ArrowLeft': 'promoteChildren',
   // move to first / last position
   'Shift+Home': 'moveNodeHome',
   'Shift+End': 'moveNodeEnd',
@@ -90,6 +93,14 @@ export const keyBindingActions = [
   { action: 'endSearch', label: 'End search' },
   { action: 'cursorUp', label: 'Cursor up' },
   { action: 'cursorDown', label: 'Cursor down' },
+  {
+    action: 'cursorPrevSibling',
+    label: 'Cursor to previous sibling or parent'
+  },
+  {
+    action: 'cursorNextSibling',
+    label: 'Cursor to next sibling after this branch'
+  },
   { action: 'cursorLeft', label: 'Cursor left (parent)' },
   { action: 'cursorRight', label: 'Cursor right (child)' },
   { action: 'cursorPgUp', label: 'Cursor page up' },
@@ -104,6 +115,10 @@ export const keyBindingActions = [
   { action: 'moveNodeDownNoDescend', label: 'Move node down (same level)' },
   { action: 'moveNodeLeft', label: 'Move node left (outdent)' },
   { action: 'moveNodeRight', label: 'Move node right (indent)' },
+  {
+    action: 'promoteChildren',
+    label: 'Promote children and keep current node'
+  },
   { action: 'moveNodeHome', label: 'Move node to top' },
   { action: 'moveNodeEnd', label: 'Move node to bottom' },
   { action: 'toggleMarked', label: 'Toggle mark' },

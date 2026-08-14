@@ -298,10 +298,21 @@ export class Bkgd {
 
   async ensureMovedInBatch (payload, node, destParent, destIndex, args) {
     if (payload.moveNodeOnly && node.hasKids()) {
-      await node.promoteKids({
+      const destination = payload.nodeOnlyDestAdjusted
+        ? { destParent, destIndex }
+        : node.getNodeOnlyMoveDestination(destParent, destIndex);
+      destParent = destination.destParent;
+      destIndex = destination.destIndex;
+      const promoted = await node.promoteChildren({
         ...args,
+        emit: false,
         skipTabReorder: true
       });
+      if ((! promoted) || node.hasKids()) {
+        throw new Error(
+          `ensureMoved(): could not promote every child of "${node.id}"`
+        );
+      }
     }
     if (payload.moveNodeOnly
       && Number.isInteger(payload.browserIndex)
@@ -320,7 +331,7 @@ export class Bkgd {
       }
     }
     if (node.parent === destParent && node.indexOf() === destIndex) {
-      return;
+      return true;
     }
     if (this.tree.applyMove) {
       return await this.tree.applyMove(

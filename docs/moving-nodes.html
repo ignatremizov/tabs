@@ -36,6 +36,10 @@
       a <b>child</b> of its target.  Or drag to the far <b>left side</b> of
       a node to place it as a next <b>sibling</b>.
       </p><p>
+      Hold <code>Ctrl</code> while starting a drag to move <b>only that
+      node</b>.  Its children are promoted into its old location instead of
+      following it to the drop target.
+      </p><p>
       Try dragging stuff around to get a feel for how it works.
       </p>
     </li>
@@ -48,6 +52,17 @@
       want to move, and then hold <code>Shift</code> and press the <code>Arrow
       keys</code> to move the node around. To keep moves at the same level,
       use <code>Shift+PageUp</code> and <code>Shift+PageDown</code>.
+      </p><p>
+      Press <code>Ctrl+Up</code> to jump to the previous sibling, or to the
+      parent when there is no previous sibling.  Press
+      <code>Ctrl+Down</code> to skip the current subtree and jump to the next
+      sibling, including a next sibling found by climbing through parents.
+      </p><p>
+      To detach a node from its children before moving it, use
+      <code>Ctrl+Shift+Left</code>.  This promotes all children but keeps the
+      current node in place, ready for a normal drag or keyboard move.  All of
+      these shortcuts can be changed in Options.  Loaded window containers
+      stay intact so their open tabs do not become detached from a window.
       </p><p>
       The fastest way to move that "Tutorial Window" out of its original
       position is to click it once to put the cursor on it, then hold

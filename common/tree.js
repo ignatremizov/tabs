@@ -2118,7 +2118,15 @@ export class Tree {
       const destParent = this.nodes[pendingMsg.destParentId];
       if (! node || ! destParent) continue;
       pendingMsg.reason = 'tree_nodeMoved';
-      await node.moveTo(destParent, pendingMsg.destIndex, pendingMsg);
+      if (pendingMsg.moveNodeOnly) {
+        await node.moveNodeOnlyTo(
+          destParent,
+          pendingMsg.destIndex,
+          { ...pendingMsg, emit: false }
+        );
+      } else {
+        await node.moveTo(destParent, pendingMsg.destIndex, pendingMsg);
+      }
       this.pendingMoves.delete(nodeId);
     }
   }
@@ -2245,6 +2253,13 @@ export class Tree {
 
     // move the node
     msg.reason = 'tree_nodeMoved';
+    if (msg.moveNodeOnly) {
+      return node.moveNodeOnlyTo(
+        destParent,
+        destIndex,
+        { ...msg, emit: false }
+      );
+    }
     return node.moveTo(destParent, destIndex, msg);
   }
 
@@ -2294,6 +2309,15 @@ export class Tree {
       }
       else if ('unload' === changeType) {
         return await node.unload(msg);
+      }
+      else if ('promoteKids' === changeType) {
+        return await this.runPersistenceBatch(
+          (operationArgs) => node.promoteChildren({
+            ...operationArgs,
+            emit: false
+          }),
+          { ...msg, emit: false }
+        );
       }
       else {
         throw new Error(
