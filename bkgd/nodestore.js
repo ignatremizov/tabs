@@ -3,9 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 "use strict";
-import { api, isChrome, isFirefox } from '/api.js';
-
-import { debug, log, warn, error } from '/common/common.js';
+import { debug } from '/common/common.js';
 import { Node } from '/common/node.js';
 import { Mutex } from '/common/mutex.js';
 
@@ -28,14 +26,55 @@ export class NodeStore extends Node {
     return nodeId;
   }
 
-  async saveIfChanged (promise) {
+  async saveIfChanged (promise, persistNodesLater) {
     const changed = await promise;
     if (changed) {
-      const unlock = await this.writeLock.lock();
-      try { await this.tree.db.saveNode(this); }
-      finally { unlock(); }
+      if (persistNodesLater instanceof Set) {
+        persistNodesLater.add(this);
+      } else {
+        await this.persistWithLock([this]);
+      }
     }
     return changed;
+  }
+
+  async persistWithLock (nodes = [], deleteNodeIds = []) {
+    const unlock = await this.writeLock.lock();
+    try {
+      return await this.persistNodes(nodes, deleteNodeIds);
+    } finally {
+      unlock();
+    }
+  }
+
+  async persistNodes (nodes = [], deleteNodeIds = []) {
+    const nodesById = new Map();
+    for (const node of nodes) {
+      // Async browser callbacks may still hold a reference after another
+      // callback deleted the node.  Never let that stale work recreate the
+      // deleted record.
+      if (node?.id && (this.tree.nodes[node.id] === node)) {
+        nodesById.set(node.id, node);
+      }
+    }
+    for (const nodeId of deleteNodeIds) nodesById.delete(nodeId);
+    if ((nodesById.size === 0) && (deleteNodeIds.length === 0)) return;
+
+    if (this.tree.db.writeNodes) {
+      return await this.tree.db.writeNodes(
+        [...nodesById.values()],
+        deleteNodeIds
+      );
+    }
+
+    // Lightweight test doubles and third-party TreeStore subclasses may only
+    // implement the original single-record methods.
+    for (const node of nodesById.values()) {
+      await this.tree.db.saveNode(node);
+    }
+    for (const nodeId of deleteNodeIds) {
+      await this.tree.db.deleteNode(nodeId);
+    }
   }
 
   async deleteSelf (args) {
@@ -47,15 +86,10 @@ export class NodeStore extends Node {
     const changed = await super.deleteSelf(args);
     // if delete failed, skip the rest
     if (changed) {
-      const unlock = await this.writeLock.lock();
-      try {
-        // parent child list changed
-        if (parent && parent.id && (parent.id !== nodeId))
-          await this.tree.db.saveNode(parent);
-        // remove from database
-        await this.tree.db.deleteNode(nodeId);
-      }
-      finally { unlock(); }
+      const nodesToSave = (
+        parent && parent.id && (parent.id !== nodeId)
+      ) ? [parent] : [];
+      await this.persistWithLock(nodesToSave, [nodeId]);
     }
 
     return changed;
@@ -72,14 +106,7 @@ export class NodeStore extends Node {
     // create new Node object
     const newNode = await super.addChild(index, details, ...extra);
     if (newNode) {
-      const unlock = await this.writeLock.lock();
-      try {
-        // add child to database
-        await this.tree.db.saveNode(newNode);
-        // parent changed too
-        await this.tree.db.saveNode(this);
-      }
-      finally { unlock(); }
+      await this.persistWithLock([newNode, this]);
     }
 
     return newNode;
@@ -87,71 +114,100 @@ export class NodeStore extends Node {
 
   async setNotes (label, note, args) {
     debug(`NodeStore.setNotes(${args.reason}, ${this.id})`, args);
-    return await this.saveIfChanged(super.setNotes(label, note, args));
+    const inherited = args?._persistNodesLater instanceof Set;
+    const persistNodesLater = inherited
+      ? args._persistNodesLater
+      : new Set();
+    const operationArgs = inherited
+      ? args
+      : { ...args, _persistNodesLater: persistNodesLater };
+    const changed = await this.saveIfChanged(
+      super.setNotes(label, note, operationArgs),
+      persistNodesLater
+    );
+    if ((! inherited) && persistNodesLater.size > 0) {
+      await this.persistWithLock([...persistNodesLater]);
+    }
+    return changed;
   }
 
   async setCheckbox (value, args) {
     debug(`NodeStore.setCheckbox(${args.reason}, ${this.id})`, args);
-    return await this.saveIfChanged(super.setCheckbox(value, args));
+    const inherited = args?._persistNodesLater instanceof Set;
+    const persistNodesLater = inherited
+      ? args._persistNodesLater
+      : new Set();
+    const operationArgs = inherited
+      ? args
+      : { ...args, _persistNodesLater: persistNodesLater };
+    const changed = await this.saveIfChanged(
+      super.setCheckbox(value, operationArgs),
+      persistNodesLater
+    );
+    if ((! inherited) && persistNodesLater.size > 0) {
+      await this.persistWithLock([...persistNodesLater]);
+    }
+    return changed;
   }
 
-  async updateCheckboxes () {
-    debug(`NodeStore.updateCheckboxes(${this.id})`);
-
-    // save checkbox states before
-    const parents = [];
-    let node = this;
-    while (! node.isRoot()) {
-      parents.push([node, node.checkbox, node.checkboxPx]);
-      node = node.parent;
+  async applyCheckboxUpdates (changedNodes, args) {
+    if (changedNodes.length <= 0) return false;
+    const persistNodesLater = args?._persistNodesLater;
+    if (persistNodesLater instanceof Set) {
+      for (const node of changedNodes) persistNodesLater.add(node);
+    } else {
+      await this.persistWithLock(changedNodes);
     }
-
-    const changed = await super.updateCheckboxes();
-    if (changed) {
-      const unlock = await this.writeLock.lock();
-      try {
-        // if any parents changed, save them too
-        for (const [n, checkbox, checkboxPx] of parents) {
-          if ((n.checkbox !== checkbox) || (n.checkboxPx !== checkboxPx))
-            await this.tree.db.saveNode(n);
-        }
-      }
-      finally { unlock(); }
-    }
-
-    return changed;
+    return true;
   }
 
   async setTabFields (changes, args) {
     debug(`NodeStore.setTabFields(${args.reason}, ${this.id})`, args);
-    return await this.saveIfChanged(super.setTabFields(changes, args));
+    return await this.saveIfChanged(
+      super.setTabFields(changes, args),
+      args?._persistNodesLater
+    );
   }
 
   async load (args) {
     debug(`NodeStore.load(${args.reason}, ${this.id})`, args);
-    return await this.saveIfChanged(super.load(args));
+    return await this.saveIfChanged(
+      super.load(args),
+      args?._persistNodesLater
+    );
   }
 
   async unload (args) {
     debug(`NodeStore.unload(${args.reason}, ${this.id})`, args);
-    return await this.saveIfChanged(super.unload(args));
+    return await this.saveIfChanged(
+      super.unload(args),
+      args?._persistNodesLater
+    );
   }
 
   async moveTo (destParent, destIndex, args) {
     debug(`NodeStore.moveTo(${args.reason}, ${this.id})`, args);
     const prevParent = this.parent;
+    const inherited = args?._persistNodesLater instanceof Set;
+    const persistNodesLater = inherited
+      ? args._persistNodesLater
+      : new Set();
+    const operationArgs = inherited
+      ? args
+      : { ...args, _persistNodesLater: persistNodesLater };
 
-    const changed = await super.moveTo(destParent, destIndex, args);
+    const changed = await super.moveTo(
+      destParent,
+      destIndex,
+      operationArgs
+    );
     if (changed) {
-      const unlock = await this.writeLock.lock();
-      try {
-        await this.tree.db.saveNode(this);
-        if (destParent)
-          await this.tree.db.saveNode(destParent);
-        if (prevParent && (prevParent !== destParent))
-          await this.tree.db.saveNode(prevParent);
+      for (const node of [this, destParent, prevParent]) {
+        if (node) persistNodesLater.add(node);
       }
-      finally { unlock(); }
+      if (! inherited) {
+        await this.persistWithLock([...persistNodesLater]);
+      }
     }
 
     return changed;
@@ -159,17 +215,37 @@ export class NodeStore extends Node {
 
   async setExpanded (expanded, args) {
     debug(`NodeStore.setExpanded(${args.reason}, ${this.id})`, args);
-    return await this.saveIfChanged(super.setExpanded(expanded, args));
+    return await this.saveIfChanged(
+      super.setExpanded(expanded, args),
+      args?._persistNodesLater
+    );
   }
 
   async setMarked (marked, args) {
     debug(`NodeStore.setMarked(${args.reason}, ${this.id})`, args);
-    return await this.saveIfChanged(super.setMarked(marked, args));
+    const inherited = args?._persistNodesLater instanceof Set;
+    const persistNodesLater = inherited
+      ? args._persistNodesLater
+      : new Set();
+    const operationArgs = inherited
+      ? args
+      : { ...args, _persistNodesLater: persistNodesLater };
+    const changed = await this.saveIfChanged(
+      super.setMarked(marked, operationArgs),
+      persistNodesLater
+    );
+    if ((! inherited) && persistNodesLater.size > 0) {
+      await this.persistWithLock([...persistNodesLater]);
+    }
+    return changed;
   }
 
   async setActive (active, args) {
     debug(`NodeStore.setActive(${args.reason}, ${this.id})`, args);
-    return await this.saveIfChanged(super.setActive(active, args));
+    return await this.saveIfChanged(
+      super.setActive(active, args),
+      args?._persistNodesLater
+    );
   }
 
 }

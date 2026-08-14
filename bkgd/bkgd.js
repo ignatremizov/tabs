@@ -43,8 +43,14 @@ export class Bkgd {
     // (empty except during brief moments before browser opens stuff)
     // ... and a mutex so others can wait until the queue is empty.
     this.nodesLoadingMutex = new Mutex();
+    // Browser callbacks can overlap at await boundaries.  Preserve their
+    // observed order in memory without writing replayable position records.
+    // Keep this separate from Tree.onMessageMutex so onCreated events can
+    // finish tab/window loads started by a view mutation.
+    this.browserMutationMutex = new Mutex();
     this.nodesLoading = [];
     this.windowsLoading = [];
+    this.pendingBrowserLoadTimeoutMs = 5000;
 
     // internal map of treeId : TreeViewInfo,
     // tracks the port and viewType and viewScope of each open TreeView
@@ -112,7 +118,7 @@ export class Bkgd {
       // give the tree a link to the bkgd object
       this.tree.bkgd = this;
       //  actually load the tree from storage
-      this.tree.init().then(async () => {
+      return this.tree.init().then(async () => {
         this.idGen.cache = this.tree.nodes;
         // grab all the open windows and tabs, and put them in the tree
         await this.mergeOpenWindowsIntoTree();
@@ -126,6 +132,8 @@ export class Bkgd {
         this.resolveTreeLoaded();  // let listeners know the tree is loaded
         this.tree.resolveTreeLoaded();
       });
+    }).catch((err) => {
+      error('Bkgd.init failed', err);
     });
 
   }
@@ -261,8 +269,78 @@ export class Bkgd {
     return await node.deleteSelf(args);
   }
 
+  async runSerializedBrowserMutation (handler) {
+    const unlock = await this.browserMutationMutex.lock();
+    try {
+      return await handler();
+    } finally {
+      unlock();
+    }
+  }
+
+  startPendingWindowLoad (windowNode) {
+    if (! windowNode || windowNode.browserLoadInProgress) return false;
+    windowNode.browserLoadInProgress = true;
+    windowNode.browserLoadPromise = new Promise(resolve => {
+      windowNode.resolveBrowserLoad = resolve;
+    });
+    if (! this.windowsLoading.includes(windowNode)) {
+      this.windowsLoading.push(windowNode);
+    }
+    windowNode.pendingWindowLoadTimer = setTimeout(() => {
+      this.finishPendingWindowLoad(windowNode, false);
+      warn('Pending browser window creation timed out:', windowNode);
+    }, this.pendingBrowserLoadTimeoutMs);
+    windowNode.pendingWindowLoadTimer.unref?.();
+    return true;
+  }
+
+  finishPendingWindowLoad (windowNode, succeeded) {
+    if (! windowNode) return;
+    if (windowNode.pendingWindowLoadTimer) {
+      clearTimeout(windowNode.pendingWindowLoadTimer);
+      delete windowNode.pendingWindowLoadTimer;
+    }
+    const windowIndex = this.windowsLoading.indexOf(windowNode);
+    if (windowIndex !== -1) this.windowsLoading.splice(windowIndex, 1);
+    const resolve = windowNode.resolveBrowserLoad;
+    windowNode.browserLoadInProgress = false;
+    windowNode.browserLoadPromise = null;
+    windowNode.resolveBrowserLoad = null;
+    if (resolve) resolve(Boolean(succeeded));
+  }
+
+  async waitForPendingWindowLoad (windowNode) {
+    if (! windowNode) return false;
+    if (windowNode.browserLoadInProgress
+      && windowNode.browserLoadPromise) {
+      await windowNode.browserLoadPromise;
+    }
+    const hasId = (
+      (undefined !== windowNode.windowId)
+      && (null !== windowNode.windowId)
+    );
+    return windowNode.isLoaded() && hasId;
+  }
+
   initConnectListener () {
     api.runtime.onConnect.addListener( this.onConnect.bind(this) );
+  }
+
+  addSafeListener (event, name, handler) {
+    event.addListener((...args) => {
+      try {
+        const result = handler(...args);
+        if (result && ('function' === typeof result.then)) {
+          return result.catch((err) => {
+            error(`Bkgd.${name} failed`, err);
+          });
+        }
+        return result;
+      } catch (err) {
+        error(`Bkgd.${name} failed`, err);
+      }
+    });
   }
 
   initMessageListener () {
@@ -271,46 +349,103 @@ export class Bkgd {
 
   initMiscListeners () {
     // user clicked extension icon in the address bar area
-    api.action.onClicked.addListener( this.onExtensionIconClicked.bind(this) );
+    this.addSafeListener(
+      api.action.onClicked,
+      'onExtensionIconClicked',
+      this.onExtensionIconClicked.bind(this)
+    );
 
     // global hotkey "commands"
-    api.commands.onCommand.addListener( this.onCommand.bind(this) );
+    this.addSafeListener(
+      api.commands.onCommand,
+      'onCommand',
+      this.onCommand.bind(this)
+    );
 
     // automatic scheduled backups
-    this.initLocalBackupAlarm();
-    this.initReconcileAlarm();
-    api.alarms.onAlarm.addListener( this.onAlarm.bind(this) );
+    this.initLocalBackupAlarm().catch((err) => {
+      error('Bkgd.initLocalBackupAlarm failed', err);
+    });
+    this.addSafeListener(
+      api.alarms.onAlarm,
+      'onAlarm',
+      this.onAlarm.bind(this)
+    );
   }
 
   initWindowListeners () {
     // monitor for windows being opened and closed
-    api.windows.onCreated.addListener( this.onWindowCreated.bind(this) );
-    api.windows.onRemoved.addListener( this.onWindowRemoved.bind(this) );
+    this.addSafeListener(
+      api.windows.onCreated,
+      'onWindowCreated',
+      this.onWindowCreated.bind(this)
+    );
+    this.addSafeListener(
+      api.windows.onRemoved,
+      'onWindowRemoved',
+      this.onWindowRemoved.bind(this)
+    );
     // user changed keyboard focus to a new window
-    api.windows.onFocusChanged.addListener( this.onWindowFocusChanged.bind(this) );
+    this.addSafeListener(
+      api.windows.onFocusChanged,
+      'onWindowFocusChanged',
+      this.onWindowFocusChanged.bind(this)
+    );
     // handle window resizing
     // Firefox 128.6.0esr-1~deb12u1 gives an error that it doesn't have this,
     // even though the docs say it does
     // https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/windows/onBoundsChanged
     if (api.windows.onBoundsChanged)
-      api.windows.onBoundsChanged.addListener( this.onWindowBoundsChanged.bind(this) );
+      this.addSafeListener(
+        api.windows.onBoundsChanged,
+        'onWindowBoundsChanged',
+        this.onWindowBoundsChanged.bind(this)
+      );
   }
 
   initTabListeners () {
     // tabs opened and closed
-    api.tabs.onCreated.addListener( this.onTabCreated.bind(this) );
-    api.tabs.onRemoved.addListener( this.onTabRemoved.bind(this) );
+    this.addSafeListener(
+      api.tabs.onCreated,
+      'onTabCreated',
+      this.onTabCreated.bind(this)
+    );
+    this.addSafeListener(
+      api.tabs.onRemoved,
+      'onTabRemoved',
+      this.onTabRemoved.bind(this)
+    );
     // tab became the window's active tab
-    api.tabs.onActivated.addListener (this.onTabActivated.bind(this) );
+    this.addSafeListener(
+      api.tabs.onActivated,
+      'onTabActivated',
+      this.onTabActivated.bind(this)
+    );
     // tab moved within a single window
-    api.tabs.onMoved.addListener (this.onTabMoved.bind(this) );
+    this.addSafeListener(
+      api.tabs.onMoved,
+      'onTabMoved',
+      this.onTabMoved.bind(this)
+    );
     // tab moved from one window to another
-    api.tabs.onAttached.addListener (this.onTabAttached.bind(this) );
+    this.addSafeListener(
+      api.tabs.onAttached,
+      'onTabAttached',
+      this.onTabAttached.bind(this)
+    );
     api.tabs.onDetached.addListener (this.onTabDetached.bind(this) );
     // virtually anything else changed
-    api.tabs.onUpdated.addListener (this.onTabUpdated.bind(this) );
+    this.addSafeListener(
+      api.tabs.onUpdated,
+      'onTabUpdated',
+      this.onTabUpdated.bind(this)
+    );
     // not really sure when this happens or why or how
-    api.tabs.onReplaced.addListener (this.onTabReplaced.bind(this) );
+    this.addSafeListener(
+      api.tabs.onReplaced,
+      'onTabReplaced',
+      this.onTabReplaced.bind(this)
+    );
   }
 
   async initConfig () {
@@ -332,12 +467,16 @@ export class Bkgd {
 
     // reset backup events when the interval changes
     this.cfg.watch('localBackupInterval', () => {
-      this.initLocalBackupAlarm(true);
+      this.initLocalBackupAlarm(true).catch((err) => {
+        error('Bkgd.initLocalBackupAlarm reset failed', err);
+      });
     });
     this.reconcileIntervalMinutes = this.cfg.reconcileIntervalMinutes;
     this.cfg.watch('reconcileIntervalMinutes', (key, newValue) => {
       this.reconcileIntervalMinutes = newValue;
-      this.initReconcileAlarm(true);
+      this.initReconcileAlarm(true).catch((err) => {
+        error('Bkgd.initReconcileAlarm reset failed', err);
+      });
     });
     await this.initReconcileAlarm(true);
   }
@@ -405,9 +544,11 @@ export class Bkgd {
     debug(`Bkgd.onAlarm(${alarm.name})`, alarm);
     if (this.localBackupAlarmName === alarm.name) {
       debug(this.localBackupAlarmName);
-      this.tree.downloadBackupNow();
+      return await this.tree.downloadBackupNow();
     } else if (this.reconcileAlarmName === alarm.name) {
-      runReconcile.call(this, { reason: 'alarm' });
+      return await this.runSerializedBrowserMutation(
+        () => runReconcile.call(this, { reason: 'alarm' })
+      );
     }
   }
 
@@ -426,7 +567,7 @@ export class Bkgd {
     }
   }
 
-  onExtensionIconClicked (tab, click) {
+  async onExtensionIconClicked (tab, click) {
     // middle click
     if (click && click.button === 1) {
       debug('onExtensionIconClicked(middle)');
@@ -437,21 +578,21 @@ export class Bkgd {
     else {
       debug('onExtensionIconClicked(left)');
       if (isFirefox) {
-        api.sidebarAction.toggle();
+        await api.sidebarAction.toggle();
       } else {
         // FIXME: sidePanel.isOpen() still doesn't exist, as of Chrome 143
         // nasty kludge, waiting on Chrome to add .isOpen()
         let isOpen = this.chromeSidepanelIsOpen[tab.windowId];
-        if (undefined !== api.sidePanel.isOpen) {
-          isOpen = api.sidePanel.isOpen({ windowId: tab.windowId });
+        if ('function' === typeof api.sidePanel.isOpen) {
+          isOpen = await api.sidePanel.isOpen({ windowId: tab.windowId });
         }
         if (isOpen) {
           // Chrome 141+
           // (WTF, why didn't this exist until 25 releases AFTER .open())
-          api.sidePanel.close({ windowId: tab.windowId });
+          await api.sidePanel.close({ windowId: tab.windowId });
         } else {
           // Chrome 116+
-          api.sidePanel.open({ windowId: tab.windowId });
+          await api.sidePanel.open({ windowId: tab.windowId });
         }
         this.chromeSidepanelIsOpen[tab.windowId] = (! isOpen);
       }
@@ -533,7 +674,11 @@ export class Bkgd {
               }
             }
           };
-          setTimeout(deferredLoad, delay);
+          setTimeout(() => {
+            deferredLoad().catch((err) => {
+              error('Deferred extension-tab restore failed', err);
+            });
+          }, delay);
           delay += (delayPerTab + 10) * previouslyLoaded.length;
         }
       }
@@ -570,7 +715,7 @@ export class Bkgd {
         ? node.hasLoadedTabsDeep()
         : node.hasLoadedTabs();
       if ((! found) && (node.isLoaded() || hasLoadedDesc)) {
-        node.unload({ reason: 'mergeOpenWindowsIntoTree' });
+        await node.unload({ reason: 'mergeOpenWindowsIntoTree' });
       }
     }
 
@@ -817,7 +962,11 @@ export class Bkgd {
             await new Promise(resolve => setTimeout(resolve, delayPerTab));
           }
         };
-        setTimeout(deferredLoad, delay);
+        setTimeout(() => {
+          deferredLoad().catch((err) => {
+            error('Deferred extension-page reload failed', err);
+          });
+        }, delay);
         delay += (delayPerTab + 10) * extensionPagesToReload.length;
       }
     }
@@ -836,68 +985,73 @@ export class Bkgd {
     if (! args) args = {};
     if (! args.reason) args.reason = 'onWindowCreated';
     await this.treeLoaded;
-    return this.tree.onWindowCreated (window, args);
+    return await this.runSerializedBrowserMutation(
+      () => this.tree.onWindowCreated(window, args)
+    );
   }
 
   async onWindowRemoved (windowId) {
     log(`bkgd.onWindowRemoved: ID ${windowId}`);
     // TODO: detect whether window was closed by user or by us
     await this.treeLoaded;
-    if (this.tree && this.tree.windowsClosing) {
-      this.tree.windowsClosing.add(windowId);
-      setTimeout(() => {
-        this.tree.windowsClosing.delete(windowId);
-      }, 2000);
-    }
-    // TODO
-    const node = this.tree.root.getWindowId(windowId);
-    if (node) {
-      debug('bkgd.onWindowRemoved(): found window node', windowId, node);
-      return await node.windowClosed({ reason: 'onWindowRemoved' });
-    }
-    else {
+    return await this.runSerializedBrowserMutation(async () => {
+      if (this.tree && this.tree.windowsClosing) {
+        this.tree.windowsClosing.add(windowId);
+        setTimeout(() => {
+          this.tree.windowsClosing.delete(windowId);
+        }, 2000);
+      }
+      const node = this.tree.root.getWindowId(windowId);
+      if (node) {
+        debug('bkgd.onWindowRemoved(): found window node', windowId, node);
+        return await node.windowClosed({ reason: 'onWindowRemoved' });
+      }
       debug('bkgd.onWindowRemoved(): no window node found', windowId);
-    }
+    });
   }
 
   async onWindowFocusChanged (windowId) {
     debug(`bkgd.onWindowFocusChanged(${windowId})`);
     await this.treeLoaded;
-    let focusedNode = null;
-    if (windowId >= 0) {
-      focusedNode = this.tree.root.getWindowId(windowId);
-    }
-    if (focusedNode) {
-      // update the window geometry and stuff
-      // (because Firefox has no onWindowBoundsChanged event, apparently)
-      // (so this is a workaround for that)
-      let win;
-      try { win = await api.windows.get(windowId); } catch (err) { }
-      if (win) await this.tree.onWindowBoundsChanged(win, focusedNode);
-    }
-    const now = Date.now();
-    const windowNodes = this.tree.root.findNodes(
-      (node) => node.isWindow()
-        && ((undefined !== node.windowId)
-          || (node.mtime > (now - 3000)))
-    );
-    for (const node of windowNodes) {
-      const shouldBeActive = Boolean(focusedNode && (node === focusedNode));
-      if ((node.active !== shouldBeActive) || (! node.isLoaded())) {
-        await node.setActive(shouldBeActive, {
-          reason: 'onWindowFocusChanged',
-          focusedNodeId: focusedNode?.id,
-          onWindowRemoved: ! node.isLoaded()
-        });
+    return await this.runSerializedBrowserMutation(async () => {
+      let focusedNode = null;
+      if (windowId >= 0) {
+        focusedNode = this.tree.root.getWindowId(windowId);
       }
-    }
-    // no node = no problem, because a non-browser window may be focused
+      if (focusedNode) {
+        // update the window geometry and stuff
+        // (because Firefox has no onWindowBoundsChanged event, apparently)
+        // (so this is a workaround for that)
+        let win;
+        try { win = await api.windows.get(windowId); } catch (err) { }
+        if (win) await this.tree.onWindowBoundsChanged(win, focusedNode);
+      }
+      const now = Date.now();
+      const windowNodes = this.tree.root.findNodes(
+        (node) => node.isWindow()
+          && ((undefined !== node.windowId)
+            || (node.mtime > (now - 3000)))
+      );
+      for (const node of windowNodes) {
+        const shouldBeActive = Boolean(focusedNode && (node === focusedNode));
+        if ((node.active !== shouldBeActive) || (! node.isLoaded())) {
+          await node.setActive(shouldBeActive, {
+            reason: 'onWindowFocusChanged',
+            focusedNodeId: focusedNode?.id,
+            onWindowRemoved: ! node.isLoaded()
+          });
+        }
+      }
+      // no node = no problem, because a non-browser window may be focused
+    });
   }
 
   async onWindowBoundsChanged (win) {
     debug('bkgd.onWindowBoundsChanged', win);
     await this.treeLoaded;
-    return this.tree.onWindowBoundsChanged(win);
+    return await this.runSerializedBrowserMutation(
+      () => this.tree.onWindowBoundsChanged(win)
+    );
   }
 
   async onTabCreated (tab) {
@@ -919,7 +1073,9 @@ export class Bkgd {
     // tab.windowId: number
     debug(`bkgd.onTabCreated(${tab.id}): ${tab.url} : ${tab.title}`, tab);
     await this.treeLoaded;
-    return this.tree.onTabCreated(tab);
+    return await this.runSerializedBrowserMutation(
+      () => this.tree.onTabCreated(tab)
+    );
   }
 
   async onTabRemoved (tabId, removeInfo) {
@@ -928,7 +1084,9 @@ export class Bkgd {
     // removeInfo.windowId: number
     debug(`bkgd.onTabRemoved(tabId=${tabId}, windowId=${removeInfo.windowId}, isWindowClosing=${removeInfo.isWindowClosing})`);
     await this.treeLoaded;
-    return this.tree.onTabRemoved(tabId, removeInfo);
+    return await this.runSerializedBrowserMutation(
+      () => this.tree.onTabRemoved(tabId, removeInfo)
+    );
   }
 
   async onTabActivated (activeInfo) {
@@ -936,7 +1094,11 @@ export class Bkgd {
     // activeInfo.windowId: number
     debug(`bkgd.onTabActivated(tabId=${activeInfo.tabId}, windowId=${activeInfo.windowId})`);
     await this.treeLoaded;
-    return this.tree.onTabActivated(activeInfo.windowId, activeInfo.tabId);
+    return await this.tree.onTabActivated(
+      activeInfo.windowId,
+      activeInfo.tabId,
+      (handler) => this.runSerializedBrowserMutation(handler)
+    );
   }
 
   async onTabMoved (tabId, moveInfo) {
@@ -946,10 +1108,15 @@ export class Bkgd {
     // moveInfo.toIndex: number
     // moveInfo.windowId: number
     debug(`bkgd.onTabMoved(tabId=${tabId}, windowId=${moveInfo.windowId}): ${moveInfo.fromIndex} -> ${moveInfo.toIndex}`);
-    if (this.tabReorderInProgress && (! this.tabReorderStalled))
-      return debug('bkgd.onTabMoved ignored (tabReorderInProgress)');
     await this.treeLoaded;
-    await this.tree.onTabMoved(tabId, moveInfo);
+    return await this.runSerializedBrowserMutation(() => {
+      if (this.tabReorderInProgress && (! this.tabReorderStalled)) {
+        return debug(
+          'bkgd.onTabMoved ignored (tabReorderInProgress)'
+        );
+      }
+      return this.tree.onTabMoved(tabId, moveInfo);
+    });
   }
 
   async onTabAttached (tabId, attachInfo) {
@@ -958,12 +1125,16 @@ export class Bkgd {
     // attachInfo.newWindowId: number
     //   (may refer to a window which doesn't exist yet)
     debug(`bkgd.onTabAttached(tabId=${tabId}, windowId=${attachInfo.newWindowId}, ${attachInfo.newPosition})`);
-    if (this.tabReorderInProgress) {
-      this.onTabAttachedRequested = true;
-      return debug('bkgd.onTabAttached ignored (tabReorderInProgress)');
-    }
     await this.treeLoaded;
-    return this.tree.onTabAttached(tabId, attachInfo);
+    return await this.runSerializedBrowserMutation(() => {
+      if (this.tabReorderInProgress) {
+        this.onTabAttachedRequested = true;
+        return debug(
+          'bkgd.onTabAttached ignored (tabReorderInProgress)'
+        );
+      }
+      return this.tree.onTabAttached(tabId, attachInfo);
+    });
   }
 
   onTabDetached (tabId, detachInfo) {
@@ -992,7 +1163,9 @@ export class Bkgd {
     // changeInfo.autoDiscardable: boolean
     debug(`bkgd.onTabUpdated(tabId=${tabId})`, changeInfo, tab);
     await this.treeLoaded;
-    return this.tree.onTabUpdated(tabId, changeInfo, tab);
+    return await this.runSerializedBrowserMutation(
+      () => this.tree.onTabUpdated(tabId, changeInfo, tab)
+    );
   }
 
   async onTabReplaced (addedTabId, removedTabId) {
@@ -1011,7 +1184,9 @@ export class Bkgd {
     // I'll probably have to install a whole separate browser just to find
     // one which actually supports this feature, since all the browsers I
     // use either block it or don't implement it at all.
-    await this.tree.onTabReplaced(addedTabId, removedTabId);
+    return await this.runSerializedBrowserMutation(
+      () => this.tree.onTabReplaced(addedTabId, removedTabId)
+    );
   }
 
   onConnect (port) {
@@ -1053,10 +1228,10 @@ export class Bkgd {
 
   onMessage (msg, sender, sendResponse) {
     // reject broken messages
-    if (! msg.msg) {
+    if (! msg?.msg) {
       const err = 'bkgd onMessage: invalid msg type';
       warn(err, msg);
-      sendResponse({error: err});
+      if ('function' === typeof sendResponse) sendResponse({ error: err });
       return;
     }
     // if message is for someone else, ignore it and abort
@@ -1069,7 +1244,19 @@ export class Bkgd {
     // and invoke the real handler, which can take as much time as it needs
 
     // call async handler synchronously
-    this.onBkgdMessage(msg, sender, sendResponse);
+    this.onBkgdMessage(msg, sender, sendResponse).catch((err) => {
+      const detail = err && err.message ? err.message : String(err);
+      error(`Bkgd.onMessage(${msg.msg}) failed: ${detail}`, err);
+      if ('function' === typeof sendResponse) {
+        try {
+          sendResponse({
+            error: `Bkgd.onMessage(${msg.msg}) failed: ${detail}`
+          });
+        } catch (responseError) {
+          warn(`Bkgd.onMessage(${msg.msg}) response failed: ${responseError}`);
+        }
+      }
+    });
     // "claim" this message, indicating we'll respond async,
     // and keep the message channel open
     // (but if we don't respond within a few seconds,
@@ -1198,36 +1385,46 @@ export class Bkgd {
       response.result = `Error: Can't load forbidden URL: ${node.url}`;
       return response;
     }
+    if (node.browserLoadInProgress) {
+      response.result = 'ok pending';
+      return response;
+    }
+    node.browserLoadInProgress = true;
     // - otherwise...
     // - get the parent window Node
     let windowNode = node.getWindowNode(false);
     // - if no window node, make one
     if (! windowNode) {
-      const config = await api.storage.local.get({
-        openWindowOnRootLoadTopmost: false
-      });
-      let wrapNode = node;
-      if (config.openWindowOnRootLoadTopmost) {
-        while (wrapNode.parent
-          && (! wrapNode.parent.isRoot())
-          && (! wrapNode.parent.isWindow())) {
-          wrapNode = wrapNode.parent;
+      try {
+        const config = await api.storage.local.get({
+          openWindowOnRootLoadTopmost: false
+        });
+        let wrapNode = node;
+        if (config.openWindowOnRootLoadTopmost) {
+          while (wrapNode.parent
+            && (! wrapNode.parent.isRoot())
+            && (! wrapNode.parent.isWindow())) {
+            wrapNode = wrapNode.parent;
+          }
         }
+        // get parent and node index
+        const parentNode = wrapNode.parent;
+        // insert new window node in place of current node
+        windowNode = await parentNode.addChild(wrapNode.indexOf(),
+          { type: 'window' },
+          { reason: 'bkgd_loadSavedNode:autoWindow' });
+        // move current node as child of window node
+        await this.applyTreeMutation('ensureMoved', {
+          nodeId: wrapNode.id,
+          destParentId: windowNode.id,
+          destIndex: 0,
+          reason: 'bkgd_loadSavedNode:autoWindow',
+          prevParentId: parentNode ? parentNode.id : null
+        });
+      } catch (err) {
+        node.browserLoadInProgress = false;
+        throw err;
       }
-      // get parent and node index
-      const parentNode = wrapNode.parent;
-      // insert new window node in place of current node
-      windowNode = await parentNode.addChild(wrapNode.indexOf(),
-        { type: 'window' },
-        { reason: 'bkgd_loadSavedNode:autoWindow' });
-      // move current node as child of window node
-      await this.applyTreeMutation('ensureMoved', {
-        nodeId: wrapNode.id,
-        destParentId: windowNode.id,
-        destIndex: 0,
-        reason: 'bkgd_loadSavedNode:autoWindow',
-        prevParentId: parentNode ? parentNode.id : null
-      });
     }
     // - if window not loaded, push window node to be loaded
     let needsWindow = false;
@@ -1237,11 +1434,18 @@ export class Bkgd {
     );
     const windowLoaded = windowNode.isLoaded() && windowHasId;
     if (! windowLoaded) {
+      if (windowNode.browserLoadInProgress) {
+        const attached = await this.waitForPendingWindowLoad(windowNode);
+        node.browserLoadInProgress = false;
+        if (attached) {
+          return await this.bkgd_loadSavedNode(msg);
+        }
+        response.result = 'Error: Timed out waiting for saved window';
+        return response;
+      }
       debug(`bkgd_loadSavedNode(): needsWindow`, windowNode);
       needsWindow = true;
-      // TODO
-      this.windowsLoading.push(windowNode);
-      // TODO: actually open the window?
+      this.startPendingWindowLoad(windowNode);
     }
     const shouldPinCreatedTab = Boolean(node.isPinned());
     // Existing-window creation can request pinned directly.  New-window
@@ -1257,7 +1461,15 @@ export class Bkgd {
         this.nodesLoadingMutexUnlock();
         this.nodesLoadingMutexUnlock = null;
       }
-      this.nodesLoadingMutexUnlock = await this.nodesLoadingMutex.lock();
+      try {
+        this.nodesLoadingMutexUnlock = await this.nodesLoadingMutex.lock();
+      } catch (err) {
+        if (needsWindow) {
+          this.finishPendingWindowLoad(windowNode, false);
+        }
+        node.browserLoadInProgress = false;
+        throw err;
+      }
     }
     this.nodesLoading.push(node);
     const popNode = (node, failed = false) => {
@@ -1274,10 +1486,11 @@ export class Bkgd {
         this.nodesLoadingMutexUnlock();
         this.nodesLoadingMutexUnlock = null;
       }
+      node.browserLoadInProgress = false;
     };
     node.pendingLoadTimer = setTimeout(() => {
       popNode(node, true);
-    }, 1000);  // failsafe
+    }, this.pendingBrowserLoadTimeoutMs);  // failsafe
     // Node's timer object supports unref(); browsers return a numeric ID.
     node.pendingLoadTimer.unref?.();
 
@@ -1345,8 +1558,7 @@ export class Bkgd {
           }
         }
       } catch (err) {
-        const windowIndex = this.windowsLoading.indexOf(windowNode);
-        if (windowIndex !== -1) this.windowsLoading.splice(windowIndex, 1);
+        this.finishPendingWindowLoad(windowNode, false);
         node.pinRestorePending = false;
         popNode(node);
         warn(`loadSavedTab failed: ${err}`);
@@ -1383,7 +1595,13 @@ export class Bkgd {
       try {
         await api.tabs.create(createProperties);
         if ('userAction' === msg.reason) {
-          await api.windows.update(windowNode.windowId, { focused: true });
+          try {
+            await api.windows.update(windowNode.windowId, { focused: true });
+          } catch (err) {
+            // The tab already exists.  Losing the pending-node association
+            // here would make its creation event add a duplicate tree row.
+            warn(`bkgd_loadSavedNode(): focus window failed: ${err}`);
+          }
         }
       } catch (err) {
         node.pinRestorePending = false;
@@ -1624,6 +1842,10 @@ export class Bkgd {
       && (null !== windowNode.windowId)
     );
     if (windowNode.isLoaded() && windowHasId) { return response; }
+    if (windowNode.browserLoadInProgress) {
+      response.result = 'ok pending';
+      return response;
+    }
     // list of open tabs in the new window
     const loadedKids = node.findNodes(
       (n) => (n.tabId && (! n.isWindow()))
@@ -1635,7 +1857,7 @@ export class Bkgd {
       return response;
     }
     // push window node to be loaded
-    this.windowsLoading.push(windowNode);
+    this.startPendingWindowLoad(windowNode);
     // actually open the window
     const createProperties = windowNode.windowCreateData();
     createProperties.tabId = tabIds[0];  // dang, it only allows one
@@ -1683,8 +1905,7 @@ export class Bkgd {
         }
       }
     } catch (err) {
-      const windowIndex = this.windowsLoading.indexOf(windowNode);
-      if (windowIndex !== -1) this.windowsLoading.splice(windowIndex, 1);
+      this.finishPendingWindowLoad(windowNode, false);
       warn(`loadSavedWindow failed: ${err}`);
       response.result = err;
     }
@@ -1707,7 +1928,7 @@ export class Bkgd {
     await this.treeLoaded;  // ensure tree is loaded
     let node = this.tree.nodes[msg.nodeId];
     if (! node) {
-      const err = `bkgd_reorderAllTabsInThisWindow(): no node found: "%{msg.nodeId}"`;
+      const err = `bkgd_reorderAllTabsInThisWindow(): no node found: "${msg.nodeId}"`;
       error(err);
       return { error: err };
     }
@@ -1724,9 +1945,9 @@ export class Bkgd {
       try {
         await node.reorderAllTabsInThisWindow({ force: msg.force });
       }
-      //catch (err) {
-      //  error(`bkgd_reorderAllTabsInThisWindow error:`, err);
-      //}
+      catch (err) {
+        error(`bkgd_reorderAllTabsInThisWindow error:`, err);
+      }
       finally {
         this.needsTabReorder = false;
       }
@@ -1751,6 +1972,7 @@ export class Bkgd {
 
     let updated = 0;
     let skipped = 0;
+    const changedNodes = [];
 
     // Find all nodes with a URL but no faviconUrl
     const nodesToUpdate = this.tree.root.findNodes(
@@ -1777,14 +1999,17 @@ export class Bkgd {
         }
         // Use Google's favicon service
         const faviconUrl = `https://www.google.com/s2/favicons?sz=32&domain=${domain}`;
-        // Update the node (this will save to IDB)
+        // Update in memory, then commit the whole backfill in one transaction.
         node.faviconUrl = faviconUrl;
-        await this.tree.db.saveNode(node);
+        changedNodes.push(node);
         updated++;
       } catch (err) {
         // Invalid URL or other error - skip this node
         skipped++;
       }
+    }
+    if (changedNodes.length > 0) {
+      await this.tree.db.saveNodes(changedNodes);
     }
 
     log(`bkgd_backfillFavicons: done - updated ${updated}, skipped ${skipped}`);
@@ -1798,9 +2023,14 @@ export class Bkgd {
     let total = 0;
     try {
       total = await handler.bind(this)(msg.data, msg.filename);
+      if ((! Number.isFinite(total)) || (total < 0)) {
+        throw new Error('File format was not recognized');
+      }
       response.status = `${total} nodes imported`;
     } catch (err) {
       response.status = `Import error: ${err}`;
+      response.error = err?.message || String(err);
+      total = 0;
       error(err);
     }
     response.total = total;
@@ -1808,21 +2038,28 @@ export class Bkgd {
   }
 
   async importBackupFile(json, filename) {
-    if (jsonSchema !== json.$schema) {
-      error('Does not appear to be a TKTSTO file.');
-      return -1;
+    if (jsonSchema !== json?.$schema) {
+      throw new Error('Does not appear to be a TKTSTO file');
     }
-    if (! json.nodes['root']) return -1;
+    if (! json.nodes?.root) {
+      throw new Error('TKTSTO backup has no root node');
+    }
 
     // don't import to an incomplete tree
     await this.treeLoaded;
 
     function lookup (id) {
-      const node = json.nodes[id];
-      if (! node) {
+      const source = json.nodes[id];
+      if (! source) {
         warn(`Failed to load node "${id}"`);
         return null;
       }
+      // Never rewrite the parsed backup object.  Callers may retry an import
+      // or retain it for validation after this method returns.
+      const node = {
+        ...source,
+        nodes: Array.isArray(source.nodes) ? [...source.nodes] : []
+      };
       // let tree assign new IDs for all nodes
       // (because we're adding to the current session, not replacing it)
       node.id = undefined;
@@ -1839,8 +2076,8 @@ export class Bkgd {
       // root node needs special care
       if ('root' === id) {
         const itimeStr = fmtDate(Date.now());
-        const ctimeStr = fmtDate(json.metadata.sessionStartDate);
-        const etimeStr = fmtDate(json.metadata.exportDate);
+        const ctimeStr = fmtDate(json.metadata?.sessionStartDate);
+        const etimeStr = fmtDate(json.metadata?.exportDate);
         // imports always start collapsed
         // (avoids a ton of drawing during load)
         node.expanded = false;
@@ -1857,19 +2094,35 @@ export class Bkgd {
       return node;
     }
 
+    const importedIds = new Set();
+    const visitingIds = new Set();
     async function createNodes (parent, childIds) {
       let firstNode;
       for (const childId of childIds) {
         //debug(`loading "${parent.id}" :: "${childId}"`);
+        if (visitingIds.has(childId)) {
+          warn(`Skipping import cycle at node "${childId}"`);
+          continue;
+        }
+        if (importedIds.has(childId)) {
+          warn(`Skipping repeated import node "${childId}"`);
+          continue;
+        }
         const destIndex = parent.nodes.length;
         const childDict = lookup(childId);
         if (! childDict) continue;
+        importedIds.add(childId);
+        visitingIds.add(childId);
         const newNode = await parent.addChild(destIndex, childDict,
           { reason: 'importFile' });
         // first node created is the "root" of this sub-tree
         if (! firstNode) firstNode = newNode;
-        if (childDict.nodes) {
-          await createNodes(newNode, childDict.nodes);
+        try {
+          if (childDict.nodes.length > 0) {
+            await createNodes(newNode, childDict.nodes);
+          }
+        } finally {
+          visitingIds.delete(childId);
         }
       }
       return firstNode;
@@ -1877,6 +2130,9 @@ export class Bkgd {
 
     // actually create the nodes now
     const sessionRoot = await createNodes(this.tree.root, ['root']);
+    if (! sessionRoot) {
+      throw new Error('TKTSTO backup root could not be imported');
+    }
 
     // if imported session is older than current session,
     // set the current session's creation date to the older date
@@ -2122,7 +2378,7 @@ export class Bkgd {
     if (windowId) {
       //debug(`Bkgd.onCommand(${command})`, windowId);
       // send a message to the sidepanel of that window
-      emit(`treeview_onCommand`, {
+      await emit(`treeview_onCommand`, {
         action: command,
         windowId, tab, origWindowId,
       });

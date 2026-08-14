@@ -105,6 +105,11 @@ export class TreeView extends Tree {
   }
 
   destroy () {
+    this.destroyed = true;
+    if (this.bkgdPing) {
+      clearInterval(this.bkgdPing);
+      this.bkgdPing = null;
+    }
     if (this.onEmitFailure && this.window && this.window.removeEventListener) {
       this.window.removeEventListener('tktsto_emit_failure', this.onEmitFailure);
       this.onEmitFailure = null;
@@ -139,7 +144,10 @@ export class TreeView extends Tree {
     this.$searchCount = doc.getElementById('search-count');
     if ((! this.isInert) && this.$searchEntry) {
       this.$searchEntry.addEventListener('input', (event) => {
-        return this.onSearchEntryUpdated(event);
+        this.runUiAction(
+          'Search update',
+          () => this.onSearchEntryUpdated(event)
+        );
       });
       this.$searchEntry.addEventListener('focus', (event) => {
         return this.onSearchEntryFocused(event);
@@ -251,20 +259,35 @@ export class TreeView extends Tree {
           ? newValue
           : 'prepend';
       });
-      this.cfg.watch('keyBindings', () => this.updateKeyBindings());
+      this.cfg.watch('keyBindings', () => {
+        this.runUiAction(
+          'Key binding update',
+          () => this.updateKeyBindings()
+        );
+      });
 
       // config watchers
       this.cfg.watch('treeViewZoomLevel',
-        (key, newVal, oldVal) => this.setZoomLevel(newVal, oldVal));
-      this.setZoomLevel(this.cfg.treeViewZoomLevel, this.cfg.treeViewZoomLevel);
+        (key, newVal, oldVal) => {
+          this.runUiAction(
+            'Zoom update',
+            () => this.setZoomLevel(newVal, oldVal)
+          );
+        });
+      await this.setZoomLevel(
+        this.cfg.treeViewZoomLevel,
+        this.cfg.treeViewZoomLevel
+      );
 
       // clear "expanded" overrides when this option is turned off
       this.cfg.watch('activeTabExpandsItsParents',
         (key, newVal, oldVal) => {
           if (! newVal) {
-            this.expandOverrideClear();
-            this.ensureCursorVisible();
-            this.$renderWholeTree();
+            this.runUiAction('Expansion override update', async () => {
+              await this.expandOverrideClear();
+              await this.ensureCursorVisible();
+              this.$renderWholeTree();
+            });
           }
         },
         1000  // debounce a bit since this change is expensive
@@ -330,11 +353,11 @@ export class TreeView extends Tree {
     // build the hover menu
     this.$renderHoverMenu();
 
-    // ensure the cursor is somewhere sane when sidepanel opens
-    this.ensureCursorVisible();
-
     // let listeners know the tree is loaded
     this.resolveTreeViewLoaded();
+
+    // ensure the cursor is somewhere sane when sidepanel opens
+    await this.ensureCursorVisible();
   }
 
   async loadTreeFromBkgd (render = true) {
@@ -375,7 +398,17 @@ export class TreeView extends Tree {
   }
 
   setStatus (msg) {
-    this.$statusText.textContent = msg;
+    if (this.$statusText) this.$statusText.textContent = msg;
+  }
+
+  async runUiAction (context, action) {
+    try {
+      return await action();
+    } catch (err) {
+      error(`${context} failed`, err);
+      this.setStatus(`${context} failed: ${err?.message || err}`);
+      return undefined;
+    }
   }
 
   buildActionKeyMap (keyBindings) {
@@ -526,7 +559,7 @@ export class TreeView extends Tree {
   }
 
   onMarkedCountClick (event) {
-    this.action_pasteMarked(event);
+    return this.action_pasteMarked(event);
   }
 
   showSearch () {
@@ -628,7 +661,12 @@ export class TreeView extends Tree {
       await this.expandOverride(oldMatch, null);
     if (newMatch) {
       // wait for expansion changes to take effect before moving cursor
-      setTimeout(() => { this.setCursor(newMatch); }, 1);
+      setTimeout(() => {
+        this.runUiAction(
+          'Search cursor update',
+          () => this.setCursor(newMatch)
+        );
+      }, 1);
     }
     this.updateSearchCount();
   }
@@ -711,7 +749,7 @@ export class TreeView extends Tree {
       case 'Escape':
         event.preventDefault();
         event.stopPropagation();
-        this.cancelSearch();
+        this.runUiAction('Search cancellation', () => this.cancelSearch());
         break;
       case 'Enter':
         event.preventDefault();
@@ -741,7 +779,9 @@ export class TreeView extends Tree {
       const newVal = this.$searchEntry.value;
       debug(`search: ${newVal}`);
       this.searchString = newVal;
-      if (newVal !== oldVal) this.updateSearch();
+      if (newVal !== oldVal) {
+        this.runUiAction('Search update', () => this.updateSearch());
+      }
     }, 250);
   }
 
@@ -882,34 +922,34 @@ export class TreeView extends Tree {
     // (calling this.keyHandler unwrapped runs in HtmllDocument scope
     //  instead of Tree scope)
     this.document.addEventListener('keydown',
-      (event) => { this.keyHandler(event) }
+      (event) => {
+        this.runUiAction('Keyboard action', () => this.keyHandler(event));
+      }
     );
   }
 
   initMouseHandler () {
+    const handleMouse = (target, domEvent, eventType) => {
+      target.addEventListener(domEvent, (event) => {
+        this.runUiAction(
+          `Mouse ${eventType} action`,
+          () => this.mouseEvent(eventType, event)
+        );
+      });
+    };
     // block default click on tree nodes (left click shouldn't open links)
-    this.$treeRoot.addEventListener('click',
-      (event) => { this.mouseEvent('click', event) });
-    this.$treeRoot.addEventListener('mousedown',
-      (event) => { this.mouseEvent('mousedown',event) });
-    this.$treeRoot.addEventListener('dblclick',
-      (event) => { this.mouseEvent('dblclick', event) });
+    handleMouse(this.$treeRoot, 'click', 'click');
+    handleMouse(this.$treeRoot, 'mousedown', 'mousedown');
+    handleMouse(this.$treeRoot, 'dblclick', 'dblclick');
     // drag-n-drop
-    this.$.addEventListener('dragstart',
-      (event) => { this.mouseEvent('DragStart', event) });
-    this.$.addEventListener('drag',
-      (event) => { this.mouseEvent('Drag', event) });
-    this.$.addEventListener('drop',
-      (event) => { this.mouseEvent('Drop', event) });
-    this.$.addEventListener('dragend',
-      (event) => { this.mouseEvent('DragEnd', event) });
-    this.$.addEventListener('dragleave',
-      (event) => { this.mouseEvent('DragLeave', event) });
-    this.$.addEventListener('dragover',
-      (event) => { this.mouseEvent('DragOver', event) });
+    handleMouse(this.$, 'dragstart', 'DragStart');
+    handleMouse(this.$, 'drag', 'Drag');
+    handleMouse(this.$, 'drop', 'Drop');
+    handleMouse(this.$, 'dragend', 'DragEnd');
+    handleMouse(this.$, 'dragleave', 'DragLeave');
+    handleMouse(this.$, 'dragover', 'DragOver');
     // show/hide the hover menu
-    this.$treeRoot.addEventListener('mouseover',
-      (event) => { this.mouseEvent('mouseover', event) });
+    handleMouse(this.$treeRoot, 'mouseover', 'mouseover');
     // hide the hover menu when the mouse leaves the tree view
     this.$.addEventListener('mouseleave',
       (event) => { this.mouseLeave(event) });
@@ -1192,7 +1232,7 @@ export class TreeView extends Tree {
       }
     } finally {
       this.cursor = originalCursor;
-      this.setCursor(originalCursor);
+      await this.setCursor(originalCursor);
     }
   }
 
@@ -1686,9 +1726,9 @@ export class TreeView extends Tree {
       // move to prev row if cursor is already on the last row
       if (newCursor === this.cursor) newCursor = this.cursor.prevVisibleNode();
     }
-    const restoreCursor = () => {
+    const restoreCursor = async () => {
       if (newCursor === this.cursor) return;
-      this.setCursor(newCursor);
+      await this.setCursor(newCursor);
     };
 
     // delete depending on the node type and state
@@ -1731,7 +1771,7 @@ export class TreeView extends Tree {
       if (parentWindow) {
         await toDelete.deleteSelf({ reason: 'userAction' });
         this.setStatus(`unwrapped ${line}`);
-        this.setCursor(labelNode);
+        await this.setCursor(labelNode);
         return;
       }
 
@@ -1747,7 +1787,7 @@ export class TreeView extends Tree {
         }, { reason: 'userAction' });
         await toDelete.deleteSelf({ reason: 'userAction' });
         this.setStatus(`unwrapped ${line}`);
-        this.setCursor(labelNode);
+        await this.setCursor(labelNode);
         return;
       }
 
@@ -1763,7 +1803,7 @@ export class TreeView extends Tree {
           await toDelete.setCheckbox(null, { reason: 'userAction' });
         }
         this.setStatus(`unwrapped ${line}`);
-        this.setCursor(labelNode);
+        await this.setCursor(labelNode);
         return;
       }
     }
@@ -1782,7 +1822,7 @@ export class TreeView extends Tree {
         await toDelete.unload({ reason: 'userAction' });
         await toDelete.deleteSelf({ reason: 'userAction' });
         this.setStatus(`deleted ${line}`);
-        restoreCursor();
+        await restoreCursor();
         return;
       }
 
@@ -1794,7 +1834,7 @@ export class TreeView extends Tree {
           keepTabsOnClose: true
         });
         this.setStatus(`unloaded ${line}`);
-        restoreCursor();
+        await restoreCursor();
         return;
       }
 
@@ -1811,7 +1851,7 @@ export class TreeView extends Tree {
         );
         await toDelete.deleteSelf({ reason: 'userAction' });
         this.setStatus(`unwrapped ${line}`);
-        restoreCursor();
+        await restoreCursor();
         return;
       }
 
@@ -1837,7 +1877,7 @@ export class TreeView extends Tree {
         );
         await toDelete.deleteSelf({ reason: 'userAction' });
         this.setStatus(`unwrapped ${line}`);
-        restoreCursor();
+        await restoreCursor();
         return;
       }
 
@@ -1855,7 +1895,7 @@ export class TreeView extends Tree {
           await node.moveTo(innerParent, innerIndex, { reason: 'userAction' });
         }
         this.setStatus(`unwrapped ${line}`);
-        restoreCursor();
+        await restoreCursor();
         return;
       }
       const tabCount = toDelete.getLoadedAndUnloadedTabs().length;
@@ -1875,7 +1915,7 @@ export class TreeView extends Tree {
       );
       await toDelete.deleteSelf({ reason: 'userAction' });
       this.setStatus(`deleted ${line}`);
-      restoreCursor();
+      await restoreCursor();
       return;
     }
     // if leaf, just delete it... simple
@@ -1944,7 +1984,7 @@ export class TreeView extends Tree {
     }
 
     // update the cursor
-    restoreCursor();
+    await restoreCursor();
   }
 
   getWrapNodeForWindowDelete (windowNode) {
@@ -2027,7 +2067,7 @@ export class TreeView extends Tree {
       }
     }
     else {
-      cursor.unload({ reason: 'userAction' });
+      await cursor.unload({ reason: 'userAction' });
       this.setStatus(`unloaded ${cursor.toLine()}`);
     }
   }
@@ -2156,9 +2196,14 @@ export class TreeView extends Tree {
       if (lastLoaded) {
         const winNode = lastLoaded.getWindowNode();
         if (winNode) {
-          setTimeout(() =>
-            winNode.setActiveTab({ reason: 'action_loadNodeBatch' }),
-            500);
+          setTimeout(() => {
+            this.runUiAction(
+              'Active tab refresh',
+              () => winNode.setActiveTab({
+                reason: 'action_loadNodeBatch'
+              })
+            );
+          }, 500);
         }
       }
     }
@@ -2440,14 +2485,14 @@ export class TreeView extends Tree {
     this.setStatus(`Edited ${cursor.toLine()}`);
   }
 
-  action_toggleMarked (event) {
+  async action_toggleMarked (event) {
     debug('action_toggleMarked()');
     // choose mouse or keyboard cursor based on event type
     let cursor = this.whichCursor(event);
     // skip no-op cases
     if (! cursor) return;
     const toggled = ! cursor.marked;
-    cursor.setMarked(toggled, { reason: 'userAction' });
+    await cursor.setMarked(toggled, { reason: 'userAction' });
     const verbed = toggled ? 'Marked' : 'Unmarked';
     this.setStatus(`${verbed} ${cursor.toLine()}`);
   }
@@ -2616,8 +2661,13 @@ export class TreeView extends Tree {
     // save for later potential drag-n-drop
     this.mouseDragStartNode = this.mouseNodeNonRoot;
     // place the cursor (and *don't* await)
-    this.setCursor(this.mouseNodeNonRoot,
-      { instant: false, scrollDelay: this.cfg.doubleClickMs });
+    this.runUiAction(
+      'Mouse cursor update',
+      () => this.setCursor(this.mouseNodeNonRoot, {
+        instant: false,
+        scrollDelay: this.cfg.doubleClickMs
+      })
+    );
     // maybe modify a checkbox
     if (this.$mouseElem?.classList.contains('node-checkbox')) {
       await this.action_taskEdit(event);
@@ -2908,7 +2958,7 @@ export class TreeView extends Tree {
       // prevent cursor from disappearing or jumping
       const wasCursor = this.cursor === drop.sourceNode;
       if (wasCursor && (drop.destParent.isCollapsed()))
-        this.setCursor(drop.destParent);
+        await this.setCursor(drop.destParent);
       // move it
       const moved = await drop.sourceNode.moveTo(
         drop.destParent, drop.destIndex,
@@ -2917,7 +2967,7 @@ export class TreeView extends Tree {
       else {
         // undo cursor change if move failed
         if (wasCursor && (this.cursor !== drop.sourceNode))
-          this.setCursor(drop.sourceNode);
+          await this.setCursor(drop.sourceNode);
         return finish(`move failed: ${drop.sourceNode.toLine()}`);
       }
     }
@@ -2995,7 +3045,7 @@ export class TreeView extends Tree {
     }
     if (result && result.newLabelId) {
       const labelNode = this.nodes[result.newLabelId];
-      if (labelNode) this.setCursor(labelNode);
+      if (labelNode) await this.setCursor(labelNode);
     }
   }
 
@@ -3030,7 +3080,10 @@ export class TreeView extends Tree {
       $div['data-toggle'] = 'tooltip';
       // make the button do something when clicked
       const func = function (event) {
-        _this[`action_${funcName}`].bind(_this)(event);
+        _this.runUiAction(
+          `Hover menu ${funcName}`,
+          () => _this[`action_${funcName}`].bind(_this)(event)
+        );
         _this.hideHoverMenu();  // will re-appear if still over a node
       }
       if (func) $div.addEventListener('click', func);
@@ -3224,7 +3277,7 @@ export class TreeView extends Tree {
       let visibleNode = activeTabNode ? activeTabNode : viewRoot;
       if ((visibleNode !== viewRoot) && (! visibleNode.isVisible(viewRoot))) {
         if (this.cfg.activeTabExpandsItsParents) {
-          visibleNode.setActive(true, { localOverride: true });
+          await visibleNode.setActive(true, { localOverride: true });
         } else {
           visibleNode = visibleNode.prevVisibleNode(viewRoot);
         }
@@ -3368,18 +3421,25 @@ export class TreeView extends Tree {
   initBkgdPort () {
     this.port = api.runtime.connect();
     //debug('port', this.port);
-    this.port.onDisconnect.addListener(async () => {
-      debug("TreeView.port disconnected, reconnecting...");
-      await new Promise(r => setTimeout(r, 100));
-      this.initBkgdPort();
-      this.registerWithBkgd();
+    this.port.onDisconnect.addListener(() => {
+      this.runUiAction('Background reconnect', async () => {
+        if (this.destroyed) return;
+        debug("TreeView.port disconnected, reconnecting...");
+        await new Promise(r => setTimeout(r, 100));
+        if (this.destroyed) return;
+        this.initBkgdPort();
+        this.registerWithBkgd();
+      });
     });
     // tell bkgd about us, after we've had a chance to load
     //setTimeout(() => { this.registerWithBkgd(); }, 1000);
   }
 
   initBkgdPing () {
-    this.bkgdPing = setInterval(() => { return this.pingBkgd(); }, 15 * 1000);
+    if (this.bkgdPing) clearInterval(this.bkgdPing);
+    this.bkgdPing = setInterval(() => {
+      this.runUiAction('Background ping', () => this.pingBkgd());
+    }, 15 * 1000);
   }
 
   async pingBkgd () {
@@ -3408,7 +3468,12 @@ export class TreeView extends Tree {
     // needs to send via Port.postMessage() instead of runtime.sendMessage()
     // because it needs Port.onDisconnect to detect when a TreeView closes
     // and this associates the TreeView.id with a port
-    if (send) emit('bkgdPort_registerTreeView', msg, { port: this.port });
+    if (send) {
+      this.runUiAction(
+        'Background registration',
+        () => emit('bkgdPort_registerTreeView', msg, { port: this.port })
+      );
+    }
     return msg;
   }
 
@@ -3427,59 +3492,76 @@ export class TreeView extends Tree {
   }
 
   initButtonHandlers () {
+    const handleClick = (element, context, action) => {
+      element.addEventListener('click', (event) => {
+        this.runUiAction(context, () => action(event));
+      });
+    };
     // when view-scope-btn clicked, toggle session vs window view mode
-    this.$viewScopeBtn.addEventListener('click', () => {
-      this.onViewScopeBtnClick();
-    });
+    handleClick(
+      this.$viewScopeBtn,
+      'View scope change',
+      () => this.onViewScopeBtnClick()
+    );
     // open a tree view in a new tab
-    this.$treeViewInTabBtn.addEventListener('click', () => {
-      this.onTreeViewInTabBtnClick();
-    });
+    handleClick(
+      this.$treeViewInTabBtn,
+      'Open tree view',
+      () => this.onTreeViewInTabBtnClick()
+    );
     // zoom in and out
-    this.$zoomOutBtn.addEventListener('click', () => {
-      this.onZoomBtn(-1);
-    });
-    this.$zoomInBtn.addEventListener('click', () => {
-      this.onZoomBtn(1);
-    });
+    handleClick(this.$zoomOutBtn, 'Zoom update', () => this.onZoomBtn(-1));
+    handleClick(this.$zoomInBtn, 'Zoom update', () => this.onZoomBtn(1));
     // when details-btn clicked, toggle the details box
-    this.$detailsBtn.addEventListener('click', () => {
-      this.onDetailsBtnClick();
-    });
+    handleClick(
+      this.$detailsBtn,
+      'Details update',
+      () => this.onDetailsBtnClick()
+    );
     // save a session backup when clicked
-    this.$backupBtn.addEventListener('click', () => {
-      this.onBackupBtnClick();
-    });
+    handleClick(
+      this.$backupBtn,
+      'Backup',
+      () => this.onBackupBtnClick()
+    );
     // open the options page
-    this.$optionsBtn.addEventListener('click', () => {
-      this.onOptionsBtnClick();
-    });
+    handleClick(
+      this.$optionsBtn,
+      'Open options',
+      () => this.onOptionsBtnClick()
+    );
     // help me survive
-    this.$donateBtn.addEventListener('click', () => {
-      this.onDonateBtnClick();
-    });
+    handleClick(
+      this.$donateBtn,
+      'Open donation page',
+      () => this.onDonateBtnClick()
+    );
     // open the user manual
-    this.$helpBtn.addEventListener('click', () => {
-      this.onHelpBtnClick();
-    });
+    handleClick(
+      this.$helpBtn,
+      'Open help',
+      () => this.onHelpBtnClick()
+    );
     // "marked count" widget
     this.$markedCount.addEventListener('mouseover', () => {
       this.onMarkedCountHover();
     });
-    this.$markedCount.addEventListener('click', () => {
-      this.onMarkedCountClick();
-    });
+    handleClick(
+      this.$markedCount,
+      'Marked-node action',
+      (event) => this.onMarkedCountClick(event)
+    );
   }
 
-  onViewScopeBtnClick () {
+  async onViewScopeBtnClick () {
     if ('session' === this.viewScope) this.viewScope = 'window';
     else this.viewScope = 'session';
     // save button state to config storage, per window
-    this.setWindowConfig('viewScope', this.viewScope);
+    await this.setWindowConfig('viewScope', this.viewScope);
     // update the display
     this.$renderViewScopeBtn();
     this.$renderWholeTree();
-    this.ensureCursorVisible();
+    await this.ensureCursorVisible();
     this.setStatus(`View scope: ${this.viewScope}`);
     // tell bkgd we changed viewScope
     this.registerWithBkgd();
@@ -3498,12 +3580,12 @@ export class TreeView extends Tree {
     return this.onDetailsBtnClick();
   }
 
-  onDetailsBtnClick () {
+  async onDetailsBtnClick () {
     // it's a 3-state button: off, short, full (none, notes, details)
     this.detailsState = (this.detailsState + 1) % 3;
-    // save button state to config storage
-    this.setWindowConfig('detailsState', this.detailsState);
     this.$renderDetailsBtn();
+    // save button state to config storage
+    await this.setWindowConfig('detailsState', this.detailsState);
   }
 
   $renderDetailsBtn () {
@@ -3561,22 +3643,30 @@ export class TreeView extends Tree {
     // Chrome can't open internal pages in incognito windows
     if (internal && isChrome && tab.incognito) { }
     else createProperties.openerTabId = tab.id;
-    api.tabs.create(createProperties);
+    return await api.tabs.create(createProperties);
   }
 
   openInternalPage (url) {
-    return this.openLinkInNewTab(url, true);
+    return this.openLinkInNewTab(url, true).catch((err) => {
+      error(`Could not open internal page "${url}"`, err);
+      this.setStatus(`Could not open ${url}`);
+      return null;
+    });
   }
 
   openExternalPage (url) {
-    return this.openLinkInNewTab(url, false);
+    return this.openLinkInNewTab(url, false).catch((err) => {
+      error(`Could not open external page "${url}"`, err);
+      this.setStatus(`Could not open ${url}`);
+      return null;
+    });
   }
 
   onTreeViewInTabBtnClick () {
-    this.openInternalPage('/view/sidepanel.html');
+    return this.openInternalPage('/view/sidepanel.html');
   }
 
-  onZoomBtn (direction) {
+  async onZoomBtn (direction) {
     const zoomStepSize = Math.pow(2, 1.0 / this.zoomSteps);
 
     // adjust the zoom
@@ -3601,7 +3691,7 @@ export class TreeView extends Tree {
     newzoom = snapToRatio(newzoom);
 
     // ... and set it
-    this.cfg.set('treeViewZoomLevel', newzoom);
+    await this.cfg.set('treeViewZoomLevel', newzoom);
     //this.setZoomLevel(newzoom);
   }
 
@@ -3629,21 +3719,21 @@ export class TreeView extends Tree {
   }
 
   onBackupBtnClick () {
-    this.action_backupSession();
+    return this.action_backupSession();
   }
 
   onOptionsBtnClick () {
-    this.openInternalPage('/options/options.html');
+    return this.openInternalPage('/options/options.html');
   }
 
   onDonateBtnClick () {
     // redirects to the correct page,
     // handy if I need to change platforms
-    this.openExternalPage('https://toykeeper.net/tktsto/donate');
+    return this.openExternalPage('https://toykeeper.net/tktsto/donate');
   }
 
   onHelpBtnClick () {
-    this.openInternalPage('/docs/index.html');
+    return this.openInternalPage('/docs/index.html');
   }
 
   tree_nodeAdded (msg, sender, sendResponse) {

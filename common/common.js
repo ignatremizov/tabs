@@ -232,8 +232,10 @@ export async function emit (name, args, extra) {
   if (emit.disabled) return;  // abort if we're turned off
   // Older callers passed the retry flag directly as the third argument.
   if ('boolean' === typeof extra) extra = { retry: extra };
-  let retry = (undefined === extra?.retry) ? true : extra.retry;
+  const retry = (undefined === extra?.retry) ? true : extra.retry;
   const port = extra?.port;
+  const requiresResponse = name?.startsWith?.('tree_')
+    || (name?.startsWith?.('bkgd_') && ('bkgd_ping' !== name));
 
   // ensure valid args
   if (!((typeof name === 'string') || (name instanceof String)))
@@ -256,15 +258,19 @@ export async function emit (name, args, extra) {
   // because sometimes the service worker gets killed
   // and needs a few moments to wake up before it can respond
   let response;
-  let tryNum = 1;
+  let delivered = false;
+  let lastError;
+  let attempts = 0;
   const maxTries = Number.isFinite(emit.maxTries)
     ? Math.max(1, emit.maxTries)
     : 10;
+  const attemptLimit = retry ? maxTries : 1;
   const retryDelayMs = Number.isFinite(emit.retryDelayMs)
     ? Math.max(0, emit.retryDelayMs)
     : 50;
   const startTime = performance.now();
-  while (retry && (! response) && (tryNum < maxTries)) {
+  while ((! delivered) && (attempts < attemptLimit)) {
+    attempts += 1;
     try {
       // Port.postMessage() returns void, no reply expected
       if (port) {
@@ -273,24 +279,44 @@ export async function emit (name, args, extra) {
         response = {};
       }
       // runtime.sendMessage() expects a reply
-      else { response = await api.runtime.sendMessage(args); }
-      retry = false;
+      else {
+        response = await api.runtime.sendMessage(args);
+        // Tree mutations require a background persistence acknowledgement.
+        // Firefox can resolve sendMessage() with undefined when nobody
+        // responds, which otherwise looks indistinguishable from success.
+        if (requiresResponse && (! response)) {
+          const acknowledgement = name.startsWith('tree_')
+            ? 'persistence acknowledgement'
+            : 'background response';
+          throw new Error(`missing ${acknowledgement}`);
+        }
+      }
+      delivered = true;
       if ('bkgd_ping' !== name)
         debug(1, `emit(${name}) response:`, response);
-    } catch (error) {
-      log(1, `emit(${name}) error, try #${tryNum}`, error, args);
-      tryNum ++;
-      await new Promise(r => setTimeout(r, retryDelayMs));
+    } catch (err) {
+      lastError = err;
+      log(1, `emit(${name}) error, try #${attempts}`, err, args);
+      if (attempts < attemptLimit) {
+        await new Promise(r => setTimeout(r, retryDelayMs));
+      }
     }
   }
-  if (tryNum >= maxTries) {
+  if (! delivered) {
     // If message delivery failed repeatedly, surface it in the UI.
     error(1, `emit(${name}) exceeded maximum retries`, name, args);
-    reportEmitFailure(name, args, Math.max(0, tryNum - 1), maxTries);
+    reportEmitFailure(name, args, attempts, attemptLimit);
+    if (requiresResponse) {
+      const detail = lastError?.message || String(lastError || 'unknown error');
+      throw new Error(`${name}: message delivery failed: ${detail}`);
+    }
   }
   const endTime = performance.now();
   if ('bkgd_ping' !== name)
     debug(1, `emit(${name}) elapsed: ${endTime - startTime} ms`);
+  if (requiresResponse && response?.error) {
+    throw new Error(`${name}: ${response.error}`);
+  }
   return response;
 }
 

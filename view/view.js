@@ -5,14 +5,17 @@
 "use strict";
 import { api, isChrome, isFirefox } from '/api.js';
 
-import { log } from '/common/common.js';
+import { log, error } from '/common/common.js';
 import { TreeView } from './treeview.js';
 
 log('/view/view.js running');
 
 function init() {
   let tree = new TreeView();
-  tree.init();
+  tree.init().catch((err) => {
+    error('TreeView initialization failed', err);
+    tree.setStatus(`Initialization failed: ${err?.message || err}`);
+  });
   return tree;
 }
 

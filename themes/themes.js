@@ -98,8 +98,9 @@ export class ThemedPage {
 
     // load stylesheets
     const themeName = this.cfg.theme;
-    const baseName = themes[themeName][0];
-    const variantName = themes[themeName][1];
+    const theme = themes[themeName] || themes[this.defaultTheme];
+    const baseName = theme[0];
+    const variantName = theme[1];
 
     // <link id="theme-base" rel="stylesheet" type="text/css" href="/themes/tk.css" />
     let $themeBase = doc.getElementById('theme-base');
@@ -127,7 +128,7 @@ export class ThemedPage {
     for (const pagePath of this.pagePaths) {
       const href = `${pagePath}.css`;
       if (doc.querySelector(`link[href="${href}"]`)) continue;
-      const $pageCss = document.createElement('link');
+      const $pageCss = doc.createElement('link');
       $pageCss.rel = 'stylesheet'; $pageCss.type = 'text/css';
       $pageCss.href = href;
       head.appendChild($pageCss);

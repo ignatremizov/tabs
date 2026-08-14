@@ -114,14 +114,31 @@ export class TreeStore extends Tree {
     }
     if (savedWindowNode && (! alreadyOpen)) {
       debug(`TreeStore.onWindowCreated(): restoring nodeId=${savedWindowNode.id}`);
-      await savedWindowNode.setTabFields({
-        type: 'window',
-        windowId: window.id,
-        loaded: true,
-        geometry: [window.width, window.height, window.left, window.top]
-      }, { reason: args.reason || 'onWindowCreated' });
-      await this.rememberWindowNode(savedWindowNode, window.id);
-      return savedWindowNode;
+      let attached = false;
+      try {
+        await savedWindowNode.setTabFields({
+          type: 'window',
+          windowId: window.id,
+          loaded: true,
+          geometry: [window.width, window.height, window.left, window.top]
+        }, { reason: args.reason || 'onWindowCreated' });
+        await this.rememberWindowNode(savedWindowNode, window.id);
+        attached = true;
+        if (this.bkgd.finishPendingWindowLoad) {
+          this.bkgd.finishPendingWindowLoad(savedWindowNode, true);
+        }
+        return savedWindowNode;
+      } finally {
+        if (this.bkgd.finishPendingWindowLoad) {
+          this.bkgd.finishPendingWindowLoad(savedWindowNode, attached);
+        } else {
+          if (savedWindowNode.pendingWindowLoadTimer) {
+            clearTimeout(savedWindowNode.pendingWindowLoadTimer);
+            delete savedWindowNode.pendingWindowLoadTimer;
+          }
+          savedWindowNode.browserLoadInProgress = false;
+        }
+      }
     }
 
     const windowNode = await super.onWindowCreated(window, args);
@@ -145,55 +162,59 @@ export class TreeStore extends Tree {
 
       if (! alreadyOpen) {
         debug(`TreeStore.onTabCreated(): restoring nodeId=${savedTabNode.id}`);
-        const savedWindowNode = savedTabNode.getWindowNode(false);
-        let windowNode = this.root.getWindowId(tab.windowId);
-        if (! windowNode && savedWindowNode) {
-          await savedWindowNode.setTabFields({
-            type: 'window',
+        try {
+          const savedWindowNode = savedTabNode.getWindowNode(false);
+          let windowNode = this.root.getWindowId(tab.windowId);
+          if (! windowNode && savedWindowNode) {
+            await savedWindowNode.setTabFields({
+              type: 'window',
+              windowId: tab.windowId,
+              loaded: true
+            }, { reason: 'onWindowCreated' });
+            windowNode = savedWindowNode;
+            await this.rememberWindowNode(windowNode, tab.windowId);
+          }
+
+          const preserveSavedPinned = savedTabNode.isPinned() && (! tab.pinned);
+          if (preserveSavedPinned) {
+            savedTabNode.pinRestorePending = true;
+            savedTabNode.pinRestorePendingAt = Date.now();
+          } else if (tab.pinned) {
+            savedTabNode.pinRestorePending = false;
+            savedTabNode.pinRestorePendingAt = 0;
+          }
+
+          await savedTabNode.setTabFields({
+            tabId: tab.id,
             windowId: tab.windowId,
-            loaded: true
-          }, { reason: 'onWindowCreated' });
-          windowNode = savedWindowNode;
-          await this.rememberWindowNode(windowNode, tab.windowId);
+            loaded: true,
+            discarded: tab.discarded,
+            frozen: tab.frozen,
+            hidden: tab.hidden,
+            incognito: tab.incognito,
+            pinned: Boolean(tab.pinned || savedTabNode.isPinned())
+          }, { reason: 'onTabCreated' });
+
+          if (windowNode && savedWindowNode
+            && (windowNode !== savedWindowNode)) {
+            const dest = await this.getBrowserEventTabDestination(
+              savedTabNode,
+              windowNode,
+              tab.index,
+              Boolean(tab.pinned)
+            );
+            await savedTabNode.moveTo(dest.destParent, dest.destIndex, {
+              reason: 'onTabAttached',
+              emit: false,
+              skipTabReorder: true
+            });
+          }
+
+          await this.rememberTabNode(savedTabNode, tab.id);
+          return savedTabNode;
+        } finally {
+          savedTabNode.browserLoadInProgress = false;
         }
-
-        const preserveSavedPinned = savedTabNode.isPinned() && (! tab.pinned);
-        if (preserveSavedPinned) {
-          savedTabNode.pinRestorePending = true;
-          savedTabNode.pinRestorePendingAt = Date.now();
-        } else if (tab.pinned) {
-          savedTabNode.pinRestorePending = false;
-          savedTabNode.pinRestorePendingAt = 0;
-        }
-
-        await savedTabNode.setTabFields({
-          tabId: tab.id,
-          windowId: tab.windowId,
-          loaded: true,
-          discarded: tab.discarded,
-          frozen: tab.frozen,
-          hidden: tab.hidden,
-          incognito: tab.incognito,
-          pinned: Boolean(tab.pinned || savedTabNode.isPinned())
-        }, { reason: 'onTabCreated' });
-
-        if (windowNode && savedWindowNode
-          && (windowNode !== savedWindowNode)) {
-          const dest = await this.getBrowserEventTabDestination(
-            savedTabNode,
-            windowNode,
-            tab.index,
-            Boolean(tab.pinned)
-          );
-          await savedTabNode.moveTo(dest.destParent, dest.destIndex, {
-            reason: 'onTabAttached',
-            emit: false,
-            skipTabReorder: true
-          });
-        }
-
-        await this.rememberTabNode(savedTabNode, tab.id);
-        return savedTabNode;
       }
     }
 
@@ -216,22 +237,11 @@ export class TreeStore extends Tree {
       this.needsTutorial = true;
     }
 
-    let nodeIds;
-
-    // TODO: load latest snapshot if it's clean
-    //const dirty = await api.storage.local.get(
-    //  { isLatestSnapshotDirty: true });
-    //if (! dirty) {
-    //  console.time('db.loadCurrentSnapshot');
-    //  nodeIds = await this.db.loadSnapshot('local');
-    //  console.timeEnd('db.loadCurrentSnapshot');
-    //} else
-    {
-      // load the slow way, one node at a time
-      console.time('db.loadAllNodes');
-      nodeIds = await this.db.loadAllNodes();
-      console.timeEnd('db.loadAllNodes');
-    }
+    // Load the authoritative per-node records.  Snapshot acceleration is not
+    // implemented, so normal writes do not maintain a redundant dirty flag.
+    console.time('db.loadAllNodes');
+    const nodeIds = await this.db.loadAllNodes();
+    console.timeEnd('db.loadAllNodes');
 
     const numIds = Object.keys(nodeIds).length;
     debug(`loaded ${numIds} nodes`);
@@ -332,9 +342,13 @@ export class TreeStore extends Tree {
     const numAttached = this.rebuildNodeFromSerializedHash(lostFound, nodeIds);
 
     // write changes to database
-    for (const nodeId of modifiedNodes) {
-      const node = this.nodes[nodeId];
-      await this.db.saveNode(node);
+    const nodesToSave = modifiedNodes
+      .map((nodeId) => this.nodes[nodeId])
+      .filter(Boolean);
+    if (this.db.saveNodes) {
+      await this.db.saveNodes(nodesToSave);
+    } else {
+      for (const node of nodesToSave) await this.db.saveNode(node);
     }
 
     // summary

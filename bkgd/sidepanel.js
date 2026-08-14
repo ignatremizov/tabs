@@ -4,6 +4,7 @@
 
 "use strict";
 import { api, isChrome, isFirefox } from '/api.js';
+import { log, warn } from '/common/common.js';
 
 export function init() {
   // User can open the side panel by clicking the extension's icon
@@ -11,25 +12,32 @@ export function init() {
     let oldChrome = false;
     if (undefined === api.sidePanel.close) {
       oldChrome = true;
-      console.log('workaround: old Chrome has no sidePanel.close()');
+      log('workaround: old Chrome has no sidePanel.close()');
     }
     // FIXME someday: the oldChrome method works better now, but
     // if they ever finish the sidePanel API, this should be removed
     oldChrome = true;  // <-- temporary override until Chrome is fixed
     api.sidePanel
       .setPanelBehavior({ openPanelOnActionClick: oldChrome })
-      .catch((error) => console.error(error));
+      .catch((err) => warn(`Failed to set side-panel behavior: ${err}`));
 
     // try to set which side the panel is on
-    try {
-      // this doesn't exist yet, as of Chrome 143
-      // ... but just in case it gets added later, at least try it
-      // (getLayout() exists, but there is no setLayout())
-      // TODO? add a config option for left/right side
-      //       because some browser vendors are insane and REMOVED this option
-      //       sometime in 2024 or so
-      api.sidePanel.setLayout({ side: 'left' });
-    } catch (error) { console.log(`Failed to set sidePanel side: ${error}`); }
+    // this doesn't exist yet, as of Chrome 143
+    // ... but just in case it gets added later, at least try it
+    // (getLayout() exists, but there is no setLayout())
+    // A left/right preference can be exposed if browsers consistently offer
+    // a setter again; some vendors removed the UI/API around 2024.
+    if ('function' === typeof api.sidePanel.setLayout) {
+      try {
+        Promise.resolve(
+          api.sidePanel.setLayout({ side: 'left' })
+        ).catch(
+          (err) => warn(`Failed to set side-panel side: ${err}`)
+        );
+      } catch (err) {
+        warn(`Failed to set side-panel side: ${err}`);
+      }
+    }
   }
 
   // Firefox

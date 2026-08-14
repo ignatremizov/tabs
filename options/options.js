@@ -561,7 +561,9 @@ async function initKeyBindingsForm () {
       const defaultValue = defaultBindings[action] || '';
       if (value !== defaultValue) overrides[action] = value;
     }
-    api.storage.local.set({ keyBindings: overrides });
+    api.storage.local.set({ keyBindings: overrides }).catch((err) => {
+      error('Could not save keyboard shortcuts:', err);
+    });
   }
 
   function applyBinding (action, newValue) {
@@ -666,7 +668,9 @@ async function initKeyBindingsForm () {
       effectiveBindings[action] = defaultBindings[action] || '';
       setInputValue(action);
     }
-    api.storage.local.set({ keyBindings: {} });
+    api.storage.local.set({ keyBindings: {} }).catch((err) => {
+      error('Could not reset keyboard shortcuts:', err);
+    });
   });
 }
 

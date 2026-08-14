@@ -205,13 +205,15 @@ export async function runReconcile ({ reason } = {}) {
       }
     }
 
-    const windowNodesById = new Map();
+    // Use the exact nodes selected above for each live browser window.
+    // Iterating the whole cache here allows a stale duplicate windowId to
+    // overwrite the primary and pull live tabs into the wrong saved branch.
+    const windowNodesById = new Map(
+      attachedWindows.map(({ winNode, window }) => [window.id, winNode])
+    );
     const tabNodesById = new Map();
     const nodes = Object.values(bkgd.tree.nodes);
     for (const node of nodes) {
-      if (node.isWindow() && node.windowId) {
-        windowNodesById.set(node.windowId, node);
-      }
       if (node.tabId) {
         if (! tabNodesById.has(node.tabId)) {
           tabNodesById.set(node.tabId, []);
@@ -230,12 +232,18 @@ export async function runReconcile ({ reason } = {}) {
           const wasPinned = Boolean(primary.pinned);
           const changed = await ensureTabNodeAttached(primary, winNode, tabInfo, reason);
           if (changed || primary !== existing[0]) didWork = true;
-          if (wasPinned !== Boolean(tab.pinned)) {
+          const pinned = Boolean(tab.pinned);
+          const pinnedBranch = bkgd.tree.getPinnedBranch(winNode);
+          const structurallyPinned = Boolean(
+            pinnedBranch && primary.isChildOf(pinnedBranch)
+          );
+          if ((wasPinned !== pinned)
+            || (pinnedBranch && (structurallyPinned !== pinned))) {
             const dest = await bkgd.tree.getBrowserEventTabDestination(
               primary,
               winNode,
               tab.index,
-              Boolean(tab.pinned)
+              pinned
             );
             await bkgd.tree.moveTabNodeForBrowserEvent(
               primary,
@@ -246,9 +254,10 @@ export async function runReconcile ({ reason } = {}) {
                 moveNodeOnly: true,
                 windowNode: winNode,
                 browserIndex: tab.index,
-                pinned: Boolean(tab.pinned)
+                pinned
               }
             );
+            didWork = true;
           }
           continue;
         }

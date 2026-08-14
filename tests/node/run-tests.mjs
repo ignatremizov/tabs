@@ -93,9 +93,9 @@ test('emit reports failure via hook', async () => {
     emit.maxTries = 2;
     emit.retryDelayMs = 0;
     emit.failureCooldownMs = 0;
-    await emit('bkgd_test', { foo: 'bar' });
+    await emit('notify_test', { foo: 'bar' });
     assert(notice, 'Should report emit failure');
-    assertEqual(notice.name, 'bkgd_test', 'Should include message name');
+    assertEqual(notice.name, 'notify_test', 'Should include message name');
     assertEqual(notice.args.foo, 'bar', 'Should include args payload');
   } finally {
     console.error = originalConsoleError;

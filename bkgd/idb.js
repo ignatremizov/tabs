@@ -3,9 +3,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 
 "use strict";
-import { api, isChrome, isFirefox } from '/api.js';
-
-import { debug, log, warn, error } from '/common/common.js';
+import { log, warn } from '/common/common.js';
 
 export class IDB {
 
@@ -55,23 +53,35 @@ export class IDB {
     });
   }
 
-  setDirty () {
-    // nodeDb has changed since the latest snapshot
-    return api.storage.local.set({ isLatestSnapshotDirty: true });
-  }
-
   loadNode (nodeId) {
     return this.loadObj(this.nodeDbName, nodeId);
   }
 
   saveNode (node) {
-    this.setDirty();
-    return this.saveObj(this.nodeDbName, node.id, node.toDict());
+    return this.saveNodes([node]);
+  }
+
+  saveNodes (nodes) {
+    return this.writeNodes(nodes);
   }
 
   deleteNode (nodeId) {
-    this.setDirty();
-    return this.deleteObj(this.nodeDbName, nodeId);
+    return this.writeNodes([], [nodeId]);
+  }
+
+  writeNodes (nodes = [], deleteNodeIds = []) {
+    const nodesById = new Map();
+    for (const node of nodes) {
+      if (node?.id) nodesById.set(node.id, node);
+    }
+    const deleteIds = new Set(
+      deleteNodeIds.filter((nodeId) => nodeId)
+    );
+    for (const nodeId of deleteIds) nodesById.delete(nodeId);
+    const puts = [...nodesById.values()].map(
+      (node) => [node.id, node.toDict()]
+    );
+    return this.writeObjs(this.nodeDbName, puts, [...deleteIds]);
   }
 
   async loadAllNodes () {
@@ -85,10 +95,14 @@ export class IDB {
       request.onsuccess = (event) => {
         const cursor = event.target.result;
         if (cursor) {
-          const node = JSON.parse(cursor.value.data);
-          nodes[node.id] = node;
-          //debug(`IDB.loadAllNodes(${node.id})`);
-          cursor.continue();
+          try {
+            const node = JSON.parse(cursor.value.data);
+            nodes[node.id] = node;
+            //debug(`IDB.loadAllNodes(${node.id})`);
+            cursor.continue();
+          } catch (err) {
+            reject(err);
+          }
         } else {
           resolve(nodes);
         }
@@ -119,7 +133,11 @@ export class IDB {
       request.onsuccess = (event) => {
         if (event.target.result) {
           // parse the JSON string back to an object
-          resolve(JSON.parse(event.target.result.data));
+          try {
+            resolve(JSON.parse(event.target.result.data));
+          } catch (err) {
+            reject(err);
+          }
         } else {
           resolve(null);
         }
@@ -131,25 +149,35 @@ export class IDB {
   // save an individual Object
   async saveObj (dbName, key, obj) {
     //debug(`idb.saveObj(): ${dbName} :: ${key}`, obj);
-    const db = await this.db;
-    return new Promise((resolve, reject) => {
-      const txn = db.transaction(dbName, 'readwrite');
-      const store = txn.objectStore(dbName);
-      const data = JSON.stringify(obj);
-      const request = store.put({ key, data });
-      request.onsuccess = () => resolve();
-      request.onerror = (event) => reject(event.target.error);
-    });
+    return await this.writeObjs(dbName, [[key, obj]]);
   }
 
   async deleteObj (dbName, key) {
+    return await this.writeObjs(dbName, [], [key]);
+  }
+
+  async writeObjs (dbName, puts = [], deleteKeys = []) {
+    // Serialize before awaiting the database so each record reflects one
+    // coherent in-memory mutation, even if another event runs meanwhile.
+    const records = puts.map(([key, obj]) => ({
+      key,
+      data: JSON.stringify(obj)
+    }));
     const db = await this.db;
     return new Promise((resolve, reject) => {
       const txn = db.transaction(dbName, 'readwrite');
       const store = txn.objectStore(dbName);
-      const request = store.delete(key);
-      request.onsuccess = () => resolve();
-      request.onerror = (event) => reject(event.target.error);
+      txn.oncomplete = () => resolve();
+      txn.onerror = (event) => {
+        reject(txn.error || event?.target?.error
+          || new Error(`IndexedDB transaction failed: ${dbName}`));
+      };
+      txn.onabort = (event) => {
+        reject(txn.error || event?.target?.error
+          || new Error(`IndexedDB transaction aborted: ${dbName}`));
+      };
+      for (const record of records) store.put(record);
+      for (const key of deleteKeys) store.delete(key);
     });
   }
 

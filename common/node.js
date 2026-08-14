@@ -44,6 +44,14 @@ export class Node {
     // from clearing a saved pinned flag before pin restoration completes.
     this.pinRestorePending = false;
     this.pinRestorePendingAt = 0;
+    // Transient guard for browser tabs/windows which have been requested but
+    // whose creation event has not attached them to this node yet.
+    this.browserLoadInProgress = false;
+    this.browserLoadPromise = null;
+    this.resolveBrowserLoad = null;
+    this.setActiveTabTimer = null;
+    this.setActiveTabWaiters = [];
+    this.lastSetActiveTabTime = 0;
     this.wasLoaded = false;
     this.marked = false;
     // checkbox: task completion and other task statuses
@@ -794,10 +802,11 @@ export class Node {
       debug(`Window closed with ${loadedTabs.length} open tabs: ${this.toLine()}`);
     }
     // notify others
-    if ('onWindowRemoved' === args.reason)
-      emit('tree_windowClosed',
+    if ('onWindowRemoved' === args.reason) {
+      await emit('tree_windowClosed',
         { nodeId: this.id, windowId: this.windowId,
           when: this.mtime });
+    }
   }
 
   async addChild (index = 0, details, args) {
@@ -822,7 +831,7 @@ export class Node {
       'bkgd_loadSavedNode:autoWindow',
       'importFile', 'tutorial', 'reattachOrphanedNodes'
     ].includes(args.reason))
-      emit('tree_nodeAdded',
+      await emit('tree_nodeAdded',
         { parentId: this.id, index: index, node: newNode,
           when: this.mtime });
 
@@ -845,6 +854,18 @@ export class Node {
     if (! args) return;
     if ((label === this.label) && (note === this.note)) return;
     const wasPinnedBranch = this.isPinnedBranch();
+    const canBecomePinnedBranch = (
+      ('Pinned' === label)
+      && (! this.isTab())
+      && (! this.isWindow())
+      && (! this.isRoot())
+      && this.parent.isWindow()
+      && (0 === this.indexOf())
+    );
+    const windowNode = this.getWindowNode(false);
+    const pinnedBranchStates = (wasPinnedBranch || canBecomePinnedBranch)
+      ? this.tree.capturePinnedBranchStates([windowNode])
+      : null;
     // Do The Thing
     this.label = label;
     this.note = note;
@@ -861,12 +882,13 @@ export class Node {
     // needs extra care if "Pinned" status changed while loaded
     const isPinnedBranch = this.isPinnedBranch();
     if (wasPinnedBranch !== isPinnedBranch) {
-      await this.setPinnedBranchChildren(isPinnedBranch, args);
+      await this.tree.syncPinnedBranchStates(pinnedBranchStates, args);
     }
     if ((wasPinnedBranch !== isPinnedBranch)
-      && this.hasLoadedTabs()
+      && windowNode
+      && windowNode.hasLoadedTabs()
       && this.tree.bkgd) {
-      await this.reorderAllTabsInThisWindow();
+      await windowNode.reorderAllTabsInThisWindow();
     }
 
     return true;  // the data changed
@@ -926,7 +948,7 @@ export class Node {
     if (! changed) return;
 
     // update other nodes
-    this.updateCheckboxes();
+    await this.updateCheckboxes(args);
     // bump timestamp
     this.bump('mtime', args);
     // notify others
@@ -939,10 +961,13 @@ export class Node {
     return true;  // the data changed
   }
 
-  updateCheckboxes () {
+  updateCheckboxValues (changedNodes = []) {
     // stop checking parents if we don't have any
-    if (this.isRoot()) return;
+    if (this.isRoot()) return changedNodes;
     const parent = this.parent;
+    const before = this.checkbox;
+    const beforePx = this.checkboxPx;
+    const beforeKidCount = this.checkboxKidCount;
     // recalculate percentage
     if (this.hasCheckbox()) {
       const cbType = this.getCheckboxType();
@@ -975,8 +1000,21 @@ export class Node {
         }
       }
     }
-    parent.updateCheckboxes();
-    return true;
+    if ((before !== this.checkbox)
+      || (beforePx !== this.checkboxPx)
+      || (beforeKidCount !== this.checkboxKidCount)) {
+      if (! changedNodes.includes(this)) changedNodes.push(this);
+    }
+    return parent.updateCheckboxValues(changedNodes);
+  }
+
+  async applyCheckboxUpdates (changedNodes, args) {
+    return changedNodes.length > 0;
+  }
+
+  async updateCheckboxes (args) {
+    const changedNodes = this.updateCheckboxValues();
+    return await this.applyCheckboxUpdates(changedNodes, args);
   }
 
   getCompletion (changed = false) {
@@ -1217,7 +1255,8 @@ export class Node {
     // AFTER everyone has marked the tab as loaded,
     // then it's finally safe to open the tab itself
     // if not already opened by browser, opened the tab
-    if (['userAction', 'restoreLoadedTab'].includes(args.reason)) {
+    if (this.tree?.bkgd
+      && ['userAction', 'restoreLoadedTab'].includes(args.reason)) {
       // there's some jank involved, so it's much easier to
       // only let the bkgd script open the actual tab
       // (so it can keep some internal state for its onTabCreated handler
@@ -1229,7 +1268,7 @@ export class Node {
           discarded: args.discarded,
           when: this.atime
         };
-        const bkgd = this.tree && this.tree.bkgd;
+        const bkgd = this.tree.bkgd;
         if (bkgd && bkgd.bkgd_loadSavedNode) {
           await bkgd.bkgd_loadSavedNode(loadMsg);
         } else {
@@ -1512,13 +1551,16 @@ export class Node {
       return setStatus('moveTo: already there');
 
     const prevParent = this.parent;
-    const wasPinnedBranch = this.isPinnedBranch();
     const prevWindow = this.getWindowNode(false);
     const oldWindowNode = this.getWindowNode();
     const oldParentWindowNode = this.parent
       ? this.parent.getWindowNode()
       : null;
     const newWindowNode = destParent.getWindowNode();
+    const pinnedBranchStates = this.tree.capturePinnedBranchStates([
+      prevWindow,
+      newWindowNode
+    ]);
     const movingToRoot = (
       destParent.isRoot()
       && prevParent
@@ -1594,6 +1636,7 @@ export class Node {
       }
       await this.promoteKids({ reason: 'moveTo' });
     }
+    const checkboxChangedNodes = [];
     // remove from old parent ...
     let newIndex = destIndex;
     if (prevParent) {
@@ -1608,7 +1651,9 @@ export class Node {
 
         // checkboxes might need recalculation
         // TODO: user config option to toggle this behavior
-        if (this.hasCheckbox()) { prevParent.updateCheckboxes(); }
+        if (this.hasCheckbox()) {
+          prevParent.updateCheckboxValues(checkboxChangedNodes);
+        }
 
         // bump old parent timestamp
         prevParent.bump('mtime', args);
@@ -1617,10 +1662,11 @@ export class Node {
     // ... and add to new parent
     destParent.insertChild(this, newIndex);
     const nextWindow = this.getWindowNode(false);
-    const isPinnedBranch = this.isPinnedBranch();
-    if (wasPinnedBranch !== isPinnedBranch) {
-      await this.setPinnedBranchChildren(isPinnedBranch, args);
-    }
+    const pinnedStateChanged = await this.tree.syncPinnedBranchStates(
+      pinnedBranchStates,
+      args
+    );
+    const reorderedWindows = new Set();
 
     // bump new parent timestamp
     destParent.bump('mtime', args);
@@ -1628,12 +1674,17 @@ export class Node {
     // if new parent is marked, unmark self
     if (this.marked) {
       const markedParent = this.findParent((n) => n.marked);
-      if (markedParent) await this.setMarked(false, { reason: 'moveTo' });
+      if (markedParent) {
+        await this.setMarked(false, { ...args, reason: 'moveTo' });
+      }
     }
 
     // checkboxes might need recalculation
     // TODO: user config option to toggle this behavior
-    if (this.hasCheckbox()) { this.updateCheckboxes(); }
+    if (this.hasCheckbox()) {
+      this.updateCheckboxValues(checkboxChangedNodes);
+      await this.applyCheckboxUpdates(checkboxChangedNodes, args);
+    }
 
     // TODO: recalculate stats
     const shouldEmit = (args.emit !== false);
@@ -1661,7 +1712,7 @@ export class Node {
         moveMsg.openWindowOnRootMove = true;
       }
       moveMsg.actionReason = args.reason;
-      emit('tree_nodeMoved', moveMsg);
+      await emit('tree_nodeMoved', moveMsg);
 
       // loaded tabs need extra care when they move
       const hasLoadedDesc = this.hasLoadedTabsDeep
@@ -1721,6 +1772,7 @@ export class Node {
         );
         if (this.tree.bkgd) {
           await destParent.reorderAllTabsInThisWindow({ force: windowChanged });
+          if (nextWindow) reorderedWindows.add(nextWindow);
         }
       }
 
@@ -1734,6 +1786,30 @@ export class Node {
       const loadedKids = this.getLoadedTabs();
       for (const kid of loadedKids) kid.updateOpenerTabId();
 
+    }
+
+    // Moving an ordinary heading can reveal or hide the first-child Pinned
+    // branch without moving any loaded tab itself.  Persisted pin flags are
+    // updated above; also synchronize the native browser strip for every
+    // affected loaded window.
+    if (pinnedStateChanged
+      && this.tree.bkgd
+      && (args.skipTabReorder !== true)
+      && ('moveTo' !== args.reason)) {
+      const windowChanged = Boolean(
+        prevWindow && nextWindow && (prevWindow !== nextWindow)
+      );
+      for (const windowNode of pinnedBranchStates.keys()) {
+        if ((! windowNode) || reorderedWindows.has(windowNode)) continue;
+        const hasLoadedTabs = windowNode.hasLoadedTabsDeep
+          ? windowNode.hasLoadedTabsDeep()
+          : windowNode.hasLoadedTabs();
+        if (! hasLoadedTabs) continue;
+        await windowNode.reorderAllTabsInThisWindow({
+          force: windowChanged
+        });
+        reorderedWindows.add(windowNode);
+      }
     }
 
     // maybe convert window back to a heading, if dropped into another window
@@ -1841,8 +1917,10 @@ export class Node {
       if (markedParent) return;
 
       // unmark children, because they will now be marked by association
-      this.forEachRecursive((node) => {
-        node.setMarked(false, { reason: 'self' }); });
+      const markedChildren = this.findNodes((node) => node.marked);
+      for (const node of markedChildren) {
+        await node.setMarked(false, { ...args, reason: 'self' });
+      }
     }
 
     // otherwise, twiddle the bit
@@ -1938,7 +2016,7 @@ export class Node {
     return tabNode;
   }
 
-  async setActiveTab (args) {
+  async setActiveTab (args, runMutation) {
     // this syncs a window node's 'active' states based on browser window state
     // changes are debounced, executed only after changes stop happening
     // skip no-op cases
@@ -1954,65 +2032,96 @@ export class Node {
     const now = Date.now();
     const sinceLast = now - this.lastSetActiveTabTime;
     this.lastSetActiveTabTime = now;
-    if ((NaN === sinceLast) || (sinceLast > delayTime)) actualDelay = 10;
+    if ((! Number.isFinite(sinceLast)) || (sinceLast > delayTime)) {
+      actualDelay = 10;
+    }
     // reset our timer on each new event
     // so it only fires after events stop coming in
     if (this.setActiveTabTimer) {
       clearTimeout(this.setActiveTabTimer);
     }
 
-    this.setActiveTabTimer = setTimeout(async () => {
+    const result = new Promise((resolve, reject) => {
+      this.setActiveTabWaiters.push({ resolve, reject });
+    });
+    const timer = setTimeout(async () => {
+      // A cleared timeout can already be queued.  Let the replacement timer
+      // own all pending waiters instead of applying stale state twice.
+      if (this.setActiveTabTimer !== timer) return;
+      // Calls arriving while this browser query is in flight get their own
+      // timer and waiter batch, so they observe the newer active tab.
+      const waiters = this.setActiveTabWaiters.splice(0);
       let changed = false;
+      let failure = null;
 
       try {
         // auto-detect which tab is active
-        const [tab] = await api.tabs.query(
-          { active: true, windowId: this.windowId });
-        if (! tab) return;
-
-        // get a list of this window's tabs
-        const tabList = this.getLoadedAndUnloadedTabs();
-        // find the newly-active tab node
-        let tabNode;
-        for (const node of tabList) {
-          if (tab.id === node.tabId) tabNode = node;
+        let tab;
+        try {
+          [tab] = await api.tabs.query(
+            { active: true, windowId: this.windowId });
+        } catch (err) {
+          // Window teardown commonly races this debounced query.  There is no
+          // active state left to apply, so let callers complete normally.
+          warn(`Node.setActiveTab(${this.windowId}) query failed: ${err}`);
         }
-        if (! tabNode) {
-          // bugfix: Vivaldi panels are briefly "active" when current tab closes
-          // and they generate spurious "setActiveTab" events
-          // so ignore errors on those
-          // also, this may be trying to set the active tab on a window
-          // after the window was closed, which isn't a problem
-          if (! this.tree.tabBlacklist[`${tab.id}`])
-            warn(`Node.setActiveTab(): can't find tab "${tab.id}"`);
-        }
+        if (tab) {
+          const applyActiveState = async () => {
+            if (this.tree.nodes[this.id] !== this) return;
+            // Read the tree inside the mutation boundary.  A tab may have
+            // closed while the debounced browser query was pending.
+            const tabList = this.getLoadedAndUnloadedTabs();
+            // find the newly-active tab node
+            let tabNode;
+            for (const node of tabList) {
+              if (tab.id === node.tabId) tabNode = node;
+            }
+            if (! tabNode) {
+              // bugfix: Vivaldi panels are briefly "active" when current tab closes
+              // and they generate spurious "setActiveTab" events
+              // so ignore errors on those
+              // also, this may be trying to set the active tab on a window
+              // after the window was closed, which isn't a problem
+              if (! this.tree.tabBlacklist[`${tab.id}`])
+                warn(`Node.setActiveTab(): can't find tab "${tab.id}"`);
+            }
 
-        // mark all other active tabs in this window as not-active
-        for (const node of tabList) {
-          if ((node !== tabNode) && node.isActive()) {
-            await node.setActive(false, args);
-            changed = true;
-          }
-        }
+            // mark all other active tabs in this window as not-active
+            for (const node of tabList) {
+              if ((node !== tabNode) && node.isActive()) {
+                await node.setActive(false, args);
+                changed = true;
+              }
+            }
 
-        // mark the new tab as active
-        if (tabNode && (! tabNode.active)) {
-          await tabNode.setActive(true, args);
-          changed = true;
-        }
-        return changed;
+            // mark the new tab as active
+            if (tabNode && (! tabNode.active)) {
+              await tabNode.setActive(true, args);
+              changed = true;
+            }
+          };
 
+          if (runMutation) await runMutation(applyActiveState);
+          else await applyActiveState();
+        }
+      } catch (err) {
+        failure = err;
       }
       finally {
         // get ready for next time
-        this.setActiveTabTimer = null;
+        if (this.setActiveTabTimer === timer) {
+          this.setActiveTabTimer = null;
+        }
         this.lastSetActiveTabTime = Date.now();
-        return changed;
+        for (const waiter of waiters) {
+          if (failure) waiter.reject(failure);
+          else waiter.resolve(changed);
+        }
       }
     }, actualDelay);
+    this.setActiveTabTimer = timer;
 
-    const result = await this.setActiveTabTimer;
-    return result;
+    return await result;
   }
 
   async setPinned (pinned, args) {
@@ -2024,16 +2133,6 @@ export class Node {
       { ...args, ensureUniqueBindings: false }
     );
     return true;
-  }
-
-  async setPinnedBranchChildren (pinned, args) {
-    const tabNodes = this.getLoadedAndUnloadedTabs();
-    for (const tabNode of tabNodes) {
-      await tabNode.setPinned(pinned, {
-        ...args,
-        reason: 'setPinned'
-      });
-    }
   }
 
   async reorderAllTabsInThisWindow (opts = {}) {

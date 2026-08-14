@@ -183,18 +183,57 @@ export class Tree {
   initListeners () {
     if (this.isInert) return;  // detached trees shouldn't listen
 
-    api.runtime.onMessage.addListener( (msg, sender, sendResponse) => {
+    api.runtime.onMessage.addListener(
+      this.onRuntimeMessage.bind(this)
+    );
+  }
+
+  onRuntimeMessage (msg, sender, sendResponse) {
+    const messageName = msg?.msg || 'unknown';
+    const isBackgroundTreeMessage = Boolean(
+      this.bkgd
+      && msg?.msg?.startsWith('tree_')
+    );
+    const respond = (response) => {
+      if ('function' !== typeof sendResponse) return;
       try {
-        const result = this.onMessage(msg, sender, sendResponse);
-        if (result && ('function' === typeof result.then)) {
-          result.catch((err) => {
-            error(`Tree.onMessage(${msg && msg.msg ? msg.msg : 'unknown'}) failed`, err, msg);
-          });
-        }
-      } catch (err) {
-        error(`Tree.onMessage(${msg && msg.msg ? msg.msg : 'unknown'}) failed`, err, msg);
+        sendResponse(response);
+      } catch (responseError) {
+        warn(`Tree.onMessage(${messageName}) response failed`,
+          responseError);
       }
-    });
+    };
+    let result;
+    try {
+      result = this.onMessage(msg, sender, sendResponse);
+    } catch (err) {
+      error(`Tree.onMessage(${messageName}) failed`, err, msg);
+      if (isBackgroundTreeMessage) {
+        respond({ error: String(err?.message || err) });
+      }
+      return isBackgroundTreeMessage || undefined;
+    }
+
+    if (isBackgroundTreeMessage) {
+      Promise.resolve(result).then(
+        () => {
+          respond({ result: 'ok persisted' });
+        },
+        (err) => {
+          error(`Tree.onMessage(${messageName}) failed`, err, msg);
+          respond({ error: String(err?.message || err) });
+        }
+      );
+      // Keep the MV3 service worker and response channel alive until the
+      // background TreeStore has persisted the mutation.
+      return true;
+    }
+
+    if (result && ('function' === typeof result.then)) {
+      result.catch((err) => {
+        error(`Tree.onMessage(${messageName}) failed`, err, msg);
+      });
+    }
   }
 
   createRootNode () {
@@ -337,89 +376,137 @@ export class Tree {
 
   async downloadBackupNow () {
     // abort if backup already running
-    if (this.localBackupInProgress) return;
+    if (this.localBackupInProgress) return false;
     this.localBackupInProgress = true;
-
-    await this.treeLoaded;  // wait until tree is ready
-
-    const when = new Date();
-    const whenMs = Number(when);
-    // determine whether to pretty-print the data
-    const prettyPrint = this.cfg.humanFriendlyBackups ? 2 : 0;
-    // generate the file's raw data
-    const backup = this.makeBackupObject(this.root, when);
-    const jsonString = JSON.stringify(backup, null, prettyPrint);
-    const blob = new Blob([jsonString], { type: "application/json" });
-    // generate the URL to download
     let url;
-    if ((! this.bkgd) || (isFirefox)) {
-      // simple, but only works in Firefox or in views (like the sidepanel)
-      url = URL.createObjectURL(blob);
-    }
-    else {
-      // more complex, but works in Chrome service workers:
-      const buffer = await blob.arrayBuffer();
-      // hello, stack overflow:
-      //const base64String = btoa(String.fromCharCode(...new Uint8Array(buffer)));
-      // avoid a stack overflow:
-      const binaryString = new Uint8Array(buffer)
-        .reduce((acc, byte) => acc + String.fromCharCode(byte), "");
-      const base64String = btoa(binaryString);
-      url = `data:application/json;base64,${base64String}`;
-    }
-    // build a filename
-    const clientId = backup.metadata.clientId;
-    const date = dateTupleStrings(when);
-    const filenameRequested = `tktsto.${date[0]}-${date[1]}-${date[2]}_${date[3]}-${date[4]}-${date[5]}.${clientId}.json`;
-    let filename = filenameRequested;
+    let onProgress;
+    let completionTimer;
+    try {
+      await this.treeLoaded;  // wait until tree is ready
 
-    // save the file
-    log(`downloadBackupNow(): saving to "${filename}"`);
-    const downloading = api.downloads.download({
-      url: url,
-      filename: filename,
-      saveAs: false
-    });
-    let downloadId;
-    const onStarted = (id) => { downloadId = id; };
-    const onProgress = (delta) => {
-      //debug('Download delta', delta);
-      if (delta.id !== downloadId) return;
-      // filename changed
-      if (delta.filename?.current) {
-        // "/foo/baz.txt" or "C:\foo\baz.txt" -> "baz.txt"
-        filename = delta.filename.current.split(/[/\\]+/).pop();
-        if (filenameRequested !== filename)
-          log(`downloadBackupNow(): filename changed to "${filename}" from "${filenameRequested}"`);
+      const when = new Date();
+      const whenMs = Number(when);
+      // determine whether to pretty-print the data
+      const prettyPrint = this.cfg.humanFriendlyBackups ? 2 : 0;
+      // generate the file's raw data
+      const backup = this.makeBackupObject(this.root, when);
+      const jsonString = JSON.stringify(backup, null, prettyPrint);
+      const blob = new Blob([jsonString], { type: "application/json" });
+      // generate the URL to download
+      if ((! this.bkgd) || (isFirefox)) {
+        // simple, but only works in Firefox or in views (like the sidepanel)
+        url = URL.createObjectURL(blob);
       }
-      // download succeeded
-      if ('complete' === delta.state?.current) {
-        //log(`downloadBackupNow(): Download succeeded: ${filename}`);
-        api.downloads.onChanged.removeListener(onProgress);
-        this.cfg.set('localBackupLastTimeCompleted', Date.now());
-        api.storage.local.set({ lastBackupTime: whenMs });
-        this.localBackupInProgress = false;
-        if (this.setStatus)
-          this.setStatus(`Saved ${blob.size} bytes to "${filename}"`);
+      else {
+        // more complex, but works in Chrome service workers:
+        const buffer = await blob.arrayBuffer();
+        // avoid a stack overflow from spreading a large typed array
+        const binaryString = new Uint8Array(buffer)
+          .reduce((acc, byte) => acc + String.fromCharCode(byte), "");
+        const base64String = btoa(binaryString);
+        url = `data:application/json;base64,${base64String}`;
+      }
+      // build a filename
+      const clientId = backup.metadata.clientId;
+      const date = dateTupleStrings(when);
+      const filenameRequested = `tktsto.${date[0]}-${date[1]}-${date[2]}_${date[3]}-${date[4]}-${date[5]}.${clientId}.json`;
+      let filename = filenameRequested;
+
+      // Save the file and keep this Promise pending until the browser reports
+      // completion, so alarms and startup backup scheduling have a real
+      // lifecycle boundary.
+      log(`downloadBackupNow(): saving to "${filename}"`);
+      let finish;
+      const completed = new Promise(resolve => { finish = resolve; });
+      let finished = false;
+      let downloadId;
+      let pendingDeltas = [];
+      const finishOnce = (succeeded, failure) => {
+        if (finished) return;
+        finished = true;
+        if (failure) warn(`downloadBackupNow(): Download failed: ${failure}`);
+        finish(succeeded);
+      };
+      completionTimer = setTimeout(() => {
+        finishOnce(false, 'Timed out waiting for download completion');
+      }, 5 * 60 * 1000);
+      onProgress = (delta) => {
+        //debug('Download delta', delta);
+        if (undefined === downloadId) {
+          pendingDeltas.push(delta);
+          return;
+        }
+        if (delta.id !== downloadId) return;
+        // filename changed
+        if (delta.filename?.current) {
+          // "/foo/baz.txt" or "C:\foo\baz.txt" -> "baz.txt"
+          filename = delta.filename.current.split(/[/\\]+/).pop();
+          if (filenameRequested !== filename) {
+            log(`downloadBackupNow(): filename changed to "${filename}" from "${filenameRequested}"`);
+          }
+        }
+        if ('complete' === delta.state?.current) {
+          finishOnce(true);
+        } else if (
+          delta.error?.current || ('interrupted' === delta.state?.current)
+        ) {
+          finishOnce(
+            false,
+            delta.error?.current || 'Download was interrupted'
+          );
+        }
+      };
+      api.downloads.onChanged.addListener(onProgress);
+      Promise.resolve(api.downloads.download({
+        url,
+        filename,
+        saveAs: false
+      })).then(
+        (id) => {
+          downloadId = id;
+          const deltas = pendingDeltas;
+          pendingDeltas = [];
+          for (const delta of deltas) onProgress(delta);
+        },
+        (err) => finishOnce(false, err)
+      );
+
+      const succeeded = await completed;
+      if (succeeded) {
         try {
-          // docs recommend cleaning this up
-          // but docs also say this is unavailable in service workers
-          // so ... do it when possible, and ignore errors otherwise
+          await Promise.all([
+            this.cfg.set('localBackupLastTimeCompleted', Date.now()),
+            api.storage.local.set({ lastBackupTime: whenMs })
+          ]);
+        } catch (err) {
+          // The file is already safely downloaded.  A bookkeeping failure
+          // should not tell the user that the backup itself failed.
+          warn(`downloadBackupNow(): completion timestamp failed: ${err}`);
+        }
+        if (this.setStatus) {
+          try {
+            this.setStatus(`Saved ${blob.size} bytes to "${filename}"`);
+          } catch (err) {
+            warn(`downloadBackupNow(): status update failed: ${err}`);
+          }
+        }
+      }
+      return succeeded;
+    } catch (err) {
+      warn(`downloadBackupNow(): Download failed: ${err}`);
+      return false;
+    } finally {
+      if (onProgress) {
+        api.downloads.onChanged.removeListener(onProgress);
+      }
+      if (completionTimer) clearTimeout(completionTimer);
+      this.localBackupInProgress = false;
+      if (url) {
+        try {
           URL.revokeObjectURL(url);
         } catch (err) { }
-      } else if (
-        (!!delta.error?.current) || ('interrupted' === delta.state?.current)
-      ) {
-        onFailed(delta.error?.current || 'Download was interrupted');
       }
-    };
-    const onFailed = (err) => {
-      warn(`downloadBackupNow(): Download failed: ${err}`);
-      api.downloads.onChanged.removeListener(onProgress);
-      this.localBackupInProgress = false;
-    };
-    api.downloads.onChanged.addListener(onProgress);
-    downloading.then(onStarted, onFailed);
+    }
   }
 
   getNodeByTabId (tabId, root)  {
@@ -580,6 +667,57 @@ export class Tree {
     return firstChild && firstChild.isPinnedBranch()
       ? firstChild
       : null;
+  }
+
+  capturePinnedBranchStates (windowNodes) {
+    const states = new Map();
+    for (const windowNode of windowNodes) {
+      if (! windowNode || states.has(windowNode)) continue;
+      const pinnedBranch = this.getPinnedBranch(windowNode);
+      states.set(windowNode, {
+        hadPinnedBranch: Boolean(pinnedBranch),
+        pinnedNodes: new Set(
+          pinnedBranch
+            ? pinnedBranch.getLoadedAndUnloadedTabs()
+            : []
+        )
+      });
+    }
+    return states;
+  }
+
+  async syncPinnedBranchStates (previousStates, args) {
+    if (! previousStates || previousStates.size === 0) return false;
+
+    // First clear tabs which belonged to a branch that may have moved or
+    // stopped being special.  Active branches below then override this with
+    // their current membership, so cross-window moves write each tab once.
+    const desiredPinned = new Map();
+    for (const state of previousStates.values()) {
+      if (! state.hadPinnedBranch) continue;
+      for (const node of state.pinnedNodes) desiredPinned.set(node, false);
+    }
+
+    // Whenever a Pinned branch exists, it is authoritative for the whole
+    // window: descendants are pinned and every other tab is unpinned.
+    for (const windowNode of previousStates.keys()) {
+      const pinnedBranch = this.getPinnedBranch(windowNode);
+      if (! pinnedBranch) continue;
+      for (const node of windowNode.getLoadedAndUnloadedTabs()) {
+        desiredPinned.set(node, node.isChildOf(pinnedBranch));
+      }
+    }
+
+    let changed = false;
+    for (const [node, pinned] of desiredPinned.entries()) {
+      if (await node.setPinned(pinned, {
+        ...args,
+        reason: 'setPinned'
+      })) {
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   getMovableLoadedTabs (windowNode, excludeNode = null) {
@@ -745,19 +883,36 @@ export class Tree {
     }
     // are we re-opening a saved window?
     if (savedWindowNode) {
-      await savedWindowNode.setTabFields({
-        type: 'window',
-        windowId: window.id,
-        loaded: true,
-        windowState: window.state,
-        incognito: window.incognito,
-        geometry: [window.width, window.height, window.left, window.top]
-      }, { reason: args.reason });
-      // in case a parent tab with child tabs has *already* been moved
-      // to this window (which caused the window to be created),
-      // reorder the tabs to pull in the child tabs
-      await savedWindowNode.reorderAllTabsInThisWindow();
-      return savedWindowNode;
+      let attached = false;
+      try {
+        await savedWindowNode.setTabFields({
+          type: 'window',
+          windowId: window.id,
+          loaded: true,
+          windowState: window.state,
+          incognito: window.incognito,
+          geometry: [window.width, window.height, window.left, window.top]
+        }, { reason: args.reason });
+        attached = true;
+        if (this.bkgd.finishPendingWindowLoad) {
+          this.bkgd.finishPendingWindowLoad(savedWindowNode, true);
+        }
+        // in case a parent tab with child tabs has *already* been moved
+        // to this window (which caused the window to be created),
+        // reorder the tabs to pull in the child tabs
+        await savedWindowNode.reorderAllTabsInThisWindow();
+        return savedWindowNode;
+      } finally {
+        if (this.bkgd.finishPendingWindowLoad) {
+          this.bkgd.finishPendingWindowLoad(savedWindowNode, attached);
+        } else {
+          if (savedWindowNode.pendingWindowLoadTimer) {
+            clearTimeout(savedWindowNode.pendingWindowLoadTimer);
+            delete savedWindowNode.pendingWindowLoadTimer;
+          }
+          savedWindowNode.browserLoadInProgress = false;
+        }
+      }
     }
 
     // otherwise, create a new node for this window
@@ -946,26 +1101,31 @@ export class Tree {
       // use that node instead of making a new one
       if (savedTabNode) {
         debug(`Tree.onTabCreated(): restoring nodeId=${savedTabNode.id}`);
-        // re-attach this tab to the found Node
-        await savedTabNode.setTabFields({
-          tabId: tab.id,
-          windowId: tab.windowId,
-          loaded: true,
-          discarded: tab.discarded,
-          frozen: tab.frozen,
-          hidden: tab.hidden,
-          incognito: tab.incognito,
-          pinned: Boolean(tab.pinned || savedTabNode.isPinned())
-        }, { reason: 'onTabCreated' });
-        // If the browser reports the tab as still unpinned during restore, keep
-        // the saved pinned state until a real pinned update or pin failure lands.
-        if (tab.pinned) {
-          savedTabNode.pinRestorePending = false;
-          savedTabNode.pinRestorePendingAt = 0;
+        try {
+          // re-attach this tab to the found Node
+          await savedTabNode.setTabFields({
+            tabId: tab.id,
+            windowId: tab.windowId,
+            loaded: true,
+            discarded: tab.discarded,
+            frozen: tab.frozen,
+            hidden: tab.hidden,
+            incognito: tab.incognito,
+            pinned: Boolean(tab.pinned || savedTabNode.isPinned())
+          }, { reason: 'onTabCreated' });
+          // If the browser reports the tab as still unpinned during restore,
+          // keep the saved pinned state until a real pinned update or pin
+          // failure lands.
+          if (tab.pinned) {
+            savedTabNode.pinRestorePending = false;
+            savedTabNode.pinRestorePendingAt = 0;
+          }
+          // put the tab in the right position
+          await savedTabNode.reorderAllTabsInThisWindow();
+          return;
+        } finally {
+          savedTabNode.browserLoadInProgress = false;
         }
-        // put the tab in the right position
-        await savedTabNode.reorderAllTabsInThisWindow();
-        return;
       }
 
     // find the window Node
@@ -1203,7 +1363,7 @@ export class Tree {
     }
   }
 
-  async onTabActivated (windowId, tabId) {
+  async onTabActivated (windowId, tabId, runMutation) {
     // do everything we can to find the correct tab and window nodes...
     // ... but if that fails, it's almost certainly not an issue
     // (because for some reason, browsers like Vivaldi fire off this event
@@ -1232,7 +1392,10 @@ export class Tree {
       // probably not an error
       return log(`Tree.onTabActivated() can't find windowId="${windowId}"`);
     }
-    await windowNode.setActiveTab({ reason: 'onTabActivated' });
+    await windowNode.setActiveTab(
+      { reason: 'onTabActivated' },
+      runMutation
+    );
   }
 
   async onTabMoved (tabId, moveInfo) {
@@ -1694,9 +1857,11 @@ export class Tree {
   }
 
   async onMessage (msg, sender, sendResponse) {
-    if (! msg.msg) {
+    if (! msg?.msg) {
       warn('Tree onMessage invalid', msg);
-      sendResponse({error: 'invalid msg type'});
+      if ('function' === typeof sendResponse) {
+        sendResponse({ error: 'invalid msg type' });
+      }
       return;
     }
     // if message not for us, ignore it and abort
@@ -1724,7 +1889,7 @@ export class Tree {
       //   any time there's a sync error.
       return;
     }
-    return error(`Tree fn not found: ${msg.msg}`);
+    throw new Error(`Tree fn not found: ${msg.msg}`);
   }
 
   queuePendingMove (msg) {
@@ -1783,19 +1948,40 @@ export class Tree {
     const parent = this.nodes[parentId];
     //debug('tree_nodeAdded() parent', parent);
     if (! parent) {
-      return error(`tree_nodeAdded(): couldn't find parent "${parentId}"`);
+      throw new Error(
+        `tree_nodeAdded(): couldn't find parent "${parentId}"`
+      );
+    }
+    if (! details?.id) {
+      throw new Error('tree_nodeAdded(): node has no ID');
+    }
+    const existing = this.nodes[details.id];
+    if (existing) {
+      // runtime.sendMessage() can be retried after a response-channel
+      // failure even though the first attempt committed.  Node IDs make an
+      // exact retry idempotent; never insert a second object with that ID.
+      if ((existing.parent === parent)
+        && parent.nodes.includes(existing)) {
+        return existing;
+      }
+      throw new Error(
+        `tree_nodeAdded(): duplicate node ID "${details.id}"`
+      );
     }
     msg.reason = 'tree_nodeAdded';
     const newNode = await parent.addChild(index, details, msg);
     //const newNode = parent.nodes[index];
     //debug('tree_nodeAdded() newNode', newNode);
     if (! newNode) {
-      return error(`tree_nodeAdded(): failed to add node "${details.id}"`);
+      throw new Error(
+        `tree_nodeAdded(): failed to add node "${details.id}"`
+      );
     }
     this.nodes[newNode.id] = newNode;
     debug(`tree_nodeAdded() added "${newNode.id}" to "${parent.id}"`);
     if (! this.bkgd) await this.flushPendingMoves();
     //debug('Tree root:', this.root);
+    return newNode;
   }
 
   async tree_nodeDeleted (msg, sender, sendResponse) {
@@ -1822,6 +2008,7 @@ export class Tree {
       }
     } catch (err) {
       error(`tree_nodeDeleted() error`, err);
+      throw err;
     }
     return result;
   }
@@ -1843,9 +2030,13 @@ export class Tree {
         return;
       }
       if (! node)
-        return error(`tree_nodeMoved(): couldn't find node "${nodeId}"`);
+        throw new Error(
+          `tree_nodeMoved(): couldn't find node "${nodeId}"`
+        );
       if (! destParent)
-        return error(`tree_nodeMoved(): couldn't find parent "${destParentId}"`);
+        throw new Error(
+          `tree_nodeMoved(): couldn't find parent "${destParentId}"`
+        );
     }
 
     // move the node
@@ -1865,8 +2056,9 @@ export class Tree {
     if (! node) {
       // setActive(false) can get called after deletion sometimes,
       // but it's fine (like, Chrome temp windows which exist only for 1ms)
-      const func = ('setActive' === changeType) ? warn : error;
-      return func(`tree_nodeChanged(${changeType}): couldn't find node "${nodeId}"`);
+      const message = `tree_nodeChanged(${changeType}): couldn't find node "${nodeId}"`;
+      if ('setActive' === changeType) return warn(message);
+      throw new Error(message);
     }
 
     // while syncing between threads,
@@ -1900,11 +2092,13 @@ export class Tree {
         return await node.unload(msg);
       }
       else {
-        return error(`tree_nodeChanged(): unsupported change type "${changeType}"`);
+        throw new Error(
+          `tree_nodeChanged(): unsupported change type "${changeType}"`
+        );
       }
     } catch (err) {
       error(`tree_nodeChanged(${changeType}, ${nodeId}) failed`, err, msg);
-      return;
+      throw err;
     }
   }
 

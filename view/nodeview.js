@@ -5,7 +5,7 @@
 "use strict";
 import { api, isChrome, isFirefox } from '/api.js';
 
-import { log, debug, emit, fmtDate } from '/common/common.js';
+import { log, debug, error, emit, fmtDate } from '/common/common.js';
 import { Node } from '/common/node.js';
 
 
@@ -560,7 +560,7 @@ export class NodeView extends Node {
     // update parent node stats and decorations
     if (oldParent) oldParent.$refreshAncestry();
     // move the cursor to a new valid node if necessary
-    if (newCursor) this.tree.setCursor(newCursor);
+    if (newCursor) await this.tree.setCursor(newCursor);
     return changed;
   }
 
@@ -649,8 +649,10 @@ export class NodeView extends Node {
     return await this.renderIfChanged(super.setCheckbox(...args));
   }
 
-  async updateCheckboxes (...args) {
-    return await this.renderIfChanged(super.updateCheckboxes(...args));
+  async applyCheckboxUpdates (changedNodes, args) {
+    await this.tree.treeViewLoaded;
+    for (const node of changedNodes) node.$render();
+    return changedNodes.length > 0;
   }
 
   async setTabFields (...args) {
@@ -750,7 +752,7 @@ export class NodeView extends Node {
     // move cursor to nearest visible parent
     // (this can happen when a collapsed parent is becoming its own child)
     // (when the user moved tabs via the tab bar)
-    this.tree.ensureCursorVisible();
+    await this.tree.ensureCursorVisible();
 
     // ensure cursor is in the viewport
     if (this === this.tree.cursor) this.tree.scrollNodeIntoView(this);
@@ -851,16 +853,16 @@ export class NodeView extends Node {
       debug(`parent of override: expand=${expanded}`, this, overrideNode);
       wasExpanded = this.isExpanded();
       if (overrideNode !== this) {
-        this.tree.expandOverride(this.parent, true);
+        await this.tree.expandOverride(this.parent, true);
       }
-      this.tree.expandOverride(overrideNode, null);
+      await this.tree.expandOverride(overrideNode, null);
       changed = await super.setExpanded(expanded, args)
         || (expanded !== wasExpanded);
     }
     else {
       wasExpanded = this.isExpanded();
       // remove node from overrides
-      if (overrideNode) this.tree.expandOverride(overrideNode, null);
+      if (overrideNode) await this.tree.expandOverride(overrideNode, null);
 
       changed = await super.setExpanded(expanded, args)
         || (expanded !== wasExpanded);
@@ -884,7 +886,7 @@ export class NodeView extends Node {
         this.$destroyChildren();
         this.$render();
         // promote the cursor if we just hid it in a fold
-        this.tree.ensureCursorVisible();
+        await this.tree.ensureCursorVisible();
       }
     }
 
@@ -903,8 +905,7 @@ export class NodeView extends Node {
     let changed;
     debug(`NodeView.setActive(${active}): ${this.toLine()}`, this);
     if (args.localOverride) changed = true;
-    else if (args.onWindowRemoved) changed = true;
-    else changed = super.setActive(active, args);
+    else changed = await super.setActive(active, args);
     // abort on no-op
     if (! changed) return;
 
@@ -930,7 +931,7 @@ export class NodeView extends Node {
           const activeWinNode = this.tree.nodes[args.focusedNodeId];
           const activeTab = activeWinNode?.getActiveTab();
           if (activeTab?.url !== myUrl) {
-            this.tree.expandOverride(winNode.prevActiveTab, null);
+            await this.tree.expandOverride(winNode.prevActiveTab, null);
             winNode = null;
           }
         }
@@ -945,15 +946,19 @@ export class NodeView extends Node {
         else if (activeTab) {
           if (this.tree.cfg.activeTabExpandsItsParents) {
             // force expand new active tab
-            this.tree.expandOverride(activeTab, true);
+            await this.tree.expandOverride(activeTab, true);
             // un-override previous active tab
             if (activeTab !== winNode.prevActiveTab)
-              this.tree.expandOverride(winNode.prevActiveTab, null);
+              await this.tree.expandOverride(winNode.prevActiveTab, null);
           }
           if (activeTab.hasKids()) activeTab.$renderChildren();
           // wait for expansion changes to take effect before moving cursor
           // (otherwise scrolling is glitchy sometimes)
-          setTimeout(() => { this.tree.setCursor(activeTab); }, 1);
+          setTimeout(() => {
+            this.tree.setCursor(activeTab).catch((err) => {
+              error('NodeView.setActive(): cursor update failed', err);
+            });
+          }, 1);
           winNode.prevActiveTab = activeTab;
         }
       }

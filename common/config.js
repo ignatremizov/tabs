@@ -5,9 +5,7 @@
 "use strict";
 import { api } from '/api.js';
 
-import {
-  log, debug, warn, error, emit
-} from '/common/common.js';
+import { debug, warn } from '/common/common.js';
 
 
 // Config object
@@ -99,7 +97,12 @@ export class Config {
 
     for (const { callback } of watchers) {
       try {
-        callback(key, newValue, oldValue);
+        const result = callback(key, newValue, oldValue);
+        if (result && ('function' === typeof result.then)) {
+          result.catch((err) => {
+            warn(`Config watcher for "${key}" failed:`, err);
+          });
+        }
       } catch (err) {
         warn(`Config watcher for "${key}" failed:`, err);
       }
