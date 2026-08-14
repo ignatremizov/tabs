@@ -241,6 +241,7 @@
       let IdGenerator;
       let Bkgd;
       let NodeView;
+      let checkboxDialog;
       try {
         const cacheBust = `?v=${Date.now()}`;
         const [
@@ -251,7 +252,8 @@
           base32Mod,
           idGenMod,
           bkgdMod,
-          nodeViewMod
+          nodeViewMod,
+          dialogMod
         ] = await Promise.all([
           import('../common/tree.js' + cacheBust),
           import('../common/node.js' + cacheBust),
@@ -260,7 +262,8 @@
           import('../common/base32.js' + cacheBust),
           import('../common/id-generator.js' + cacheBust),
           import('../bkgd/bkgd.js' + cacheBust),
-          import('../view/nodeview.js' + cacheBust)
+          import('../view/nodeview.js' + cacheBust),
+          import('../common/dialog.js' + cacheBust)
         ]);
         Tree = treeMod.Tree;
         Node = nodeMod.Node;
@@ -272,6 +275,7 @@
         IdGenerator = idGenMod.IdGenerator;
         Bkgd = bkgdMod.Bkgd;
         NodeView = nodeViewMod.NodeView;
+        checkboxDialog = dialogMod.checkboxDialog;
       } catch (err) {
         $summary.textContent = `Failed to load modules: ${err}`;
         $summary.className = 'has-fail';
@@ -2095,6 +2099,54 @@
         } finally {
           Date.now = originalNow;
         }
+      });
+
+      testGroup('Dialogs');
+      test('checkbox dialog secondary button preserves old value', async () => {
+        const resultPromise = checkboxDialog({
+          doc: document,
+          title: 'Checkbox test',
+          value: 'x',
+          classes: new Map([['x', 'done']]),
+          buttons: ['OK', 'Delete']
+        });
+        const dialog = document.getElementById('checkboxDialog');
+        const buttons = dialog.querySelectorAll('button');
+        buttons[1].click();
+        const result = await Promise.race([
+          resultPromise,
+          new Promise((resolve, reject) => {
+            setTimeout(
+              () => reject(new Error('Checkbox dialog did not resolve')),
+              250
+            );
+          })
+        ]);
+
+        assertEqual(result.button, 'Delete');
+        assertEqual(result.checkbox, 'x');
+        assert(! document.getElementById('checkboxDialog'),
+          'Resolved dialog should be removed');
+      });
+
+      test('checkbox dialog submit preserves old value', async () => {
+        const resultPromise = checkboxDialog({
+          doc: document,
+          title: 'Checkbox submit test',
+          value: '!',
+          classes: new Map([['!', 'fail']]),
+          buttons: ['OK', 'Delete']
+        });
+        const dialog = document.getElementById('checkboxDialog');
+        dialog.querySelector('form').dispatchEvent(
+          new Event('submit', { bubbles: true, cancelable: true })
+        );
+        const result = await resultPromise;
+
+        assertEqual(result.button, 'OK');
+        assertEqual(result.checkbox, '!');
+        assert(! document.getElementById('checkboxDialog'),
+          'Submitted dialog should be removed');
       });
 
       testGroup('Options Client ID Form');
