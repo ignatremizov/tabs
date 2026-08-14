@@ -71,6 +71,7 @@ export class TreeView extends Tree {
     this.keyBindings = { ...defaultKeyBindings };
     this.keyBindingsByAction = this.buildActionKeyMap(this.keyBindings);
     this.activeDialogCount = 0;
+    this.cursorScrollRequestId = 0;
     this.actionLabels = {};
     for (const binding of keyBindingActions) {
       this.actionLabels[binding.action] = binding.label;
@@ -111,6 +112,7 @@ export class TreeView extends Tree {
 
   destroy () {
     this.destroyed = true;
+    this.cursorScrollRequestId += 1;
     if (this.bkgdPing) {
       clearInterval(this.bkgdPing);
       this.bkgdPing = null;
@@ -3213,6 +3215,11 @@ export class TreeView extends Tree {
   async setCursor (node, args) {
     // { instant: false, scrollDelay: 0, expand: false}) {
     //debug(`TreeView.setCursor(): ${node.toLine()}`);
+    // A click may delay scrolling to avoid fighting a double click.  Any newer
+    // cursor request supersedes that pending scroll, even when the old node is
+    // still valid (for example, after unloading the active browser tab).
+    const scrollRequestId = ++this.cursorScrollRequestId;
+
     // ensure cursor is on a visible node in our view scope
     const viewRoot = this.viewRoot;
     if (! node) node = viewRoot;
@@ -3241,6 +3248,7 @@ export class TreeView extends Tree {
       if (args?.scrollDelay) {
         scrollDuration = args.scrollDelay;
         await new Promise(r => setTimeout(r, args.scrollDelay));
+        if (scrollRequestId !== this.cursorScrollRequestId) return;
       }
 
       // ensure node is visible
