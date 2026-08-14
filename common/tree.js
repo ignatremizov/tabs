@@ -739,6 +739,10 @@ export class Tree {
     return urlsMatch(left, right);
   }
 
+  resolveBrowserTabUrl (url) {
+    return resolveBrowserTabUrl(url);
+  }
+
   getTabUrlMatchKey (url) {
     return normalizeUrlForMatch(url);
   }
@@ -2547,7 +2551,17 @@ function tabUrlCountsCover(containerCounts, requestedCounts) {
 
 function normalizeUrlForMatch(url) {
   if (! url) return '';
-  return String(url).replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+  return String(resolveBrowserTabUrl(url))
+    .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+}
+
+function resolveBrowserTabUrl(url) {
+  if (('string' === typeof url)
+    && url.startsWith('/')
+    && api.runtime?.getURL) {
+    return api.runtime.getURL(url);
+  }
+  return url;
 }
 
 function urlsMatch(left, right) {

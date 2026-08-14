@@ -1618,7 +1618,11 @@ export class Bkgd {
 
     // actually open the tab
     const createProperties = {};
-    createProperties.url = node.url;
+    createProperties.url = this.tree.resolveBrowserTabUrl(node.url);
+    // Firefox may initially report extension pages as about:blank with the
+    // moz-extension UUID and path in the title.  Match against the fully
+    // resolved URL so the creation event reattaches to this saved node.
+    node.pendingUrl = createProperties.url;
     // work around Firefox bug https://bugzilla.mozilla.org/show_bug.cgi?id=1412498
     if (isFirefox && ['about:newtab', 'about:home'].includes(node.url))
       createProperties.url = 'about:blank';
