@@ -1484,9 +1484,7 @@ export class Bkgd {
 
   async bkgd_getTree (msg) {
     await this.treeLoaded;  // ensure tree is loaded before sending it
-    const response = {};
-    response.nodes = this.tree.serializeNodes();
-    return response;
+    return JSON.stringify(this.tree.serializeNodes());
   }
 
   async bkgd_generateTutorial (msg) {

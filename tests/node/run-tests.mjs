@@ -384,6 +384,98 @@ async () => {
   }
 });
 
+test('background tree transfer returns one JSON payload', async () => {
+  const nodes = {
+    root: {
+      id: 'root',
+      nodes: ['saved-tab']
+    },
+    'saved-tab': {
+      id: 'saved-tab',
+      nodes: [],
+      label: 'Saved tab'
+    }
+  };
+  const bkgd = new Bkgd();
+  bkgd.tree = {
+    serializeNodes: () => nodes
+  };
+  bkgd.resolveTreeLoaded();
+
+  const response = await bkgd.bkgd_getTree({});
+
+  assertEqual(typeof response, 'string',
+    'Tree transfer should avoid structured-cloning the node graph');
+  assertEqual(response, JSON.stringify(nodes),
+    'Tree transfer should contain the serialized node hash');
+});
+
+test('Tree loads the background JSON payload', async () => {
+  const originalSendMessage = api.runtime.sendMessage;
+  const nodes = {
+    root: {
+      id: 'root',
+      nodes: ['saved-tab']
+    },
+    'saved-tab': {
+      id: 'saved-tab',
+      nodes: [],
+      label: 'Saved tab'
+    }
+  };
+  let request;
+  try {
+    api.runtime.sendMessage = async (msg) => {
+      request = msg;
+      return JSON.stringify(nodes);
+    };
+    const tree = new Tree(TestNode);
+
+    await tree.loadTreeFromBkgd();
+
+    assertEqual(request.msg, 'bkgd_getTree',
+      'Tree loading should use the tree transfer endpoint');
+    assertEqual(tree.root.nodes.length, 1,
+      'Tree loading should restore the root children');
+    assertEqual(tree.nodes['saved-tab'].label, 'Saved tab',
+      'Tree loading should restore node fields from JSON');
+  } finally {
+    api.runtime.sendMessage = originalSendMessage;
+  }
+});
+
+test('Tree rejects invalid JSON without replacing its current nodes',
+async () => {
+  const originalSendMessage = api.runtime.sendMessage;
+  try {
+    const tree = new Tree(TestNode);
+    const existing = await addChild(tree.root, {
+      id: 'existing',
+      label: 'Keep me'
+    });
+    const originalRoot = tree.root;
+
+    for (const payload of ['{not json', JSON.stringify({})]) {
+      api.runtime.sendMessage = async () => payload;
+      let failure;
+      try {
+        await tree.loadTreeFromBkgd();
+      } catch (err) {
+        failure = err;
+      }
+
+      assert(failure,
+        'Malformed tree payloads should reject the load');
+      assertEqual(tree.root, originalRoot,
+        'A failed load should preserve the current root');
+      assertEqual(tree.nodes.existing, existing,
+        'A failed load should preserve the current node cache');
+    }
+  } finally {
+    api.runtime.sendMessage = originalSendMessage;
+  }
+});
+
 test('applyTreeMutation dispatches directly', async () => {
   const bkgd = new Bkgd();
   const payload = { nodeId: 'n1' };

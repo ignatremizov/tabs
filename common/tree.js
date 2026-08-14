@@ -283,11 +283,21 @@ export class Tree {
     //   ... and populate this tree with that data
 
     // get the raw Tree data
-    const response = await emit('bkgd_getTree');
-    if (! response)
+    const nodesJson = await emit('bkgd_getTree');
+    if (! nodesJson)
       return error('Tree.loadTreeFromBkgd() failed, bkgd did not send tree');
 
-    //debug('bkgd_getTree() =>', response);
+    const serializedNodes = JSON.parse(nodesJson);
+    if ((! serializedNodes)
+      || ('object' !== typeof serializedNodes)
+      || Array.isArray(serializedNodes)
+      || (! serializedNodes.root)
+      || (! Array.isArray(serializedNodes.root.nodes))) {
+      throw new TypeError(
+        'Tree.loadTreeFromBkgd() failed, bkgd sent an invalid tree'
+      );
+    }
+
     // TODO: delete anything which needs deleting before restoring
     // (like removing DOM elements in Views)
     // (maybe call derived class handler?)
@@ -295,7 +305,7 @@ export class Tree {
     // restore session from serialized data
     this.createRootNode();
     const numLoaded = this.rebuildNodeFromSerializedHash(
-      this.root, response.nodes);
+      this.root, serializedNodes);
     // tree is ready to use
     debug('Tree.resolveTreeLoaded()');
     this.resolveTreeLoaded();  // let listeners know the tree is loaded

@@ -300,8 +300,14 @@ export async function emit (name, args, extra) {
         }
       }
       delivered = true;
-      if ('bkgd_ping' !== name)
-        debug(1, `emit(${name}) response:`, response);
+      if ('bkgd_ping' !== name) {
+        if (('bkgd_getTree' === name) && ('string' === typeof response)) {
+          debug(1, `emit(${name}) response: ${response.length} JSON bytes`);
+        }
+        else {
+          debug(1, `emit(${name}) response:`, response);
+        }
+      }
     } catch (err) {
       lastError = err;
       log(1, `emit(${name}) error, try #${attempts}`, err, args);
