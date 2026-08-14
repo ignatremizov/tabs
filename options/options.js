@@ -40,7 +40,8 @@ class OptionsPage extends ThemedPage {
       loadCollapsedBranchStyle: 'ask',
       unloadExpandedBranchStyle: 'ask',
       unloadCollapsedBranchStyle: 'ask',
-      deleteExpandedBranchStyle: 'ask',
+      deleteExpandedBranchStyle: 'one',
+      deleteCollapsedBranchStyle: 'ask',
 
       // fork behavior
       defaultViewScope: 'auto',
@@ -98,6 +99,7 @@ class OptionsPage extends ThemedPage {
       'unloadExpandedBranchStyle',
       'unloadCollapsedBranchStyle',
       'deleteExpandedBranchStyle',
+      'deleteCollapsedBranchStyle',
       'defaultViewScope',
       'dropTextNoteMode',
     ];

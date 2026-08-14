@@ -3025,6 +3025,9 @@
         const label = await addChild(view.root, { id: 'l1', label: 'Group', expanded: true });
         await addChild(label, { id: 'c1', label: 'Child 1' });
         await addChild(label, { id: 'c2', label: 'Child 2' });
+        view.inputDialog = async () => {
+          throw new Error('Default expanded deletion should not ask');
+        };
         view.cursor = label;
         const before = treeSnapshot(view.root);
         await view.action_deleteNode({ type: 'command' });
@@ -3083,15 +3086,23 @@
           'Unwrap must not race per-child moves against parent deletion');
       });
 
-      test('delete collapsed label removes subtree', async () => {
+      test('default collapsed label deletion asks before removing subtree', async () => {
         const view = createView();
         const label = await addChild(view.root, { id: 'l1', label: 'Group', expanded: false });
         await addChild(label, { id: 'c1', label: 'Child 1' });
+        let prompt;
+        view.inputDialog = async (details) => {
+          prompt = details;
+          return { button: 'OK' };
+        };
         view.cursor = label;
         const before = treeSnapshot(view.root);
         await view.action_deleteNode({ type: 'command' });
         const after = treeSnapshot(view.root);
         const snap = { before, after };
+        assert(prompt, 'Collapsed deletion should ask by default', snap);
+        assertEqual(prompt.buttons.join(','), 'Cancel,OK',
+          'Default collapsed deletion should require confirmation', snap);
         assertEqual(view.root.nodes.length, 0, 'Collapsed label subtree removed', snap);
         return { before, after };
       });
@@ -3246,6 +3257,60 @@
       });
 
       testGroup('Confirmations');
+      test('expanded delete ask policy preserves the one-or-all prompt', async () => {
+        const view = createView();
+        const label = await addChild(view.root, {
+          id: 'l1', label: 'Group', expanded: true
+        });
+        const child = await addChild(label, {
+          id: 'c1', label: 'Child'
+        });
+        let prompt;
+        view.cfg.deleteExpandedBranchStyle = 'ask';
+        view.inputDialog = async (details) => {
+          prompt = details;
+          return { button: 'One' };
+        };
+        view.cursor = label;
+
+        await view.action_deleteNode({ type: 'keydown' });
+
+        assert(prompt, 'Ask policy should show a choice');
+        assertEqual(prompt.buttons.join(','), 'Cancel,One,All',
+          'Expanded prompt should offer one or all');
+        assertEqual(view.root.nodes.length, 1,
+          'Choosing one should retain the promoted child');
+        assertEqual(view.root.nodes[0], child,
+          'Choosing one should promote the child');
+      });
+
+      test('collapsed delete ask policy can cancel subtree deletion', async () => {
+        const view = createView();
+        const label = await addChild(view.root, {
+          id: 'l1', label: 'Group', expanded: false
+        });
+        await addChild(label, {
+          id: 'c1', label: 'Child'
+        });
+        let prompt;
+        view.cfg.deleteCollapsedBranchStyle = 'ask';
+        view.inputDialog = async (details) => {
+          prompt = details;
+          return { button: 'Cancel' };
+        };
+        view.cursor = label;
+
+        await view.action_deleteNode({ type: 'keydown' });
+
+        assert(prompt, 'Ask policy should show a confirmation');
+        assertEqual(prompt.buttons.join(','), 'Cancel,OK',
+          'Collapsed prompt should remain a confirmation');
+        assertEqual(view.root.nodes[0], label,
+          'Cancelling should retain the complete branch');
+        assertEqual(label.nodes.length, 1,
+          'Cancelling should retain descendants');
+      });
+
       test('collapsed loaded window warns about metadata', async () => {
         const view = createView();
         const win = await addChild(view.root, {

@@ -7891,6 +7891,68 @@ async () => {
     'Only the newer active-tab cursor should be scrolled into view');
 });
 
+test('TreeView deletion defaults unwrap expanded and confirm collapsed branches',
+async () => {
+  const tree = new TreeView({
+    isInert: true,
+    document: null,
+    window: null
+  });
+  const prompts = [];
+  tree.inputDialog = async (details) => {
+    prompts.push(details);
+    return { button: 'Cancel' };
+  };
+
+  const expandedStyle = await tree.chooseDeleteBranchStyle({
+    isExpanded: () => true
+  }, 3);
+  const collapsedStyle = await tree.chooseDeleteBranchStyle({
+    isExpanded: () => false
+  }, 3);
+
+  assertEqual(expandedStyle, 'one',
+    'Expanded branches should delete only their parent by default');
+  assertEqual(collapsedStyle, null,
+    'Cancelling the default collapsed confirmation should abort deletion');
+  assertEqual(prompts.length, 1,
+    'Only collapsed deletion should prompt under the default policies');
+  assertEqual(prompts[0].buttons.join(','), 'Cancel,OK',
+    'Collapsed deletion should use a confirmation prompt');
+});
+
+test('TreeView deletion prompts remain available by configuration',
+async () => {
+  const tree = new TreeView({
+    isInert: true,
+    document: null,
+    window: null
+  });
+  const prompts = [];
+  tree.cfg.deleteExpandedBranchStyle = 'ask';
+  tree.cfg.deleteCollapsedBranchStyle = 'ask';
+  tree.inputDialog = async (details) => {
+    prompts.push(details);
+    return {
+      button: details.buttons.includes('One') ? 'One' : 'Cancel'
+    };
+  };
+
+  const expandedStyle = await tree.chooseDeleteBranchStyle({
+    isExpanded: () => true
+  }, 4);
+  const collapsedStyle = await tree.chooseDeleteBranchStyle({
+    isExpanded: () => false
+  }, 4);
+
+  assertEqual(expandedStyle, 'one',
+    'Expanded prompt should return the chosen deletion scope');
+  assertEqual(collapsedStyle, null,
+    'Cancelling a collapsed deletion should abort it');
+  assertEqual(prompts.length, 2,
+    'Each ask policy should display its corresponding prompt');
+});
+
 test('TreeView keeps input disabled until all overlapping dialogs settle',
 async () => {
   const tree = new TreeView({

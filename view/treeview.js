@@ -50,7 +50,8 @@ export class TreeView extends Tree {
       loadExpandedBranchStyle: 'ask',
       unloadCollapsedBranchStyle: 'ask',
       unloadExpandedBranchStyle: 'ask',
-      deleteExpandedBranchStyle: 'ask',
+      deleteExpandedBranchStyle: 'one',
+      deleteCollapsedBranchStyle: 'ask',
       defaultViewScope: 'auto',
       openWindowOnRootMove: false,
       openWindowOnRootLoadTopmost: false,
@@ -1778,6 +1779,45 @@ export class TreeView extends Tree {
     return await this.addNodeAsPrevOrNextVisibleRow('prev');
   }
 
+  async chooseDeleteBranchStyle (node, numToDelete) {
+    const expanded = node.isExpanded();
+    const cfgKey = expanded
+      ? 'deleteExpandedBranchStyle'
+      : 'deleteCollapsedBranchStyle';
+    const allowedStyles = expanded
+      ? ['ask', 'one', 'all']
+      : ['ask', 'all'];
+    let style = this.cfg[cfgKey];
+    if (! allowedStyles.includes(style)) {
+      style = this.cfgDefaults[cfgKey];
+    }
+    if ('ask' !== style) return style;
+
+    if (expanded) {
+      const result = await this.inputDialog({
+        doc: this.document,
+        title: 'Delete Nodes',
+        input: false,
+        description: `Delete one node or all ${numToDelete} nodes?`,
+        buttons: ['Cancel', 'One', 'All']
+      });
+      if ((! result) || (! ['All', 'One'].includes(result.button))) {
+        return null;
+      }
+      return result.button.toLowerCase();
+    }
+
+    const result = await this.inputDialog({
+      doc: this.document,
+      title: 'Delete Nodes',
+      input: false,
+      description: `Really delete ${numToDelete} nodes?`,
+      buttons: ['Cancel', 'OK']
+    });
+    if ((! result) || ('OK' !== result.button)) return null;
+    return 'all';
+  }
+
   async action_deleteNode(event) {
     debug('deleteNode');
     // abort if nothing to delete
@@ -2002,28 +2042,15 @@ export class TreeView extends Tree {
     else if (cursor.isWindow() && cursor.isLoaded()) {
       return await this.action_unloadNode(event);
     }
-    // if expanded, promote kids then delete parent
-    else if (cursor.isExpanded() && cursor.hasKids()) {
-      let dStyle = this.cfg.deleteExpandedBranchStyle;
+    // Parent deletion follows the configured expanded/collapsed policy.
+    else {
       const numToDelete = 1 + toDelete.countNodes();
-      // Keyboard deletion has historically meant "unwrap this expanded
-      // branch".  It also needs to remain deterministic because a command has
-      // no click target to anchor a modal choice.
-      if (('ask' === dStyle || ! dStyle) && ('command' === event.type)) {
-        dStyle = 'one';
-      }
-      if ('ask' === dStyle) {
-        const result = await this.inputDialog({
-          doc: this.document,
-          title: 'Delete Nodes',
-          input: false,
-          description: `Delete one node or all ${numToDelete} nodes?`,
-          buttons: ['Cancel', 'One', 'All']  // Cancel is default
-        });
-        // abort if user cancelled
-        if ((!result) || (! ['All', 'One'].includes(result.button))) return;
-        dStyle = result.button.toLowerCase();
-      }
+      const dStyle = await this.chooseDeleteBranchStyle(
+        toDelete,
+        numToDelete
+      );
+      if (! dStyle) return;
+
       if ('one' === dStyle) {
         await toDelete.deleteSelfAndPromoteKids({ reason: 'userAction' });
         this.setStatus(`deleted ${line}`);
@@ -2037,24 +2064,6 @@ export class TreeView extends Tree {
         await toDelete.deleteSelf({ reason: 'userAction' });
         this.setStatus(`deleted ${numToDelete} nodes`);
       }
-    }
-    // if collapsed, delete entire branch
-    else {
-      //debug('deleting entire branch recursively');
-      // TODO: ask the user for confirmation
-      const numToDelete = 1 + toDelete.countNodes();
-      const result = await this.inputDialog({
-        doc: this.document,
-        title: 'Delete Nodes',
-        input: false,
-        description: `Really delete ${numToDelete} nodes?`,
-        buttons: ['Cancel', 'OK']  // Cancel is default
-      });
-      // abort if user cancelled
-      if ((!result) || ('OK' !== result.button)) return;
-      // otherwise, actually delete it
-      await toDelete.deleteSelf({ reason: 'userAction' });
-      this.setStatus(`deleted ${numToDelete} nodes`);
     }
 
     // update the cursor
