@@ -1629,7 +1629,8 @@ export class Tree {
     }
     await windowNode.setActiveTab(
       { reason: 'onTabActivated' },
-      runMutation
+      runMutation,
+      tabId
     );
   }
 

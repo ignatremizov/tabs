@@ -127,6 +127,14 @@ export class NodeView extends Node {
     }
   }
 
+  $syncActiveStateClasses () {
+    if (! this.$row) return;
+    if (this.loaded) this.$row.classList.add('loaded');
+    else this.$row.classList.remove('loaded');
+    if (this.active) this.$row.classList.add('active');
+    else this.$row.classList.remove('active');
+  }
+
   $renderTitle () {
     // Build DOM safely without innerHTML
     const doc = this.tree.document;
@@ -145,17 +153,13 @@ export class NodeView extends Node {
       else
         this.$row.classList.remove(label);
     }
-    // is the link loaded in a tab?
-    if (this.loaded) this.$row.classList.add('loaded');
-    else this.$row.classList.remove('loaded');
+    // is the link loaded, or the window's current active tab?
+    this.$syncActiveStateClasses();
     if (this.wasLoaded) this.$row.classList.add('was-loaded');
     else this.$row.classList.remove('was-loaded');
     // are any kids loaded?
     if (this.hasLoadedTabs()) this.$row.classList.add('loaded-children');
     else this.$row.classList.remove('loaded-children');
-    // is the page the window's current active tab?
-    if (this.active) this.$row.classList.add('active');
-    else this.$row.classList.remove('active');
     // is the tab partially unloaded?
     if (this.discarded) this.$row.classList.add('discarded');
     else this.$row.classList.remove('discarded');
@@ -902,12 +906,23 @@ export class NodeView extends Node {
 
   async setActive (active, args) {
     await this.tree.treeViewLoaded;
+    const wasLoaded = this.loaded;
     let changed;
     debug(`NodeView.setActive(${active}): ${this.toLine()}`, this);
     if (args.localOverride) changed = true;
     else changed = await super.setActive(active, args);
     // abort on no-op
     if (! changed) return;
+
+    // Normal tab switches only change row state.  Preserve the existing
+    // title, stats, and favicon DOM instead of rebuilding the entire row.
+    if (wasLoaded === this.loaded) {
+      this.$syncActiveStateClasses();
+    } else {
+      // Activation can repair stale loaded state.  Refresh ancestor counts
+      // and loaded-branch decorations in that uncommon case.
+      this.$refreshAncestry();
+    }
 
     // move the cursor maybe
     // if we're in window mode and the new active tab is in OUR window
@@ -951,7 +966,6 @@ export class NodeView extends Node {
             if (activeTab !== winNode.prevActiveTab)
               await this.tree.expandOverride(winNode.prevActiveTab, null);
           }
-          if (activeTab.hasKids()) activeTab.$renderChildren();
           // wait for expansion changes to take effect before moving cursor
           // (otherwise scrolling is glitchy sometimes)
           setTimeout(() => {
@@ -963,7 +977,10 @@ export class NodeView extends Node {
         }
       }
     }
-    return await this.renderIfChanged(changed);
+    if (this.isCursor()) {
+      this.$renderDetails(this.tree.$detailsBox);
+    }
+    return changed;
   }
 
 }  // end class NodeView

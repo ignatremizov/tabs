@@ -1100,6 +1100,10 @@ export class Bkgd {
 
   async onWindowFocusChanged (windowId) {
     debug(`bkgd.onWindowFocusChanged(${windowId})`);
+    // WINDOW_ID_NONE means the browser application lost OS focus.  Keep the
+    // most recently focused browser window active so session views do not
+    // collapse merely because the user Alt+Tabbed to another application.
+    if ((! Number.isInteger(windowId)) || (windowId < 0)) return;
     await this.treeLoaded;
     return await this.runSerializedBrowserMutation(async () => {
       let focusedNode = null;

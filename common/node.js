@@ -2050,14 +2050,49 @@ export class Node {
     return changed;
   }
 
-  async setActiveTab (args, runMutation) {
+  async applyActiveTabId (activeTabId, args, runMutation) {
+    const applyActiveState = async () => {
+      if (this.tree.nodes[this.id] !== this) return false;
+      // Read the tree inside the mutation boundary.  A tab may have closed
+      // while the browser event was waiting for an earlier mutation.
+      const tabList = this.getLoadedAndUnloadedTabs();
+      const activeTabNode = tabList.find(
+        (node) => activeTabId === node.tabId
+      );
+      if (! activeTabNode) {
+        // Vivaldi panels can briefly become active while the current tab is
+        // closing.  Window teardown can produce the same harmless race.
+        if (! this.tree.tabBlacklist[`${activeTabId}`]) {
+          warn(`Node.setActiveTab(): can't find tab "${activeTabId}"`);
+        }
+      }
+      return await this.applyActiveTabUpdates(
+        tabList,
+        activeTabNode,
+        args
+      );
+    };
+
+    if (runMutation) return await runMutation(applyActiveState);
+    return await applyActiveState();
+  }
+
+  async setActiveTab (args, runMutation, activeTabId) {
     // this syncs a window node's 'active' states based on browser window state
-    // changes are debounced, executed only after changes stop happening
     // skip no-op cases
     if (! args) return;
     // this should only be called on window nodes
     if (! this.isWindow()) return;
 
+    // tabs.onActivated already identifies the new tab.  Apply that event
+    // directly so rapid Ctrl+Tab navigation remains visually synchronized
+    // and does not need another browser API round trip.
+    if ((undefined !== activeTabId) && (null !== activeTabId)) {
+      return await this.applyActiveTabId(activeTabId, args, runMutation);
+    }
+
+    // Callers without an event tab ID must query the browser.  Debounce these
+    // fallback reconciliations because they are not latency-sensitive.
     // handle the changes after no events have occurred for this long
     // (handle 1st event quickly, then debounce repeated events
     //  until they stop)
@@ -2100,33 +2135,11 @@ export class Node {
           warn(`Node.setActiveTab(${this.windowId}) query failed: ${err}`);
         }
         if (tab) {
-          const applyActiveState = async () => {
-            if (this.tree.nodes[this.id] !== this) return;
-            // Read the tree inside the mutation boundary.  A tab may have
-            // closed while the debounced browser query was pending.
-            const tabList = this.getLoadedAndUnloadedTabs();
-            // find the newly-active tab node
-            let tabNode;
-            for (const node of tabList) {
-              if (tab.id === node.tabId) tabNode = node;
-            }
-            if (! tabNode) {
-              // bugfix: Vivaldi panels are briefly "active" when current tab closes
-              // and they generate spurious "setActiveTab" events
-              // so ignore errors on those
-              // also, this may be trying to set the active tab on a window
-              // after the window was closed, which isn't a problem
-              if (! this.tree.tabBlacklist[`${tab.id}`])
-                warn(`Node.setActiveTab(): can't find tab "${tab.id}"`);
-            }
-
-            if (await this.applyActiveTabUpdates(tabList, tabNode, args)) {
-              changed = true;
-            }
-          };
-
-          if (runMutation) await runMutation(applyActiveState);
-          else await applyActiveState();
+          changed = await this.applyActiveTabId(
+            tab.id,
+            args,
+            runMutation
+          );
         }
       } catch (err) {
         failure = err;

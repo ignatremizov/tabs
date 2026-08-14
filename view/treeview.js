@@ -822,34 +822,37 @@ export class TreeView extends Tree {
     if (! node) return;
     //debug(`${expand}, ${node.toLine()}`)
     const viewRoot = this.viewRoot;
+    const path = [];
+    let pathNode = node;
+    while (pathNode && pathNode.isChildOf(viewRoot)) {
+      path.push(pathNode);
+      pathNode = pathNode.parent;
+    }
+    const wasExpanded = new Map(
+      path.map((pathEntry) => [pathEntry, pathEntry.isExpanded()])
+    );
+
     if (expand) {
       this.expandOverrides[node.id] = node;
-      // force expand
-      const origNode = node;
-      node = node.parent;
-      // override a node and all its parents
-      while (node && node.isChildOf(viewRoot)) {
-        //debug(`override ${node.toLine()}`);
-        await node.setExpanded(true, {
-          reason: 'override', localOverride: true,
-        });
-        node = node.parent;
-      }
     }
     //else if (false === expand) {
     //}
     else if (this.expandOverrides[node.id]) {
-      // TODO: redraw affected node
       delete this.expandOverrides[node.id];
-      let n = node;
-      // un-override a node and its parents,
-      // until it intersects another override's parents
-      while (n && n.isChildOf(viewRoot) && (! n.isExpandedOverride())) {
-        await n.setExpanded(n.expanded, {
-          reason: 'override', localOverride: true,
-        });
-        n = n.parent;
-      }
+    }
+
+    // Redraw only when this override changed effective expansion.  Rendering
+    // the highest changed node updates the whole affected subtree once;
+    // redrawing every shared ancestor made tab switches visibly flicker.
+    const changedPath = path.filter(
+      (pathEntry) => wasExpanded.get(pathEntry) !== pathEntry.isExpanded()
+    );
+    const redrawNode = changedPath[changedPath.length - 1];
+    if (redrawNode) {
+      await redrawNode.setExpanded(redrawNode.isExpanded(), {
+        reason: 'override',
+        localOverride: true
+      });
     }
   }
 
