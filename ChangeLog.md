@@ -19,8 +19,10 @@ Highlights:
   its children immediately, while deleting a collapsed subtree asks for
   confirmation.
 - Combined highlighted-node load and unload into one configurable toggle
-  action.  Shortcut names now use consistent casing, and common appearance
-  settings once again offer presets plus direct custom input.
+  action and one hover control.  Its Shift variant restores missing
+  `wasLoaded` tabs before falling back to the normal toggle.  Shortcut names
+  now use consistent casing, and common appearance settings once again offer
+  presets plus direct custom input.
 - Sidebar cursor and scroll state are remembered independently for each browser
   window and Session/Window scope.
 - Merged upstream features including pinned tabs, search, branch load/unload,

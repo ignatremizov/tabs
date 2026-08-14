@@ -64,7 +64,7 @@
       <code>Shift+Ctrl+W</code> .</li>
     <li>Hover the mouse over the window row in the tree view, and click the
       <span class="hover-menu-button unload-button">U</span>
-      button (<b>U</b>nload) in the hover menu.</li>
+      load/unload button in the hover menu.</li>
     <li>With the sidepanel focused, and the cursor on the tree row, press the
       <code>U</code> key on the keyboard.</li>
     <li>With the cursor on the tree row, press the
@@ -82,16 +82,19 @@
   </p>
 
   <p>
-  Oh, and if you want to change a tab between
+  Unloading an open tab records it as
+  "<b class="row was-loaded"><span class="url-title">wasLoaded</span></b>".
+  Press <code>Shift+U</code> on a partially restored branch to load its
+  remaining <code>wasLoaded</code> tabs without disturbing tabs which are
+  already open.  When none are missing, <code>Shift+U</code> behaves like the
+  normal <code>U</code> load/unload toggle.
+  </p>
+
+  <p>
+  A plain
   "<b class="row"><span class="url-title">unloaded</span></b>"
-  and
-  "<b class="row was-loaded"><span class="url-title">wasLoaded</span></b>"
-  states, just keep pressing the
-  <span class="hover-menu-button unload-button">U</span>
-  or
-  <span class="hover-menu-button unload-button unloaded">U</span>
-  button.  This lets you manually set which tabs will
-  be auto-loaded when you open the window.
+  tab is intentionally excluded from smart restore.  Load and then unload it
+  if you want it included in the next <code>wasLoaded</code> restore.
   </p>
 
   <h2>Example</h2>

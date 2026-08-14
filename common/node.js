@@ -722,12 +722,6 @@ export class Node {
     return false;
   }
 
-  isUnloadable () {
-    if (this.loaded || this.wasLoaded) return true;
-    //if (this.url) return true;
-    return false;
-  }
-
   isMarkable () {
     if (this.isRoot()) return false;
     //if (this.isWindow()) return false;  // seems unnecessary

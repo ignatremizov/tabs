@@ -911,7 +911,6 @@ foo {
 }
 
 #hover-menu div:hover,
-#hover-menu .unload-button.unloaded:hover,
 .hover-menu-button:hover {
   background: var(--hover-menu-button-hover-bg);
   border-radius: 6px;
@@ -933,10 +932,6 @@ foo {
 #hover-menu .unload-button, .unload-button {
   /* click to unload */
   color: var(--tab-unloaded-fg);
-}
-#hover-menu .unload-button.unloaded, .unload-button.unloaded {
-  /* click to set "wasLoaded" state */
-  color: var(--tab-was-loaded-fg);
 }
 
 #hover-menu .task-button, .task-button {

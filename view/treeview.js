@@ -521,8 +521,11 @@ export class TreeView extends Tree {
   }
 
   updateHoverMenuLabels () {
-    this.setHoverMenuButtonLabel(this.$hoverMenuUnload, 'toggleLoad', 'U');
-    this.setHoverMenuButtonLabel(this.$hoverMenuLoad, 'toggleLoad', 'U');
+    this.setHoverMenuButtonLabel(
+      this.$hoverMenuToggleLoad,
+      'toggleLoad',
+      'U'
+    );
     this.setHoverMenuButtonLabel(this.$hoverMenuTask, 'taskEdit', 'T');
     this.setHoverMenuButtonLabel(this.$hoverMenuEdit, 'editNode', 'E');
     this.setHoverMenuButtonLabel(this.$hoverMenuMark, 'toggleMarked', 'M');
@@ -2352,23 +2355,14 @@ export class TreeView extends Tree {
       || (cursor.isLoadedTab() && (! cursor.isActive()))
     ) return this.action_loadOrEditNode(event, false);
 
-    // gather some data about the kids (god that sounds wrong)
-    const loadedTabs = cursor.findNodes(
-      (n) => n.isLoadedTab(), (n) => (! n.isWindow())
-    );  loadedTabs.reverse();
-    if (cursor.isLoadedTab()) loadedTabs.push(cursor);
-
-    const wasLoadedTabs = cursor.findNodes(
-      (n) => n.isWasLoadedTab(), (n) => (! n.isWindow())
-    );  wasLoadedTabs.reverse();
-    if (cursor.isWasLoadedTab()) wasLoadedTabs.push(cursor);
+    const wasLoadedTabs = this.getWasLoadedTabs(cursor);
 
     const unloadedTabs = cursor.findNodes(
       (n) => n.isUnloadedTab(), (n) => (! n.isWindow())
     );  unloadedTabs.reverse();
     if (cursor.isUnloadedTab()) unloadedTabs.push(cursor);
 
-    //debug('loadedTabs, wasLoadedTabs, unloadedTabs:', loadedTabs, wasLoadedTabs, unloadedTabs);
+    //debug('wasLoadedTabs, unloadedTabs:', wasLoadedTabs, unloadedTabs);
 
     const noUnloadedTabs = ((wasLoadedTabs.length <= 0)
       && (unloadedTabs.length <= 0));
@@ -2443,32 +2437,7 @@ export class TreeView extends Tree {
       else this.setStatus(`failed to load ${cursor.toLine()}`);
     }
     else if ('all' === actionStyle) {
-      let numSucceeded = 0;
-      let numFailed = 0;
-      for (const tabNode of queue) {
-        const success = await tabNode.load({ reason: 'userAction' });
-        if (success) numSucceeded ++;
-        else numFailed ++;
-      }
-      const failText = (numFailed ? `, ${numFailed} failed` : '');
-      this.setStatus(`loaded ${numSucceeded} nodes${failText}`);
-
-      // setActive tab events can get confused when loading so much so fast,
-      // so do it explicitly afterward
-      const lastLoaded = queue[queue.length - 1];
-      if (lastLoaded) {
-        const winNode = lastLoaded.getWindowNode();
-        if (winNode) {
-          setTimeout(() => {
-            this.runUiAction(
-              'Active tab refresh',
-              () => winNode.setActiveTab({
-                reason: 'action_loadNodeBatch'
-              })
-            );
-          }, 500);
-        }
-      }
+      await this.loadTabQueue(queue);
     }
   }
 
@@ -2481,6 +2450,49 @@ export class TreeView extends Tree {
       cursor.isLoaded() || cursor.hasLoadedTabs();
     if (hasLoadedContent) return this.action_unloadNode(event);
     return this.action_loadNode(event);
+  }
+
+  getWasLoadedTabs (cursor) {
+    const tabs = cursor.findNodes(
+      (node) => node.isWasLoadedTab(),
+      (node) => (! node.isWindow())
+    );
+    tabs.reverse();
+    if (cursor.isWasLoadedTab()) tabs.push(cursor);
+    return tabs;
+  }
+
+  async loadTabQueue (queue) {
+    let numSucceeded = 0;
+    let numFailed = 0;
+    const loadedTabs = [];
+    for (const tabNode of queue) {
+      const success = await tabNode.load({ reason: 'userAction' });
+      if (success) {
+        numSucceeded ++;
+        loadedTabs.push(tabNode);
+      }
+      else numFailed ++;
+    }
+    const failText = (numFailed ? `, ${numFailed} failed` : '');
+    this.setStatus(`loaded ${numSucceeded} nodes${failText}`);
+
+    // setActive tab events can get confused when loading so much so fast,
+    // so do it explicitly afterward
+    const lastLoaded = loadedTabs[loadedTabs.length - 1];
+    if (lastLoaded) {
+      const winNode = lastLoaded.getWindowNode();
+      if (winNode) {
+        setTimeout(() => {
+          this.runUiAction(
+            'Active tab refresh',
+            () => winNode.setActiveTab({
+              reason: 'action_loadNodeBatch'
+            })
+          );
+        }, 500);
+      }
+    }
   }
 
   async action_loadOrEditNode (event, allowEdit = true) {
@@ -2551,82 +2563,16 @@ export class TreeView extends Tree {
     return result && ('OK' === result.button);
   }
 
-  async batchLoadCollapsed (cursor, event, allowEdit, forceNoDialog = false) {
-    if (! forceNoDialog) return this.action_loadNode(event);
-
-    const queue = cursor.findNodes(
-      (node) => node.isUnloadedTab(),
-      (node) => ! node.isWindow()
-    );
-    if (cursor.isUnloadedTab()) queue.push(cursor);
-    if (cursor.isUnloadedWindow()) {
-      await cursor.load({ reason: 'userAction' });
-    } else {
-      for (const tabNode of queue.reverse()) {
-        await tabNode.load({ reason: 'userAction' });
-      }
-    }
-    this.setStatus(`loaded ${Math.max(1, queue.length)} tabs`);
-  }
-
-  // Force load or unload without confirmation dialog
-  // Acts like load/unload, but never asks for confirmation.
+  // Complete an interrupted/partial restore before doing a normal toggle.
+  // Keep the legacy action name so existing custom key bindings still work.
   async action_forceToggleLoad (event) {
     debug('action_forceToggleLoad');
-    let cursor = this.whichCursor(event);
+    const cursor = this.whichCursor(event);
     if (! cursor) return;
 
-    const hasLoadedContent =
-      cursor.isLoaded() || cursor.hasLoadedTabs();
-
-    if (! hasLoadedContent) {
-      // Load: use batch load but skip dialog (pass forceNoDialog=true)
-      return this.batchLoadCollapsed(cursor, event, false, true);
-    } else {
-      // Unload: batch unload without dialog
-      return this.batchUnloadCollapsed(cursor, true);
-    }
-  }
-
-  // Helper: batch unload collapsed node's children
-  async batchUnloadCollapsed (cursor, skipDialog = false) {
-    if (cursor.isCollapsed() && cursor.hasKids()) {
-      const loadedTabs = cursor.getLoadedTabs();
-      const count = loadedTabs.length + (cursor.isLoaded() ? 1 : 0);
-      if (count === 0) {
-        if (cursor.isWindow()) cursor.keepTabsOnClose = true;
-        await cursor.unload({
-          reason: 'userAction',
-          wasLoaded: cursor.isWindow() ? true : undefined,
-          keepTabsOnClose: cursor.isWindow()
-        });
-        this.setStatus(`unloaded ${cursor.toLine()}`);
-        return;
-      }
-      if (!skipDialog && (count > 1)) {
-        const confirmed = await this.confirmDialog('Unload Tabs', `Unload ${count} tabs?`);
-        if (! confirmed) return;
-      }
-      const unloadReason = cursor.isWindow() ? 'onWindowRemoved' : 'userAction';
-      for (const tab of loadedTabs) {
-        await tab.unload({ reason: unloadReason });
-      }
-      if (cursor.isWindow()) cursor.keepTabsOnClose = true;
-      await cursor.unload({
-        reason: 'userAction',
-        wasLoaded: cursor.isWindow() ? true : undefined,
-        keepTabsOnClose: cursor.isWindow()
-      });
-      this.setStatus(`unloaded ${count} tabs`);
-    } else {
-      if (cursor.isWindow()) cursor.keepTabsOnClose = true;
-      await cursor.unload({
-        reason: 'userAction',
-        wasLoaded: cursor.isWindow() ? true : undefined,
-        keepTabsOnClose: cursor.isWindow()
-      });
-      this.setStatus(`unloaded ${cursor.toLine()}`);
-    }
+    const wasLoadedTabs = this.getWasLoadedTabs(cursor);
+    if (wasLoadedTabs.length) return this.loadTabQueue(wasLoadedTabs);
+    return this.action_toggleLoad(event);
   }
 
   action_toggleExpanded (event) {
@@ -3405,11 +3351,13 @@ export class TreeView extends Tree {
       _this.$hoverMenu.append($div);
       return $div;
     }
-    if (! this.$hoverMenuUnload) {
-      this.$hoverMenuUnload = makeBtn(this, 'unload-button', 'U', 'unloadNode');
-    }
-    if (! this.$hoverMenuLoad) {
-      this.$hoverMenuLoad = makeBtn(this, 'load-button', 'L', 'loadNode');
+    if (! this.$hoverMenuToggleLoad) {
+      this.$hoverMenuToggleLoad = makeBtn(
+        this,
+        'unload-button',
+        'U',
+        'toggleLoad'
+      );
     }
     if (! this.$hoverMenuTask) {
       this.$hoverMenuTask = makeBtn(this, 'task-button', 'T', 'taskEdit');
@@ -3454,24 +3402,27 @@ export class TreeView extends Tree {
       / zoomLevel;
     this.$hoverMenu.style.top = String(hTop) + 'px';
 
-    // show or hide the 'unload' button
-    if (mouseNode.isUnloadable() || mouseNode.hasLoadedTabs()) {
-      this.$hoverMenuUnload.style.display = 'inline-block';
-      this.$hoverMenuUnload.classList.remove('unloaded');
+    // Show one state-based load/unload action.  Collapsed branch behavior is
+    // controlled by the same settings as the keyboard toggle.
+    const willUnload =
+      mouseNode.isLoaded() || mouseNode.hasLoadedTabs();
+    const canLoad = (
+      mouseNode.isUnloadedTab()
+      || mouseNode.isUnloadedWindow()
+      || mouseNode.isBatchLoadable()
+    );
+    if (willUnload || canLoad) {
+      this.$hoverMenuToggleLoad.style.display = 'inline-block';
+      this.$hoverMenuToggleLoad.classList.toggle(
+        'unload-button',
+        willUnload
+      );
+      this.$hoverMenuToggleLoad.classList.toggle(
+        'load-button',
+        (! willUnload)
+      );
     }
-    else if (mouseNode.isUnloadedTab()) {
-      this.$hoverMenuUnload.style.display = 'inline-block';
-      this.$hoverMenuUnload.classList.add('unloaded');
-    }
-    else this.$hoverMenuUnload.style.display = 'none';
-
-    // show or hide the 'load' button
-    const loadable = mouseNode.isBatchLoadable();
-    if (loadable) {
-      this.$hoverMenuLoad.style.display = 'inline-block';
-      this.$hoverMenuLoad.classList.remove('loaded');
-    }
-    else this.$hoverMenuLoad.style.display = 'none';
+    else this.$hoverMenuToggleLoad.style.display = 'none';
 
     // show or hide the 'task' button
     if (! mouseNode.isRoot())

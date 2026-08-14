@@ -79,7 +79,10 @@ export const keyBindingActions = [
   { action: 'loadOrEditNode', label: 'Open/load node (or edit label)' },
   { action: 'deleteNode', label: 'Delete node' },
   { action: 'toggleLoad', label: 'Load/unload node or branch' },
-  { action: 'forceToggleLoad', label: 'Force load/unload (skip prompts)' },
+  {
+    action: 'forceToggleLoad',
+    label: 'Restore missing tabs, otherwise load/unload'
+  },
   { action: 'addNodeAsNextVisibleRow', label: 'Add node below' },
   { action: 'addNodeAsPrevVisibleRow', label: 'Add node above' },
   { action: 'wrapNodeInWindow', label: 'Wrap in window / convert label' },

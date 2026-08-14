@@ -8158,7 +8158,8 @@ test('TreeView keeps task editing available for existing checkboxes', () => {
     style: {},
     classList: {
       add: () => {},
-      remove: () => {}
+      remove: () => {},
+      toggle: () => {}
     }
   });
   tree.cfg.treeViewZoomLevel = 1;
@@ -8167,8 +8168,7 @@ test('TreeView keeps task editing available for existing checkboxes', () => {
     getBoundingClientRect: () => ({ top: 0 })
   };
   tree.$hoverMenu = makeButton();
-  tree.$hoverMenuUnload = makeButton();
-  tree.$hoverMenuLoad = makeButton();
+  tree.$hoverMenuToggleLoad = makeButton();
   tree.$hoverMenuTask = makeButton();
   tree.$hoverMenuMark = makeButton();
   tree.$hoverMenuWindow = makeButton();
@@ -8176,9 +8176,10 @@ test('TreeView keeps task editing available for existing checkboxes', () => {
   tree.mouseNode = {
     hasCheckbox: () => true,
     isRoot: () => false,
-    isUnloadable: () => false,
+    isLoaded: () => false,
     hasLoadedTabs: () => false,
     isUnloadedTab: () => false,
+    isUnloadedWindow: () => false,
     isBatchLoadable: () => false,
     isMarkable: () => false,
     isDeletable: () => true
@@ -8190,6 +8191,47 @@ test('TreeView keeps task editing available for existing checkboxes', () => {
     'The T action should remain visible so an existing checkbox can be edited');
 });
 
+test('TreeView renders one state-based hover load control', () => {
+  const appended = [];
+  const doc = {
+    createElement: () => {
+      const classes = new Set();
+      return {
+        style: {},
+        classList: {
+          add: (...names) => names.forEach((name) => classes.add(name)),
+          remove: (...names) => names.forEach((name) => classes.delete(name)),
+          toggle: (name, force) => {
+            if (force) classes.add(name);
+            else classes.delete(name);
+          },
+          contains: (name) => classes.has(name)
+        },
+        addEventListener: () => {}
+      };
+    }
+  };
+  const tree = new TreeView({
+    isInert: true,
+    document: doc,
+    window: null
+  });
+  tree.$hoverMenu = {
+    append: (button) => appended.push(button)
+  };
+
+  tree.$renderHoverMenu();
+
+  assertEqual(appended.length, 6,
+    'The hover menu should render one load toggle plus five other actions');
+  assertEqual(tree.$hoverMenuToggleLoad, appended[0],
+    'The first hover action should be the state-based load toggle');
+  assertEqual(tree.$hoverMenuLoad, undefined,
+    'A second directional load control should not be created');
+  assertEqual(tree.$hoverMenuUnload, undefined,
+    'A second directional unload control should not be created');
+});
+
 test('TreeView applies canonical and legacy toggle-load bindings', () => {
   const tree = new TreeView({
     isInert: true,
@@ -8199,7 +8241,8 @@ test('TreeView applies canonical and legacy toggle-load bindings', () => {
 
   tree.applyKeyBindings({
     loadNode: '',
-    unloadNode: 'q'
+    unloadNode: 'q',
+    forceToggleLoad: 'Shift+Q'
   });
 
   assertEqual(tree.keyBindings.Q, 'toggleLoad',
@@ -8208,14 +8251,13 @@ test('TreeView applies canonical and legacy toggle-load bindings', () => {
     'A custom combined key should replace its default');
   assertEqual(tree.getKeyBindingForAction('toggleLoad'), 'Q',
     'Button labels should see the effective combined binding');
+  assertEqual(tree.keyBindings['Shift+Q'], 'forceToggleLoad',
+    'Existing smart-toggle overrides should remain assigned');
 
-  tree.$hoverMenuLoad = {};
-  tree.$hoverMenuUnload = {};
+  tree.$hoverMenuToggleLoad = {};
   tree.updateHoverMenuLabels();
-  assertEqual(tree.$hoverMenuLoad.innerText, 'Q',
-    'The load button should show the combined shortcut');
-  assertEqual(tree.$hoverMenuUnload.innerText, 'Q',
-    'The unload button should show the combined shortcut');
+  assertEqual(tree.$hoverMenuToggleLoad.innerText, 'Q',
+    'The single hover toggle should show the combined shortcut');
 });
 
 test('TreeView toggle-load chooses direction from loaded content',
@@ -8252,6 +8294,63 @@ async () => {
   await tree.action_toggleLoad({ type: 'keydown' });
   assertEqual(action, 'unload',
     'An open leaf should unload');
+});
+
+test('TreeView smart load restores missing tabs before normal toggle',
+async () => {
+  const tree = new TreeView({
+    isInert: true,
+    document: null,
+    window: null
+  });
+  const alreadyLoaded = {
+    id: 'loaded',
+    isWasLoadedTab: () => false
+  };
+  const firstMissing = {
+    id: 'first-missing',
+    isWasLoadedTab: () => true
+  };
+  const secondMissing = {
+    id: 'second-missing',
+    isWasLoadedTab: () => true
+  };
+  const cursor = {
+    findNodes: (filter) => [
+      alreadyLoaded,
+      firstMissing,
+      secondMissing
+    ].filter(filter),
+    isWasLoadedTab: () => false
+  };
+  let loadedQueue;
+  let toggles = 0;
+  tree.whichCursor = () => cursor;
+  tree.loadTabQueue = async (queue) => {
+    loadedQueue = queue;
+  };
+  tree.action_toggleLoad = async () => {
+    toggles += 1;
+  };
+
+  await tree.action_forceToggleLoad({ type: 'keydown' });
+
+  assertEqual(
+    loadedQueue.map((node) => node.id).join(','),
+    'second-missing,first-missing',
+    'Smart load should restore only missing wasLoaded tabs in load order'
+  );
+  assertEqual(toggles, 0,
+    'Missing restore tabs should take priority over toggling loaded content');
+
+  cursor.findNodes = () => [];
+  loadedQueue = null;
+  await tree.action_forceToggleLoad({ type: 'keydown' });
+
+  assertEqual(loadedQueue, null,
+    'A complete branch should not start another restore batch');
+  assertEqual(toggles, 1,
+    'A complete branch should fall through to the normal toggle');
 });
 
 test('TreeView reuses loaded config and batches window settings',
