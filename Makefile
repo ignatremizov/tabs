@@ -2,7 +2,9 @@
 # Copyright (C) 2025 Selene ToyKeeper & Ignat Remizov
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
-.PHONY: all help firefox-zip firefox-zip-current chrome-zip chrome-dir firefox-sign tag test test-node todo coverage v
+.PHONY: all help firefox-zip firefox-zip-current chrome-zip \
+	chrome-zip-current chrome-dir firefox-sign tag test test-node todo \
+	coverage v
 
 ifneq ($(filter v,$(MAKECMDGOALS)),)
 VERBOSE=1
@@ -12,7 +14,10 @@ endif
 v:
 	@:
 
-all: firefox-zip chrome-zip
+all:
+	./bin/update-version.sh
+	./make-zip.sh firefox
+	./make-zip.sh chromium
 
 help:
 	@echo "Available targets:"
@@ -20,6 +25,7 @@ help:
 	@echo "  firefox-zip  - Build Firefox extension zip file"
 	@echo "  firefox-zip-current - Build Firefox zip with current manifest version"
 	@echo "  chrome-zip   - Build Chrome/Chromium extension zip file"
+	@echo "  chrome-zip-current - Build Chromium zip with current manifest version"
 	@echo "  chrome-dir   - Create dist/chromium for Load Unpacked"
 	@echo "  firefox-sign - Sign Firefox extension via AMO (requires .env JWT_ISSUER/JWT_SECRET)"
 	@echo "  tag          - Bump version tag (default: patch) or set a tag"
@@ -40,6 +46,9 @@ firefox-zip-current:
 
 chrome-zip:
 	./bin/update-version.sh
+	./make-zip.sh chromium
+
+chrome-zip-current:
 	./make-zip.sh chromium
 
 chrome-dir: chrome-zip
