@@ -5,66 +5,305 @@ What changed, and when?  You know the drill.
 
 # 0.0.3 (2026-08-15)
 
-This release merges upstream through r0.1.181.0, then restores and hardens the
-fork's tab-management workflow.
+This is the cumulative fork-versus-upstream inventory for 0.0.3.  It compares
+the fork with upstream `r0.1.181.0` (`e0031c2`) and includes work first shipped
+in earlier 0.0.x fork builds.  The upstream release history is retained below;
+features described there, such as search and the original "Pinned" branch
+workflow, are part of the baseline rather than fork additions.  This covers
+every functional, configuration, storage, build, test, documentation, and
+project-policy difference which remains in the fork; features implemented in
+the fork first but later absorbed by upstream are omitted unless the fork
+still extends them.  Attribution and whitespace-only edits are not listed
+individually.
 
-Highlights:
+## Identity, browser support, and distribution
 
-- Added **node-only moves**: `Ctrl`-drag a parent to promote its children and
-  move only the selected node.  `Ctrl+Shift+ArrowLeft` promotes children
-  without moving the parent.
-- Added `Ctrl+ArrowUp` and `Ctrl+ArrowDown` navigation to jump between sibling
-  branches or their parent instead of stepping through every visible row.
-- Restored state-based deletion defaults: deleting an expanded parent promotes
-  its children immediately, while deleting a collapsed subtree asks for
-  confirmation.
-- Combined highlighted-node load and unload into one configurable toggle
-  action and one hover control.  Its Shift variant restores missing
-  `wasLoaded` tabs before falling back to the normal toggle.  Shortcut names
-  now use consistent casing, and common appearance settings once again offer
-  presets plus direct custom input.
-- Sidebar cursor and scroll state are remembered independently for each browser
-  window and Session/Window scope.
-- Merged upstream features including pinned tabs, search, branch load/unload,
-  Firefox collapsed-tab hiding, expanded appearance settings, and current
-  browser compatibility fixes.
+- Changed the extension identity, author, homepage, and user-facing name to
+  **Ignat's copy of TK's Tree Style Tab Outliner**.
+- Assigned a fork-specific stable Firefox extension ID so AMO-signed builds
+  install normally and update the same profile instead of requiring Temporary
+  Extensions.
+- Added Firefox's `sessions` permission for durable tab and window identity
+  across crash restore, and raised the Firefox minimum version to 142.
+- Replaced separate global Load and Unload commands with one
+  `toggleLoad` command.  The default global binding is `Alt+L`.
+- Compared dotted browser versions numerically, avoiding incorrect Firefox /
+  Zen detection at version boundaries.
+- Delegated Chromium toolbar-button opening to the browser's side-panel API
+  across old and current API variants, and removed the ineffective attempt to
+  call a nonexistent side-panel layout setter.
 
-Performance:
+## Tree organization and movement
 
-- Rebuilt the sidebar through detached fragments and created DOM only for
+- Added **node-only moves**.  Starting a drag with `Ctrl` promotes the node's
+  children into its old position and moves only the selected node.  The entire
+  operation is atomic and restores the old layout if the destination is
+  invalid or a later move step fails.
+- Added a standalone **Promote children** action, default
+  `Ctrl+Shift+ArrowLeft`, so a parent can be detached before a normal drag or
+  keyboard move.
+- Made browser-native tab-strip moves node-only too.  Moving a parent tab in
+  Firefox or Chromium no longer drags its saved descendants to the new
+  location.
+- Added `Ctrl+ArrowUp` / `Ctrl+ArrowDown` navigation to jump to the previous
+  sibling or parent and to the next sibling after the current subtree,
+  including siblings found by climbing through ancestors.
+- Made `Shift+ArrowUp` / `Shift+ArrowDown` nesting into expanded siblings
+  configurable, added inverse-nesting shortcuts with `Shift+Alt+ArrowUp` /
+  `Shift+Alt+ArrowDown`, and retained expanded-sibling nesting as the default.
+- Added a dedicated `W` / **Wrap in window** shortcut and hover action.  It can
+  wrap a tab or branch in a new window or directly invoke heading/window
+  conversion while preserving loaded tabs, complementing upstream's edit and
+  automatic drag conversions.
+- Added options to open a new browser window when moving a subtree to the root
+  and to wrap the top-most ungrouped ancestor when loading a root-level tab.
+  Both are disabled by default.
+- Preserved loaded window containers and proxies during root moves, nesting,
+  promotion, conversion, and cross-window moves.
+- Added an option to stop automatically reordering newly created browser tabs
+  when the browser already places them correctly.  It remains enabled by
+  default, and treats pinned and unpinned tab strips separately.
+- Pasted marked nodes in tree order instead of mark order.  Plain-text drops
+  into notes can now prepend or append, according to an option; prepend is the
+  default.
+
+## Deletion and window lifecycle
+
+- Split branch-deletion policy by presentation state.  By default, deleting an
+  **expanded** parent deletes only that parent and promotes its children, while
+  deleting a **collapsed** parent asks before deleting the subtree.  Both
+  policies remain configurable.
+- Made delete-with-child-promotion one background transaction.  Removing a
+  restore wrapper can no longer race with individual child deletes and
+  recursively erase the subtree it was meant to preserve.
+- Added window-aware deletion.  An expanded loaded window can be closed while
+  retaining its tabs as `wasLoaded`; an unloaded window is unwrapped; nested
+  loaded windows merge into or are preserved under a suitable window
+  container.  Collapsed loaded windows retain a confirmation step before
+  their tabs are deleted.
+- Preserved saved tab nodes when unloading or closing windows and repaired
+  empty-window cleanup so stale asynchronous callbacks cannot resurrect
+  deleted nodes.
+
+## Loading, shortcuts, and keyboard control
+
+- Replaced the in-panel Load and Unload actions with one configurable
+  **Load / unload** toggle and one hover-menu control.  The default in-panel
+  key is `U`; the existing expanded/collapsed branch policies still determine
+  whether only the selected node or all eligible descendants are affected.
+- Added a smart Shift variant, default `Shift+U`.  It first loads only missing
+  `wasLoaded` tabs below the selected node without disturbing tabs already
+  open.  If none are missing, it falls back to the normal load/unload toggle.
+- Added an Options editor for all in-panel keyboard actions, including reset
+  to defaults, conflict replacement, and clearing a binding.
+- Canonicalized shortcut display and storage: letters and function keys use
+  uppercase, while named keys use forms such as `Shift`, `Ctrl`, `ArrowUp`,
+  `PageDown`, and `Escape`.  Older lowercase custom bindings continue to
+  normalize to the same action.
+- Added an option controlling whether Enter or double-click on an already
+  active tab refocuses its browser window or edits the node.  Editing remains
+  the default.
+- Made the PageUp / PageDown jump size configurable, with a default of 20
+  visible rows.
+
+## Sidebar state, interaction, and appearance
+
+- Added a configurable default view scope: Session, Window, or Auto.  Auto uses
+  Session scope for the first browser window and Window scope for later ones.
+- Remembered Details, Notes-only, or Plain mode independently for each browser
+  window.
+- Saved presentation state in browser session storage, keyed by browser window,
+  view type, and scope.  Cursor node, active-node identity, raw scroll
+  position, first visible row, and row offset survive closing and reopening
+  the sidebar without modifying the tree database.
+- Restored the cursor to the current active tab when the saved cursor is stale,
+  while otherwise preserving the exact viewport during tree changes,
+  deletions, and sidebar reconstruction.
+- Preserved upstream's focused-window tracking through temporary
+  `WINDOW_ID_NONE` events during `Alt+Tab`, so the most recently focused
+  Session window no longer disappears or collapses.
+- Applied active-tab changes directly to existing rows so `Ctrl+Tab` /
+  `Ctrl+Shift+Tab` cursor tracking is immediate and row labels do not flicker.
+- Cancelled superseded delayed edge-scroll requests, preventing the sidebar
+  from jumping back after unloading the active tab or making another cursor
+  move.
+- Added preset selectors plus direct custom input for font family, font size,
+  row height, and indentation; added compact mode, favicon visibility, a row
+  hover color, stronger active-window styling, and configurable cursor scroll
+  margin.
+- Rendered stored favicons in the tree and added an optional one-transaction
+  backfill for missing icons.  The Options page reports progress and refreshes
+  open views when backfill completes.
+- Extended upstream's pin marker to reflect separately persisted
+  browser-native pins, with accessible labeling and a dedicated theme color;
+  stabilized hover-menu sizing across custom row heights and removed the
+  redundant right-side scrollbar gutter.
+- Restored task editing for nodes which already have a checkbox and made
+  overlapping dialogs and asynchronous UI actions consistently lock input,
+  close, and report failures.
+- Made theme setup idempotent and added safe fallback behavior when a selected
+  theme is unavailable.
+
+## Firefox restore, pinned tabs, and browser reconciliation
+
+- Stored node IDs in Firefox tab and window session values.  Firefox crash /
+  Restore Tabs now reconnects restored browser objects to their previous tree
+  nodes instead of relying only on transient browser IDs.
+- Rebuilt startup matching to prefer session identity, then direct browser
+  identity, normalized URL, pinned state, ancestry, and order.  Each candidate
+  is consumed only once, so duplicate URLs, repeated pinned pages, reversed
+  restore order, and concurrent pending windows do not create duplicate rows.
+- Handled Firefox event sequences where tab creation or attachment arrives
+  before its window event, and retained pending window ancestry until matching
+  completes.
+- Reattached tutorial, Options, Help, and other internal extension pages by
+  their normalized extension-relative URL.  Restored `moz-extension://UUID`
+  pages no longer appear first as UUID nodes and then as renamed duplicates.
+- Persisted browser-native `pinned` state separately from tree structure and
+  synchronized it with the optional upstream "Pinned" branch convention.
+  Pinning, unpinning, creation, restore, reorder, and branch renaming all keep
+  native state and tree placement aligned.
+- Enforced one live node per browser tab or window, cleared conflicting stale
+  bindings, and selected the most complete saved node as the primary when old
+  data contains duplicates.
+- Added startup and configurable periodic reconciliation.  Live browser tabs
+  and windows are authoritative for attachment, active state, geometry,
+  native pins, and tab order; saved tree nodes remain authoritative for
+  unloaded content and organization.  Periodic repair defaults to every five
+  minutes and can be disabled without disabling startup reconciliation.
+- Persisted window position, size, display state, focus state, and repaired tab
+  attachments as browser events arrive, so a later restore starts from the
+  latest known browser state.
+- Reconciliation repairs missing browser objects, stale or duplicate IDs,
+  misplaced pinned tabs, window geometry/state, unattached live tabs, and
+  obsolete empty browser wrappers without discarding saved branches.
+
+## Persistence and MV3 event reliability
+
+- Removed the fork's experimental durable `Ops` queue.  Routine mutations now
+  write directly to the original schema-1 `Nodes` store; startup and periodic
+  reconciliation repair interrupted browser-side work.
+- Removed unused snapshot and transaction-store helpers from new database
+  creation.  Current code persists the live tree only through `Nodes`; old
+  schema-1 databases may retain those extra upstream stores, but they are not
+  read or written.
+- Added one tree-wide persistence boundary.  A structural mutation saves and
+  deletes every affected node in one IndexedDB transaction and resolves only
+  after that transaction commits.
+- Batched moves, promotion, active-tab switches, subtree deletion, window
+  closure, pin transitions, tutorial creation, and imports instead of issuing
+  one transaction per node.
+- Serialized browser structural events in memory so rapid create, attach,
+  detach, move, close, and restore events cannot interleave incompatible tree
+  mutations.
+- Added message source IDs to prevent a view from replaying its own tree event.
+  Added stable request IDs and a bounded background response cache so a lost
+  acknowledgement can be retried without applying a mutation twice.
+- Made background mutation replies wait for durable completion, retried
+  transient missing responses, and surfaced final failures to the initiating
+  UI action.
+- Wrapped asynchronous browser event listeners so rejected handlers are logged
+  instead of becoming unhandled promises.  Background and TreeView startup
+  failures now produce explicit diagnostics, and sidebar initialization
+  failures are also shown in the status area.
+- Rejected malformed stored node JSON instead of silently constructing partial
+  nodes.  Hardened node-ID generation against collisions and sequence overflow,
+  and allowed uppercase Base32 IDs during restore.
+- Made asynchronous configuration watchers report rejected promises instead
+  of losing failures.
+
+## Backups, imports, and data maintenance
+
+- Added an independent, default-on option for upstream's overdue startup
+  backup, so it can be disabled without changing the regular backup interval.
+- Kept each backup call pending until the browser reports terminal download
+  completion, with a timeout and finally-based listener cleanup.  A
+  timestamp-storage failure after a completed download no longer reports the
+  backup itself as failed.
+- Validated TKTSTO imports before mutating the live tree, including schema,
+  root shape, repeated nodes, and cycles.  Imports do not modify the parsed
+  source object and are persisted as one atomic batch.
+- Treated imports as deliberately non-idempotent: a lost response reports an
+  error instead of automatically importing the same backup twice.
+- Made file selection for the existing Tabs Outliner importer explicit: JSON
+  `.tree` exports are imported, while selected HTML files are recognized and
+  rejected with guidance because HTML conversion is not implemented.
+- Sanitized client IDs to non-empty alphanumeric values in both Options and the
+  background, persisted corrected values, and added inline validation hints.
+- Added conservative backup duplicate tools.  Analysis hashes subtrees and
+  reports exact and same-content sibling candidates.  Cleanup requires the
+  matching checksum audit, removes only identical same-parent subtrees or
+  metadata-free same-URL leaves with matching pinned state, writes a separate
+  output, and fails closed if the input changed.
+
+## Performance
+
+- Rebuilt the sidebar into detached document fragments and created DOM only for
   visible rows.  On an 11,122-node session, rendering 325 visible rows dropped
   from a 411 ms median to 48 ms.
-- Replaced the full object-graph background message with one JSON payload.  On
-  the same roughly 11 MB tree, transfer handling dropped from 742–818 ms to
-  about 257–298 ms, including stringify and parse time.
-- Active-tab updates now change existing row state directly, so rapid
-  `Ctrl+Tab` navigation follows immediately without label flicker or full-row
-  reconstruction.
+- Replaced structured cloning of the full object graph with one JSON tree
+  payload.  On the same roughly 10.98 MB tree, background-to-view transfer,
+  stringify, and parse dropped from 742–818 ms to about 257–298 ms.
+- Shared the already-loaded configuration, batched per-window session-storage
+  reads, overlapped independent startup requests, reused fetched window data,
+  and generated transient view IDs locally to reduce sidebar startup
+  round-trips.
+- Indexed restore candidates by session ID, browser ID, normalized URL, and pin
+  state instead of repeatedly scanning the full saved tree.
+- Avoided full-row reconstruction for active-tab changes and redundant browser
+  tab moves when the tab was already in the correct position.  Browser-strip
+  reorder requests are debounced per window and serialized.
 
-Reliability and bug fixes:
+## Safety, tests, documentation, and developer tooling
 
-- Reworked Firefox restore matching around session identity, pinned state,
-  duplicate URL consumption, and concurrent window ancestry.  Reverse-order
-  restore events now reconnect to saved nodes instead of creating duplicates.
-- Reattached restored tutorial and other internal extension pages to their
-  existing nodes instead of briefly creating UUID rows and leaving duplicates.
-- Replaced the durable Ops queue with direct, atomic IndexedDB writes plus
-  startup and periodic reconciliation.  Related node changes commit together,
-  retried messages are idempotent, and mutation callers wait for persistence.
-- Kept session windows stable while Firefox loses OS focus during `Alt+Tab`,
-  fixed delayed cursor scrolling after unloading an active tab, and preserved
-  the current viewport while other rows change.
-- Fixed recursive deletion when removing a restore wrapper, restored the task
-  edit action for existing checkboxes, synchronized pinned-tab moves, and
-  removed the redundant scrollbar gutter.
-- Hardened backup completion and import validation, and added a conservative
-  audit-based tool for removing only provably identical backup subtrees.
+- Replaced unsafe dynamic `innerHTML` rendering in dialogs and node rows with
+  explicit DOM construction and text nodes.
+- Added Node-based coverage for tree, persistence, restore, reconciliation,
+  message retry, import, backup, keybinding, and movement behavior.  The suite
+  currently contains 179 checks.
+- Added browser suites for DOM safety, client-ID flow, Firefox / Chromium
+  restore rules, Tree / Node behavior, and 75 TreeView actions in each browser
+  mode.  Added V8/browser coverage collection and a generated README badge.
+- Added developer documentation for event flow, IndexedDB durability, node
+  IDs, marking and paste behavior, plus updated user help for movement,
+  shortcuts, windows, pinned tabs, checkboxes, and `wasLoaded` restore.
+- Expanded the generated tutorial with drop-text, view-mode, window wrapping,
+  window deletion, root-move, and keyboard-movement exercises.  Its shortcut
+  list now comes from the shared configurable-keybinding definition, and the
+  complete tutorial is created in one persistence batch.
+- Added reusable WebDriver startup/cleanup helpers for extension testing and
+  expanded `make test`, `make test-node`, `make coverage`, and `make todo`
+  workflows.
+- Added cross-browser stack-location parsing and quiet logging controls for
+  deterministic test output.
+- Added project-specific contributor guidance, AI contribution policy, and DCO
+  addendum while retaining AGPL-3.0-or-later licensing.
+- Expanded repository ignore rules for credentials, release and coverage
+  output, browser-test profiles, editors, temporary backups, and local
+  agent-workflow files.
 
-Storage note:
+## Build and release workflow
 
-- Development builds which created the temporary schema-2 `Ops` store require
-  a JSON export, cleared extension data, and restore when upgrading.  There is
-  intentionally no compatibility migration for that experimental database.
+- Replaced placeholder manifest generation with SemVer base tags plus a shared
+  numeric build counter (`MAJOR.MINOR.PATCH.BUILD`) in both manifests.
+- Made `make all` increment once and build both browsers.  Added separate
+  current-version zip targets, a Chromium unpacked directory target, version
+  validation/tagging helpers, and clearer `make help` output.
+- Kept the fork's `make firefox-sign` target distinct from upstream's
+  equivalent `firefox-xpi` name, and added timeout control, a credential-free
+  `.env.sample`, and optional build-time name / Firefox-ID overrides.
+- Packaged recursive assets, locales, and user help for both browsers while
+  excluding test suites and developer-only documentation from release
+  archives.
+
+## Storage compatibility
+
+- Current builds intentionally retain IndexedDB schema version 1 and use only
+  the compatible `Nodes` store.  There is no database migration for temporary
+  development builds which created the fork-only schema-2 `Ops` store.
+- To move from one of those experimental builds, export JSON, clear or
+  reinstall the extension data, then restore the export.  Git history retains
+  the old queue implementation if it is ever needed for forensic recovery.
 
 
 # 0.0.2 (2026-01-06)
