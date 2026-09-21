@@ -4,7 +4,7 @@
 
 .PHONY: all help firefox-zip firefox-zip-current chrome-zip \
 	chrome-zip-current chrome-dir firefox-sign tag test test-node todo \
-	coverage test-firefox-context test-firefox-recovery v
+	coverage test-firefox-context test-firefox-recovery test-release release-current bump-version v
 
 ifneq ($(filter v,$(MAKECMDGOALS)),)
 VERBOSE=1
@@ -14,20 +14,35 @@ endif
 v:
 	@:
 
-all:
+ARTIFACTS_DIR ?= $(CURDIR)/dist
+export ARTIFACTS_DIR
+CHROMIUM_DIR ?= $(ARTIFACTS_DIR)/chromium
+
+all: firefox-zip-current chrome-zip-current
+
+# Version selection is deliberate and independent of building/signing.
+bump-version:
 	./bin/update-version.sh
-	./make-zip.sh firefox
-	./make-zip.sh chromium
+
+release-current:
+	python3 -B bin/release.py build --browser firefox --output "$(ARTIFACTS_DIR)"
+	python3 -B bin/release.py build --browser chromium --output "$(ARTIFACTS_DIR)"
+
+test-release:
+	PYTHONDONTWRITEBYTECODE=1 python3 -B -m unittest discover -s tests -p test_release.py -v
 
 help:
 	@echo "Available targets:"
-	@echo "  all          - Build both Firefox and Chrome zip files"
-	@echo "  firefox-zip  - Build Firefox extension zip file"
+	@echo "  all          - Build both current-version development ZIPs (no bump)"
+	@echo "  firefox-zip  - Alias for firefox-zip-current (no bump)"
 	@echo "  firefox-zip-current - Build Firefox zip with current manifest version"
-	@echo "  chrome-zip   - Build Chrome/Chromium extension zip file"
+	@echo "  chrome-zip   - Alias for chrome-zip-current (no bump)"
 	@echo "  chrome-zip-current - Build Chromium zip with current manifest version"
-	@echo "  chrome-dir   - Create dist/chromium for Load Unpacked"
-	@echo "  firefox-sign - Sign Firefox extension via AMO (requires .env JWT_ISSUER/JWT_SECRET)"
+	@echo "  chrome-dir   - Extract into a NEW CHROMIUM_DIR for Load Unpacked"
+	@echo "  firefox-sign - Sign prebuilt, clean current-version Firefox archive ONCE"
+	@echo "  bump-version - Explicitly increment the build counter in both manifests"
+	@echo "  release-current - Build clean committed source without version changes"
+	@echo "  test-release - Synthetic signing and packaging safety tests (no AMO)"
 	@echo "  tag          - Bump version tag (default: patch) or set a tag"
 	@echo "  test         - Open unit tests in browser"
 	@echo "  test-node    - Run node-based tests only"
@@ -38,24 +53,19 @@ help:
 
 # make a zip file suitable for loading into
 # about:debugging#/runtime/this-firefox -> Load Temporary Add-On
-firefox-zip:
-	./bin/update-version.sh
-	./make-zip.sh firefox
+firefox-zip: firefox-zip-current
 
 firefox-zip-current:
 	./make-zip.sh firefox
 
-chrome-zip:
-	./bin/update-version.sh
-	./make-zip.sh chromium
+chrome-zip: chrome-zip-current
 
 chrome-zip-current:
 	./make-zip.sh chromium
 
-chrome-dir: chrome-zip
-	rm -rf dist/chromium
-	mkdir -p dist
-	mv build dist/chromium
+chrome-dir: chrome-zip-current
+	@version=$$(python3 -c 'import json; print(json.load(open("manifest.json"))["version"])'); \
+	python3 -B bin/release.py unpack --unsigned "$(ARTIFACTS_DIR)/ignatremizov-tabs-$$version-chromium.zip" --output "$(CHROMIUM_DIR)"
 
 firefox-sign:
 	./bin/firefox-sign.sh

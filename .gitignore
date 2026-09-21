@@ -62,3 +62,7 @@ agents/
 .worktrees/
 delegate.sh
 PRD.md
+
+# Python developer-test bytecode
+__pycache__/
+*.pyc

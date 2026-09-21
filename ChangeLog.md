@@ -4,6 +4,12 @@ What changed, and when?  You know the drill.
 
 ## Unreleased
 
+- Separate deliberate version selection from current-version builds/signing.
+  Package reproducible tracked inputs, refuse output replacement, and sign one
+  immutable prebuilt archive with pinned tooling and environment-only secrets.
+  Record uncertain submissions instead of retrying uploads; independently
+  verify payloads and normal signature-enforcing Firefox installations.
+
 - Patch title/favicon DOM elements without rebuilding rows, identity badges,
   or archived descendant statistics. General state changes still refresh
   affected ancestry, with each row rendered once rather than twice.

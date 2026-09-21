@@ -222,38 +222,33 @@ In Chromium-based browsers:
 - Use "load unpacked extension" in the browser, to load the copy in
   `dist/chromium`.
 
-This process mostly just copies all the files into `active/`.  If you set
-`EXT_NAME` in `.env`, the build step will override the manifest name.
+This creates a new validated `dist/chromium` directory. An existing directory
+is never deleted or overwritten; use `CHROMIUM_DIR=/tmp/tabs-chromium-preview`
+and a separate `ARTIFACTS_DIR` for another preview. Extension name/ID changes
+must be made in the source manifests, not silently overridden during signing.
 
 Upstream: https://github.com/ToyKeeper/tktsto
 
 ### Firefox
 
-In Firefox, it's necessary to sign the extension because most 2025-and-later
-versions won't run unsigned extensions even if you configure it to not require
-signatures.  If you're lucky enough to be able to run unsigned extensions, then
-just run `make` to generate a compatible .zip file, and load it from the
-`dist/` dir.  You can still load a temporary unsigned extension via
-`about:debugging#/runtime/this-firefox`.  Otherwise, try the following...
-
-Create an account and API keys at https://addons.mozilla.org/developers/
-(under "API Keys").
-
-Create a `.env` file containing a few settings:
+Use `make all` or `make firefox-zip-current` to package the current manifest
+version without incrementing it. Package inputs must be tracked or staged, and
+a different archive with the same output filename is never overwritten. For
+an unreleased development build, choose a separate artifact directory:
 
 ```sh
-# get these from your account at addons.mozilla.org/developers
-JWT_ISSUER=user:XXXXXXXX:XXX
-JWT_SECRET=your_amo_api_secret
-
-# set your own extension ID and name here
-EXT_NAME="TK Tree Style Tab Outliner (My Name's personal build)"
-FF_EXT_ID="your-email-address+tktsto@your-email-domain.com"
+ARTIFACTS_DIR=/tmp/tabs-development make firefox-zip-current
 ```
 
-Run `make firefox-sign`.
+The unsigned ZIP can be loaded temporarily using
+`about:debugging#/runtime/this-firefox`. Signing requires a clean, committed
+source tree, a prebuilt matching ZIP, AMO credentials, and the tested pinned
+`web-ext` tool. **Signing never increments the version or rebuilds the input.**
+Use `make bump-version` only when deliberately selecting a new release version.
 
-Install the `.xpi` file.
+See [Release verification](docs/releasing.md) for exact commands, single-submission
+safeguards, manifest/payload verification, and normal signed-installation checks.
+Never replace a published signed package with different code at the same version.
 
 ### Server
 
@@ -266,7 +261,8 @@ API credentials:
 
 - Create API keys at https://addons.mozilla.org/developers/ ("API Keys").
 - Put them in `.env` as `JWT_ISSUER` and `JWT_SECRET`.
-- Run `make firefox-sign`.
+- Build the clean current version, then run `make firefox-sign`; see the
+  [release verification guide](docs/releasing.md) before submitting.
 
 FUTURE: I also recommend installing [the backup/sync server](server/readme.md),
 so you can automatically save snapshots of your session, sync your session
