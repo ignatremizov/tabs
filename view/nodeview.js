@@ -766,6 +766,9 @@ export class NodeView extends Node {
     const wasPinned = this.isPinned();
 
     const changed = await this.renderIfChanged(super.setNotes(...args));
+    if (! changed && this.tree.persistenceState?.unsaved) {
+      await this.tree.retryPersistence?.();
+    }
 
     // if pinned status changed, refresh this node and all children
     if (wasPinned !== this.isPinned()) this.$renderChildren();

@@ -114,5 +114,16 @@ code {
     <li><code>common/tree.js</code> — <code>dictable</code> field list.</li>
   </ul>
 
+<h2>Failed writes and durability</h2>
+<p>Successful mutation acknowledgements wait for the IndexedDB transaction to
+commit. A failed batch remains pending, including deletion tombstones, and can
+be retried with the sidebar's <b>Retry saving</b> button or by the next edit.
+Repeating an unchanged edit must not bypass a pending write. Generations queued
+during an earlier commit remain dirty until their own write succeeds.</p>
+<p>The unsaved warning is separate from the transient status bar and is shown
+to newly opened sidebars too. Pending changes are held in memory: closing or
+crashing the browser before a retry succeeds can still lose those changes.
+Export a backup before closing when storage remains unavailable. Retry does
+not recreate browser tabs or replay already completed commands.</p>
 </body>
 </html>

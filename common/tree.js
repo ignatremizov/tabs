@@ -233,7 +233,9 @@ export class Tree {
     }
 
     if (isBackgroundTreeMessage) {
-      Promise.resolve(result).then(
+      Promise.resolve(result).then(async () => {
+        await this.root.flushPendingPersistence?.();
+      }).then(
         () => {
           respond({ result: 'ok persisted' });
         },

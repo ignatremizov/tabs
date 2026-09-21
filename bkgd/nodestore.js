@@ -18,6 +18,9 @@ export class NodeStore extends Node {
     if (! this.tree.persistenceMutex) {
       this.tree.persistenceMutex = new Mutex();
     }
+    this.tree.pendingNodeWrites ??= new Map();
+    this.tree.pendingNodeDeletes ??= new Map();
+    this.tree.persistenceSequence ??= 0;
   }
 
   newNodeId () {
@@ -51,8 +54,8 @@ export class NodeStore extends Node {
       persistNodesLater,
       deleteNodeIdsLater
     );
-    if ((! inherited)
-      && ((persistNodesLater.size > 0) || (deleteNodeIdsLater.size > 0))) {
+    if (! inherited) {
+      // A no-op retry may still have an earlier failed write to finish.
       await this.persistWithLock(
         [...persistNodesLater],
         [...deleteNodeIdsLater]
@@ -73,12 +76,62 @@ export class NodeStore extends Node {
   }
 
   async persistWithLock (nodes = [], deleteNodeIds = []) {
+    const tree = this.tree;
+    for (const node of nodes) {
+      if (! node?.id || tree.nodes[node.id] !== node) continue;
+      tree.pendingNodeWrites.set(node.id, { node, version: ++tree.persistenceSequence });
+      tree.pendingNodeDeletes.delete(node.id);
+    }
+    for (const id of deleteNodeIds) {
+      tree.pendingNodeWrites.delete(id);
+      tree.pendingNodeDeletes.set(id, ++tree.persistenceSequence);
+    }
     const unlock = await this.tree.persistenceMutex.lock();
     try {
-      return await this.persistNodes(nodes, deleteNodeIds);
+      const writes = new Map(tree.pendingNodeWrites);
+      const deletes = new Map(tree.pendingNodeDeletes);
+      if (! writes.size && ! deletes.size) return;
+      try {
+        await this.persistNodes([...writes.values()].map(entry => entry.node), [...deletes.keys()]);
+      } catch (err) {
+        tree.persistenceError = String(err?.message || err);
+        this.publishPersistenceState();
+        // Keep the complete failed batch, including deletion tombstones.
+        throw err;
+      }
+      // A newer write can be queued while IndexedDB commits this snapshot.
+      // Never mark that later generation durable using an earlier result.
+      for (const [id, entry] of writes) {
+        if (tree.pendingNodeWrites.get(id) === entry) tree.pendingNodeWrites.delete(id);
+      }
+      for (const [id, version] of deletes) {
+        if (tree.pendingNodeDeletes.get(id) === version) tree.pendingNodeDeletes.delete(id);
+      }
+      if (! tree.pendingNodeWrites.size && ! tree.pendingNodeDeletes.size && tree.persistenceError) {
+        tree.persistenceError = null;
+        this.publishPersistenceState();
+      }
     } finally {
       unlock();
     }
+  }
+
+  flushPendingPersistence () {
+    return this.persistWithLock();
+  }
+
+  getPersistenceState () {
+    return {
+      unsaved: Boolean(this.tree.persistenceError),
+      pending: this.tree.pendingNodeWrites.size + this.tree.pendingNodeDeletes.size,
+      detail: this.tree.persistenceError || ''
+    };
+  }
+
+  publishPersistenceState () {
+    // Notification delivery is independent of database durability. Do not
+    // keep the persistence lock waiting for a sidebar to process a message.
+    this.tree.bkgd?.publishPersistenceState?.(this.getPersistenceState());
   }
 
   async persistNodes (nodes = [], deleteNodeIds = []) {

@@ -4,6 +4,11 @@ What changed, and when?  You know the drill.
 
 ## Unreleased
 
+- Retain failed persistence batches and deletion tombstones for explicit retry
+  or the next edit, including unchanged edits. Never acknowledge dirty data as
+  saved; keep a persistent sidebar warning and Retry saving button until the
+  database commit succeeds. Pending changes are in memory, not crash-durable.
+
 - Resynchronize open sidebars from authoritative background data after repair
   or reconnect instead of repainting stale models. Preserve cursor ancestry,
   scrolling, and local expansion overrides; discard snapshots raced by a

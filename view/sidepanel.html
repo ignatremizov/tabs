@@ -36,6 +36,10 @@
           placeholder="search"></input>
       </div>
       <div id="notifications">
+        <div id="persistence-warning" class="persistence-warning hidden" role="status" aria-live="polite">
+          <span>Changes are not saved. Retry before closing the browser.</span>
+          <button id="retry-persistence" type="button">Retry saving</button>
+        </div>
         <div id="search-count" class="search-count hidden"></div>
         <div id="marked-count" class="marked-count hidden"></div>
       </div>

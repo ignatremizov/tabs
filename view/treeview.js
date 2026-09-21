@@ -191,6 +191,11 @@ export class TreeView extends Tree {
     // shows info about most recent event
     //this.$statusBar = doc.getElementById('status-bar');
     this.$statusText = doc.getElementById('status-text');
+    this.$persistenceWarning = doc.getElementById('persistence-warning');
+    this.$retryPersistence = doc.getElementById('retry-persistence');
+    this.$retryPersistence?.addEventListener('click', () => {
+      this.runUiAction('Retry saving', () => this.retryPersistence());
+    });
     this.onEmitFailure = (event) => {
       const detail = event && event.detail ? event.detail : {};
       const status = detail.status || 'Background not responding.';
@@ -331,6 +336,7 @@ export class TreeView extends Tree {
     }
     this.windowId = this.windowObj.id;
     this.applyIncognitoRestrictions();
+    if (! this.isInert) await this.refreshPersistenceState();
 
     //this.root = new NodeView(this, null, this.window);
     this.root.window = this.window;
@@ -440,6 +446,32 @@ export class TreeView extends Tree {
 
   setStatus (msg) {
     if (this.$statusText) this.$statusText.textContent = msg;
+  }
+
+  applyPersistenceState (state) {
+    if (! state) return;
+    this.persistenceState = state;
+    this.$persistenceWarning?.classList.toggle('hidden', ! state.unsaved);
+    if (this.$persistenceWarning) this.$persistenceWarning.title = state.detail || '';
+  }
+
+  async refreshPersistenceState () {
+    const response = await emit('bkgd_getPersistenceState');
+    this.applyPersistenceState(response?.state);
+  }
+
+  async retryPersistence () {
+    if (this.$retryPersistence) this.$retryPersistence.disabled = true;
+    try {
+      const response = await emit('bkgd_retryPersistence');
+      this.applyPersistenceState(response?.state);
+    } finally {
+      if (this.$retryPersistence) this.$retryPersistence.disabled = false;
+    }
+  }
+
+  tree_persistenceState (msg) {
+    this.applyPersistenceState(msg.state);
   }
 
   async runUiAction (context, action) {
@@ -3729,6 +3761,7 @@ export class TreeView extends Tree {
         this.initBkgdPort();
         this.registerWithBkgd();
         this.requestTreeResync();
+        await this.refreshPersistenceState();
       });
     });
     // tell bkgd about us, after we've had a chance to load

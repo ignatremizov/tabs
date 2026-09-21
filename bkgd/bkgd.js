@@ -1537,7 +1537,20 @@ export class Bkgd {
           this.bkgdRequestResults.set(requestKey, resultPromise);
         }
       }
-      const result = await resultPromise;
+      let result;
+      try {
+        result = await resultPromise;
+      } catch (err) {
+        // A cached rejection must not make a later explicit retry fail forever.
+        if (requestKey && this.bkgdRequestResults.get(requestKey) === resultPromise) {
+          this.bkgdRequestResults.delete(requestKey);
+        }
+        throw err;
+      }
+      if (result?.error && requestKey) this.bkgdRequestResults.delete(requestKey);
+      // Retain a completed operation's cached result if only this final
+      // durability check fails. Retrying must flush, not replay the operation.
+      if (requestKey && ! result?.error) await this.tree?.root?.flushPendingPersistence?.();
       //debug('bkgd sendResponse:', result);
       sendResponse(result);
       return;
@@ -1554,7 +1567,8 @@ export class Bkgd {
     if (! msg?.sourceId || ! msg?.requestId) return null;
     // These requests are read-only or naturally repeatable, and getTree may
     // contain megabytes of data which should not be retained in the cache.
-    if (['bkgd_ping', 'bkgd_getTree', 'bkgd_focusWindow'].includes(msg.msg)) {
+    if (['bkgd_ping', 'bkgd_getTree', 'bkgd_focusWindow',
+      'bkgd_getPersistenceState', 'bkgd_retryPersistence'].includes(msg.msg)) {
       return null;
     }
     return `${msg.sourceId}\u0000${msg.requestId}\u0000${msg.msg}`;
@@ -1632,6 +1646,22 @@ export class Bkgd {
     const unlock = await this.tree.onMessageMutex.lock();
     try { return JSON.stringify(this.tree.serializeNodes()); }
     finally { unlock(); }
+  }
+
+  bkgd_getPersistenceState () {
+    return { state: this.tree?.root?.getPersistenceState?.() || { unsaved: false, pending: 0 } };
+  }
+
+  async bkgd_retryPersistence () {
+    await this.treeLoaded;
+    await this.tree.root.flushPendingPersistence();
+    return this.bkgd_getPersistenceState();
+  }
+
+  publishPersistenceState (state) {
+    emit('tree_persistenceState', { state }, { retry: false }).catch(err => {
+      debug('Persistence warning delivery failed', err);
+    });
   }
 
   async bkgd_generateTutorial (msg) {

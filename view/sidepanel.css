@@ -1,0 +1,9 @@
+/* Persistence warnings must survive ordinary status-bar updates.
+ * SPDX-License-Identifier: AGPL-3.0-or-later */
+.persistence-warning {
+  padding: 0.4em;
+  color: var(--tab-was-loaded-fg);
+  border: 1px solid currentColor;
+  white-space: normal;
+}
+.persistence-warning button { margin-inline-start: 0.5em; }

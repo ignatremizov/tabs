@@ -41,6 +41,7 @@
     "use strict";
     import { Tree } from '/common/tree.js';
     import { NodeView } from '/view/nodeview.js';
+    import { TreeView } from '/view/treeview.js';
     import { emit } from '/common/common.js';
     emit.disabled = true;
     const results = [];
@@ -248,6 +249,51 @@
           const stroke = getComputedStyle(office.$row.querySelector('.context-icon')).stroke;
           assert(stroke && stroke !== 'none' && stroke !== 'rgba(0, 0, 0, 0)', `Invisible ${variant} icon`);
           assert(office.$row.querySelector('.container-badge').getBoundingClientRect().width > 0, `Collapsed ${variant} badge`);
+        }
+      });
+      await test('unsaved warning survives status updates and exposes a keyboard retry control', async () => {
+        const template = new DOMParser().parseFromString(
+          await (await fetch('/view/sidepanel.html')).text(), 'text/html');
+        const notice = document.importNode(template.getElementById('persistence-warning'), true);
+        document.body.append(notice);
+        const view = new TreeView({ isInert: true });
+        view.$persistenceWarning = notice;
+        view.$retryPersistence = notice.querySelector('button');
+        view.$statusText = document.createElement('span');
+        try {
+          view.applyPersistenceState({ unsaved: true, pending: 1, detail: '<b>Disk unavailable</b>' });
+          view.setStatus('Cursor moved');
+          assert(! notice.classList.contains('hidden'), 'Status update hid unsaved warning');
+          assert(notice.getAttribute('aria-live') === 'polite', 'Warning is not announced');
+          assert(view.$retryPersistence.type === 'button', 'Retry is not a keyboard-accessible button');
+          assert(! notice.querySelector('b'), 'Storage error interpreted as markup');
+          assert(notice.title === '<b>Disk unavailable</b>', 'Error detail lost');
+          view.applyPersistenceState({ unsaved: false, pending: 0 });
+          assert(notice.classList.contains('hidden'), 'Successful save did not clear warning');
+        } finally { view.destroy(); notice.remove(); }
+      });
+      await test('retry saving is single-action UI and preserves warning on failure', async () => {
+        const view = new TreeView({ isInert: true });
+        view.$retryPersistence = document.createElement('button');
+        view.persistenceState = { unsaved: true };
+        const originalSend = window.chrome.runtime.sendMessage;
+        const disabled = emit.disabled;
+        emit.disabled = false;
+        try {
+          window.chrome.runtime.sendMessage = async () => ({ error: 'Synthetic disk failure' });
+          let failed = false;
+          try { await view.retryPersistence(); } catch { failed = true; }
+          assert(failed && view.persistenceState.unsaved, 'Failure was reported as durable');
+          assert(! view.$retryPersistence.disabled, 'Failed retry left button disabled');
+          window.chrome.runtime.sendMessage = async msg => {
+            assert(msg.msg === 'bkgd_retryPersistence', 'Wrong retry operation');
+            assert(view.$retryPersistence.disabled, 'Retry button stays enabled during save');
+            return { state: { unsaved: false, pending: 0 } };
+          };
+          await view.retryPersistence();
+          assert(! view.persistenceState.unsaved && ! view.$retryPersistence.disabled, 'Successful retry did not reset state');
+        } finally {
+          emit.disabled = disabled; window.chrome.runtime.sendMessage = originalSend; view.destroy();
         }
       });
       missing.$renderDetails(tree.$detailsBox);
