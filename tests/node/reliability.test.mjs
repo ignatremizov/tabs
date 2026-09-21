@@ -4,7 +4,7 @@
 
 export async function registerReliabilityTests(h) {
   const { test, assert, assertEqual: eq, api, emit, Bkgd, Tree, TreeStore,
-    NodeStore, TreeView, addChild, jsonSchema } = h;
+    NodeStore, TreeView, addChild, jsonSchema, IDB } = h;
   const waitFor = async (check) => {
     const until = Date.now() + 3000;
     while (! check()) {
@@ -396,6 +396,145 @@ export async function registerReliabilityTests(h) {
       const result = await bkgd.bkgd_importBackupFile({ data, filename: 'deep.json' });
       assert(result.error.includes('depth')); eq(tree.root.nodes.length, 0);
     } finally { console.error = oldError; }
+  });
+
+  test('invalid stored graphs fail before altering the current model or writing recovery data', async () => {
+    const { tree } = store();
+    await addChild(tree.root, { label: 'Existing safe state' });
+    const before = JSON.stringify(tree.serializeNodes());
+    const valid = { root: { id: 'root', nodes: ['a'] }, a: { id: 'a', parent: 'root', nodes: [] } };
+    const variants = [];
+    const cyclic = structuredClone(valid); cyclic.a.nodes = ['a']; variants.push(cyclic);
+    const rootCycle = structuredClone(valid); rootCycle.a.nodes = ['root']; variants.push(rootCycle);
+    const missing = structuredClone(valid); missing.root.nodes = ['missing']; variants.push(missing);
+    const duplicate = structuredClone(valid); duplicate.root.nodes = ['a', 'a']; variants.push(duplicate);
+    const disagree = structuredClone(valid); disagree.a.parent = 'other'; variants.push(disagree);
+    const orphan = structuredClone(valid); orphan.other = { id: 'other', nodes: [] }; variants.push(orphan);
+    const identity = structuredClone(valid); identity.a.id = 'wrong'; variants.push(identity);
+    const fields = structuredClone(valid); fields.a.toDict = null; variants.push(fields);
+    variants.push({ a: valid.a });
+    let writes = 0;
+    tree.db.writeNodes = async () => { writes++; };
+    for (const data of variants) {
+      const original = JSON.stringify(data);
+      tree.db.loadAllNodes = async () => data;
+      let failure;
+      try { await TreeStore.prototype.loadTreeFromDB.call(tree); }
+      catch (err) { failure = err; }
+      assert(failure instanceof TypeError, 'Invalid storage must produce a bounded validation error');
+      assert(! (failure instanceof RangeError));
+      eq(JSON.stringify(tree.serializeNodes()), before);
+      eq(JSON.stringify(data), original); eq(writes, 0);
+    }
+  });
+
+  test('bounded iterative reconstruction accepts deep valid data and rejects excessive depth atomically', async () => {
+    const { tree } = store();
+    const { treeDataLimits } = await import('/common/serialized-tree.js');
+    const hash = { root: { id: 'root', nodes: ['n0'] } };
+    for (let i = 0; i < treeDataLimits.depth; i++) {
+      hash[`n${i}`] = { id: `n${i}`, parent: i ? `n${i-1}` : 'root',
+        nodes: i + 1 < treeDataLimits.depth ? [`n${i+1}`] : [] };
+    }
+    eq(tree.rebuildNodeFromSerializedHash(tree.root, hash), treeDataLimits.depth + 1);
+    const last = tree.nodes[`n${treeDataLimits.depth - 1}`];
+    eq(last.parent.id, `n${treeDataLimits.depth - 2}`);
+    hash[last.id].nodes.push('too-deep'); hash['too-deep'] = { id: 'too-deep', nodes: [] };
+    let failure;
+    try { tree.rebuildNodeFromSerializedHash(tree.root, hash); } catch (err) { failure = err; }
+    assert(failure?.message.includes('depth')); eq(tree.nodes[last.id], last);
+    eq(tree.nodes['too-deep'], undefined);
+  });
+
+  test('invalid replacement snapshots preserve the previous view and mark caches', async () => {
+    const { tree } = store();
+    const node = await addChild(tree.root, { label: 'Safe', marked: true });
+    const view = makeView(tree);
+    const old = view.nodes[node.id];
+    try {
+      let failed = false;
+      try { view.replaceSerializedTree(JSON.stringify({ root: { nodes: ['root'] } })); }
+      catch { failed = true; }
+      assert(failed); eq(view.nodes[node.id], old); eq(view.markedNodes.length, 1);
+    } finally { view.destroy(); }
+  });
+
+  test('raw recovery export preserves malformed JSON and never writes or clears storage', async () => {
+    const idb = new IDB();
+    const records = [ { key: 'root', data: JSON.stringify({ id: 'root', nodes: [] }) },
+      { key: 'bad', data: '{malformed original data' } ];
+    const before = JSON.stringify(records);
+    idb.db = Promise.resolve({ transaction: (name, mode) => {
+      eq(mode, 'readonly');
+      return { objectStore: () => ({ openCursor: () => {
+        const request = {}; let position = 0;
+        const next = () => queueMicrotask(() => {
+          const value = records[position++];
+          request.onsuccess({ target: { result: value ? {
+            primaryKey: value.key, value, continue: next
+          } : null } });
+        });
+        next(); return request;
+      } }) };
+    } });
+    let rejected = false;
+    try { await idb.loadAllNodes(); } catch (err) { rejected = err instanceof SyntaxError; }
+    assert(rejected);
+    const bkgd = new Bkgd(); bkgd.tree = { db: idb };
+    const oldError = console.error;
+    try {
+      console.error = () => {};
+      bkgd.failInitialization(new Error('Synthetic invalid storage'));
+      const readiness = await Promise.allSettled([bkgd.treeLoaded, bkgd.configLoaded]);
+      assert(readiness.every(result => result.status === 'rejected'));
+      const state = bkgd.bkgd_getStartupState();
+      eq(state.canExport, true); eq(state.failure, 'Synthetic invalid storage');
+      const result = JSON.parse((await bkgd.bkgd_getRecoveryData()).data);
+      eq(result.records.length, 2);
+      eq(result.records[1].value.data, records[1].data);
+      eq(JSON.stringify(records), before);
+    } finally { console.error = oldError; }
+  });
+
+  test('background initialization errors reject readiness instead of leaving requests pending', async () => {
+    const bkgd = new Bkgd();
+    for (const method of ['initConnectListener', 'initMessageListener', 'initWindowListeners',
+      'initTabListeners', 'initContextListeners', 'initMiscListeners']) bkgd[method] = () => {};
+    bkgd.initConfig = async () => { throw new Error('Synthetic configuration failure'); };
+    const oldError = console.error, oldBackground = emit.isBkgd, oldBkgd = emit.bkgd;
+    try {
+      console.error = () => {};
+      bkgd.init(); await bkgd.initialization;
+      const result = await Promise.allSettled([bkgd.configLoaded, bkgd.treeLoaded, bkgd.bkgd_getTree({})]);
+      assert(result.every(item => item.status === 'rejected'));
+      eq(bkgd.bkgd_getStartupState().canExport, false);
+      assert(bkgd.startupError.includes('configuration'));
+    } finally { console.error = oldError; emit.isBkgd = oldBackground; emit.bkgd = oldBkgd; }
+  });
+
+  test('raw recovery downloads bypass failed readiness without advancing normal backup timestamps', async () => {
+    const { tree } = store();
+    tree.bkgd = null;
+    tree.treeLoaded = Promise.reject(new Error('Synthetic startup failure'));
+    tree.treeLoaded.catch(() => {});
+    const previous = api.downloads;
+    const listeners = new Set();
+    let filename, timestamps = 0;
+    tree.cfg.set = async () => { timestamps++; };
+    api.downloads = {
+      onChanged: { addListener: fn => listeners.add(fn), removeListener: fn => listeners.delete(fn) },
+      download: async options => {
+        filename = options.filename;
+        // Completion can precede the creation response.
+        for (const fn of listeners) fn({ id: 42, state: { current: 'complete' } });
+        return 42;
+      }
+    };
+    try {
+      assert(await tree.downloadBackupNow({ recoveryData: '{"raw":"preserved"}' }));
+      assert(filename.startsWith('tktsto-recovery.'));
+      eq(timestamps, 0); eq(listeners.size, 0); eq(tree.localBackupInProgress, false);
+    } finally { api.downloads = previous; }
   });
 
 }

@@ -4,6 +4,11 @@ What changed, and when?  You know the drill.
 
 ## Unreleased
 
+- Validate stored graphs before reconstruction or automatic cleanup and rebuild
+  iteratively with depth/size bounds. Corrupt or inconsistent records stop in
+  an explicit recovery state without rewriting originals; readiness requests
+  reject promptly and the sidebar can export lossless raw recovery data.
+
 - Validate imported fields, types, identifiers, and bounded graph structure
   before constructing nodes. Commit detached imports atomically before
   publishing them; rejected imports and failed writes leave the existing tree

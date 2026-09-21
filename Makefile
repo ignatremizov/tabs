@@ -4,7 +4,7 @@
 
 .PHONY: all help firefox-zip firefox-zip-current chrome-zip \
 	chrome-zip-current chrome-dir firefox-sign tag test test-node todo \
-	coverage test-firefox-context v
+	coverage test-firefox-context test-firefox-recovery v
 
 ifneq ($(filter v,$(MAKECMDGOALS)),)
 VERBOSE=1
@@ -78,6 +78,10 @@ test-node:
 
 test-firefox-context:
 	@python3 tests/firefox-native-context.py
+
+# Explicit output path keeps recovery diagnostics in a disposable directory.
+test-firefox-recovery:
+	@PYTHONDONTWRITEBYTECODE=1 python3 -B tests/firefox-recovery.py --output "$$(mktemp -d /tmp/tabs-recovery-results-XXXXXX)"
 
 test:
 	@echo "Running node-based tests..."

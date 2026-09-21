@@ -17,6 +17,7 @@ import { Node } from '/common/node.js';
 import { Mutex } from '/common/mutex.js';
 import { Config } from '/common/config.js';
 import { cookieStoreKey, sameCookieStore, isContainerTab } from '/common/containers.js';
+import { validateNodeGraph } from '/common/serialized-tree.js';
 
 
 export class Tree {
@@ -25,9 +26,13 @@ export class Tree {
     if (undefined === NodeClass) NodeClass = Node;
     this.NodeClass = NodeClass;
 
-    this.treeLoaded = new Promise(resolve => {
+    this.treeLoaded = new Promise((resolve, reject) => {
       this.resolveTreeLoaded = resolve;
+      this.rejectTreeLoaded = reject;
     });
+    // Readiness failures remain observable by awaiters without an unhandled
+    // rejection when startup fails before any sidebar/event begins waiting.
+    this.treeLoaded.catch(() => {});
 
     this.onTabCreatedMutex = new Mutex();
     this.onTabReplacedMutex = new Mutex();
@@ -323,9 +328,6 @@ export class Tree {
     // (maybe call derived class handler?)
 
     // restore session from serialized data
-    this.markedNodes = [];
-    this.pendingMoves.clear();
-    this.createRootNode();
     const numLoaded = this.rebuildNodeFromSerializedHash(
       this.root, serializedNodes);
     // tree is ready to use
@@ -366,32 +368,33 @@ export class Tree {
   }
 
   rebuildNodeFromSerializedHash (node, hash) {
-    //debug('rebuildNodeFromSerializedHash()', node, hash);
-    let numLoaded = 0;
-    const nodeDict = hash[node.id];
-    if (! nodeDict) {
-      warn(`rebuildNodeFromSerializedHash(): no nodeId "${node.id}"`);
-      return 1;
+    if (node !== this.root) throw new Error('Reconstruction requires a complete root snapshot');
+    const graph = validateNodeGraph(hash, { rootId: node.id });
+    const rebuilt = Object.create(null);
+    // Construct the validated model detached. No recursion, partial live tree,
+    // or inherited/prototype names can enter the cache during reconstruction.
+    for (const id of graph.order) {
+      const record = graph.records[id];
+      const parent = id === graph.rootId ? null : rebuilt[record.parent];
+      const child = new this.NodeClass(this, parent);
+      for (const key of this.dictable) {
+        if (Object.hasOwn(record, key)) child[key] = record[key];
+      }
+      child.id = id;
+      rebuilt[id] = child;
+      if (parent) parent.nodes.push(child);
     }
-    //debug('nodeDict()', nodeDict);
-
-    // update caches
-    this.nodes[node.id] = node;
-    // build the node
-    node.fromDict(nodeDict);
-    this.nodeMarkChanged(node);  // update our mark cache
-    node.nodes = [];
-    numLoaded ++;
-    for (const nodeId of nodeDict.nodes) {
-      if ('root' === nodeId) continue;  // root can't be a child
-      //debug('nodeDict() childId', nodeId);
-      const child = new this.NodeClass(this, node);
-      child.id = nodeId;
-      this.nodes[nodeId] = child;
-      node.nodes.push(child);
-      numLoaded += this.rebuildNodeFromSerializedHash(child, hash);
-    }
-    return numLoaded;
+    const root = rebuilt[graph.rootId];
+    // Preserve the root object's presentation handles while replacing data.
+    for (const key of this.dictable) node[key] = root[key];
+    node.nodes = root.nodes;
+    node.parent = node;
+    for (const child of node.nodes) child.parent = node;
+    rebuilt[node.id] = node;
+    this.nodes = rebuilt;
+    this.markedNodes = graph.order.filter(id => rebuilt[id].marked);
+    this.pendingMoves.clear();
+    return graph.order.length;
   }
 
   makeBackupObject (rootNode, when) {
@@ -411,7 +414,7 @@ export class Tree {
     return obj;
   }
 
-  async downloadBackupNow () {
+  async downloadBackupNow ({ recoveryData } = {}) {
     // abort if backup already running
     if (this.localBackupInProgress) return false;
     this.localBackupInProgress = true;
@@ -419,15 +422,16 @@ export class Tree {
     let onProgress;
     let completionTimer;
     try {
-      await this.treeLoaded;  // wait until tree is ready
+      const recovery = typeof recoveryData === 'string';
+      if (! recovery) await this.treeLoaded;
 
       const when = new Date();
       const whenMs = Number(when);
       // determine whether to pretty-print the data
       const prettyPrint = this.cfg.humanFriendlyBackups ? 2 : 0;
       // generate the file's raw data
-      const backup = this.makeBackupObject(this.root, when);
-      const jsonString = JSON.stringify(backup, null, prettyPrint);
+      const backup = recovery ? null : this.makeBackupObject(this.root, when);
+      const jsonString = recovery ? recoveryData : JSON.stringify(backup, null, prettyPrint);
       const blob = new Blob([jsonString], { type: "application/json" });
       // generate the URL to download
       if ((! this.bkgd) || (isFirefox)) {
@@ -444,9 +448,11 @@ export class Tree {
         url = `data:application/json;base64,${base64String}`;
       }
       // build a filename
-      const clientId = backup.metadata.clientId;
+      const clientId = backup?.metadata.clientId;
       const date = dateTupleStrings(when);
-      const filenameRequested = `tktsto.${date[0]}-${date[1]}-${date[2]}_${date[3]}-${date[4]}-${date[5]}.${clientId}.json`;
+      const filenameRequested = recovery
+        ? `tktsto-recovery.${date[0]}-${date[1]}-${date[2]}_${date[3]}-${date[4]}-${date[5]}.json`
+        : `tktsto.${date[0]}-${date[1]}-${date[2]}_${date[3]}-${date[4]}-${date[5]}.${clientId}.json`;
       let filename = filenameRequested;
 
       // Save the file and keep this Promise pending until the browser reports
@@ -511,7 +517,7 @@ export class Tree {
       const succeeded = await completed;
       if (succeeded) {
         try {
-          await Promise.all([
+          if (! recovery) await Promise.all([
             this.cfg.set('localBackupLastTimeCompleted', Date.now()),
             api.storage.local.set({ lastBackupTime: whenMs })
           ]);

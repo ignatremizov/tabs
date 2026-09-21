@@ -36,6 +36,12 @@
           placeholder="search"></input>
       </div>
       <div id="notifications">
+        <div id="startup-warning" class="startup-warning hidden" role="alert">
+          <p id="startup-error-text"></p>
+          <p>Original records have not been cleared. Export recovery data before
+            repairing storage. Recovery files contain private browsing data.</p>
+          <button id="export-recovery" type="button">Export recovery data</button>
+        </div>
         <div id="persistence-warning" class="persistence-warning hidden" role="status" aria-live="polite">
           <span>Changes are not saved. Retry before closing the browser.</span>
           <button id="retry-persistence" type="button">Retry saving</button>

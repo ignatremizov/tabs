@@ -94,12 +94,18 @@ export class Bkgd {
 
   constructor () {
     // help event handlers wait until init is finished
-    this.configLoaded = new Promise(resolve => {
+    this.configLoaded = new Promise((resolve, reject) => {
       this.resolveConfigLoaded = resolve;
+      this.rejectConfigLoaded = reject;
     });
-    this.treeLoaded = new Promise(resolve => {
+    this.treeLoaded = new Promise((resolve, reject) => {
       this.resolveTreeLoaded = resolve;
+      this.rejectTreeLoaded = reject;
     });
+    this.configLoaded.catch(() => {});
+    this.treeLoaded.catch(() => {});
+    this.startupError = null;
+    this.startupReady = false;
     this.backupQueued = false;
 
     // Queues match browser creation events to saved nodes being restored.
@@ -182,7 +188,7 @@ export class Bkgd {
     // tell the browser the sidepanel can be opened via hotkey or icon click
     sidepanel.init();
 
-    this.initConfig().then(async () => {
+    this.initialization = this.initConfig().then(async () => {
       await this.containers.init();
       this.idGen = new IdGenerator(this.cfg.clientId, 9, 2);
       this.clientId = this.cfg.clientId;
@@ -214,13 +220,37 @@ export class Bkgd {
         await runReconcile.call(this, { reason: 'startup' });
         // tree is ready to use
         debug('Bkgd.resolveTreeLoaded()');
+        this.startupReady = true;
         this.resolveTreeLoaded();  // let listeners know the tree is loaded
         this.tree.resolveTreeLoaded();
       });
     }).catch((err) => {
-      error('Bkgd.init failed', err);
+      this.failInitialization(err);
     });
 
+  }
+
+  failInitialization (err) {
+    const failure = err instanceof Error ? err : new Error(String(err));
+    this.startupError = failure.message;
+    this.rejectConfigLoaded(failure);
+    this.rejectTreeLoaded(failure);
+    this.tree?.rejectTreeLoaded?.(failure);
+    error('Outline initialization failed; stored records were retained', failure);
+  }
+
+  bkgd_getStartupState () {
+    return { ready: this.startupReady, failure: this.startupError,
+      canExport: Boolean(this.startupError && this.tree?.db?.loadRawRecords) };
+  }
+
+  async bkgd_getRecoveryData () {
+    if (! this.startupError || ! this.tree?.db?.loadRawRecords) {
+      throw new Error('No failed outline storage is available for recovery export');
+    }
+    const records = await this.tree.db.loadRawRecords();
+    return { data: JSON.stringify({ format: 'tktsto-raw-recovery-v1',
+      exportedAt: Date.now(), error: this.startupError, records }, null, 2) };
   }
 
   async applyTreeMutation (name, payload = {}) {
@@ -1570,7 +1600,8 @@ export class Bkgd {
     // These requests are read-only or naturally repeatable, and getTree may
     // contain megabytes of data which should not be retained in the cache.
     if (['bkgd_ping', 'bkgd_getTree', 'bkgd_focusWindow',
-      'bkgd_getPersistenceState', 'bkgd_retryPersistence'].includes(msg.msg)) {
+      'bkgd_getPersistenceState', 'bkgd_retryPersistence',
+      'bkgd_getStartupState', 'bkgd_getRecoveryData'].includes(msg.msg)) {
       return null;
     }
     return `${msg.sourceId}\u0000${msg.requestId}\u0000${msg.msg}`;

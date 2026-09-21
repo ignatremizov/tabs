@@ -4,6 +4,7 @@
 
 "use strict";
 import { log, warn } from '/common/common.js';
+import { isRecord } from '/common/serialized-tree.js';
 
 export class IDB {
 
@@ -15,6 +16,7 @@ export class IDB {
 
   init () {
     this.db = this.openIDB();
+    this.db.catch(() => {});
   }
 
   // open IndexedDB and create the ObjectStores if needed
@@ -30,9 +32,17 @@ export class IDB {
           log(`IDB created: ${this.nodeDbName}`);
         }
       };
+      let blocked = false;
+      request.onblocked = () => {
+        blocked = true;
+        reject(new Error('Outline storage is blocked by another open connection. Close other extension views and retry.'));
+      };
       request.onsuccess = (event) => {
+        const db = event.target.result;
+        if (blocked) { db.close(); return; }
+        db.onversionchange = () => db.close();
         log(`IDB opened: ${this.dbName}`);
-        resolve(event.target.result);
+        resolve(db);
       };
       request.onerror = (event) => {
         warn(`IDB open failed: ${event.target.error}`);
@@ -91,7 +101,7 @@ export class IDB {
     return new Promise((resolve, reject) => {
       const txn = db.transaction(this.nodeDbName, 'readonly');
       const store = txn.objectStore(this.nodeDbName);
-      const nodes = {};
+      const nodes = Object.create(null);
       // open a cursor to iterate over all entries
       const request = store.openCursor();
       request.onsuccess = (event) => {
@@ -99,7 +109,12 @@ export class IDB {
         if (cursor) {
           try {
             const node = JSON.parse(cursor.value.data);
-            nodes[node.id] = node;
+            const key = cursor.primaryKey ?? cursor.key ?? cursor.value.key;
+            if (! isRecord(node) || typeof key !== 'string' || node.id !== key
+              || Object.hasOwn(nodes, key)) {
+              throw new TypeError('Stored record identity is invalid; export recovery data before repairing.');
+            }
+            nodes[key] = node;
             //debug(`IDB.loadAllNodes(${node.id})`);
             cursor.continue();
           } catch (err) {
@@ -110,6 +125,27 @@ export class IDB {
         }
       };
       request.onerror = (event) => reject(event.target.error);
+      txn.onabort = () => reject(txn.error || new Error('Outline storage read aborted'));
+    });
+  }
+
+  async loadRawRecords () {
+    // Recovery exports retain opaque stored values, including malformed JSON.
+    // Never parse, sanitize, rewrite, or silently discard the original data.
+    const db = await this.db;
+    return new Promise((resolve, reject) => {
+      const txn = db.transaction(this.nodeDbName, 'readonly');
+      const request = txn.objectStore(this.nodeDbName).openCursor();
+      const records = [];
+      request.onsuccess = event => {
+        const cursor = event.target.result;
+        if (! cursor) { resolve(records); return; }
+        records.push({ key: cursor.primaryKey ?? cursor.key ?? cursor.value.key,
+          value: cursor.value });
+        cursor.continue();
+      };
+      request.onerror = event => reject(event.target.error);
+      txn.onabort = () => reject(txn.error || new Error('Recovery export read aborted'));
     });
   }
 

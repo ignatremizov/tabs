@@ -348,8 +348,9 @@ Optional:
 
 1. Add property to `Node` constructor (`common/node.js`)
 2. Add to `dictable[]` array in `Tree` (`common/tree.js`)
-3. Update `NodeView.$render()` if it affects display
-4. Update `NodeStore` if it needs persistence
+3. Add its data type to the validator in `common/serialized-tree.js`
+4. Update `NodeView.$render()` if it affects display
+5. Update `NodeStore` if it needs persistence
 
 ### Adding a New Configuration Option
 

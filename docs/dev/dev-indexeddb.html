@@ -64,7 +64,8 @@ code {
   Each node is serialized via <code>Node.toDict()</code> and stored by ID.
   The list of persisted fields is defined by <code>Tree.dictable</code>.
   Add new persistent fields by updating both <code>Node</code> defaults and
-  <code>Tree.dictable</code>.
+  <code>Tree.dictable</code>, and the field types in
+  <code>common/serialized-tree.js</code>.
   </p>
 
   <h3>Key persisted fields</h3>
@@ -139,5 +140,24 @@ subsequent writes behind the import. Recoverable graph edges are skipped with
 visible warnings; disconnected records are retained beneath the imported root.
 Imported numeric browser bindings are discarded, but container scope and native
 group metadata remain available for safe later restoration.</p>
+<h2>Startup recovery</h2>
+<p>Startup reads all records before creating a fresh root. An empty database
+is a new installation; a missing root alongside other records is not. Cycles,
+unreachable or multiply owned records, mismatched keys, invalid field types,
+and excessive size/depth fail validation before the live model is replaced.
+Normal bounded trees are reconstructed iteratively. Recovery does not silently
+flatten or discard damaged data, and automatic cleanup runs only after a
+complete valid model exists.</p>
+<p>Readiness promises reject on initialization failure so requests and sidebars
+do not wait indefinitely. The sidebar shows the underlying problem and an
+<b>Export recovery data</b> button when storage is available. The raw recovery
+format contains the original keyed IndexedDB values, including malformed JSON;
+it is a diagnostic file, not a normal session backup. Preserve it privately
+before any manual repair or reset. No reset or automatic repair is performed.
+Recovery export does not advance normal backup scheduling timestamps.</p>
+<p><code>make test-firefox-recovery</code> creates a new marked test profile,
+inserts a synthetic cycle, reloads the test addon, verifies the actual failure
+UI and prompt rejection, and downloads/compares the lossless recovery file.
+It never opens an existing user profile.</p>
 </body>
 </html>

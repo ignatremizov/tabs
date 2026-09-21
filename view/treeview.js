@@ -29,9 +29,11 @@ export class TreeView extends Tree {
     this.document = args.document || globalThis.document;
     this.window = args.window || globalThis.window;
 
-    this.treeViewLoaded = new Promise(resolve => {
+    this.treeViewLoaded = new Promise((resolve, reject) => {
       this.resolveTreeViewLoaded = resolve;
+      this.rejectTreeViewLoaded = reject;
     });
+    this.treeViewLoaded.catch(() => {});
 
     // false = interactive "real" TreeView
     // true = static read-only TreeView for demonstration purposes
@@ -191,6 +193,14 @@ export class TreeView extends Tree {
     // shows info about most recent event
     //this.$statusBar = doc.getElementById('status-bar');
     this.$statusText = doc.getElementById('status-text');
+    this.$startupWarning = doc.getElementById('startup-warning');
+    this.$startupErrorText = doc.getElementById('startup-error-text');
+    this.$exportRecovery = doc.getElementById('export-recovery');
+    this.$exportRecovery?.addEventListener('click', () => {
+      this.exportRecoveryData().catch(err => {
+        this.setStatus(`Recovery export failed: ${err?.message || err}`);
+      });
+    });
     this.$persistenceWarning = doc.getElementById('persistence-warning');
     this.$retryPersistence = doc.getElementById('retry-persistence');
     this.$retryPersistence?.addEventListener('click', () => {
@@ -455,6 +465,39 @@ export class TreeView extends Tree {
     if (this.$persistenceWarning) this.$persistenceWarning.title = state.detail || '';
   }
 
+  async showStartupFailure (err) {
+    this.startupFailed = true;
+    this.rejectTreeLoaded(err);
+    this.rejectTreeViewLoaded(err);
+    this.$startupWarning?.classList.remove('hidden');
+    if (this.$startupErrorText) {
+      this.$startupErrorText.textContent = `The saved outline could not be opened: ${err?.message || err}`;
+    }
+    if (this.$exportRecovery) this.$exportRecovery.disabled = true;
+    try {
+      const state = await emit('bkgd_getStartupState');
+      if (this.$exportRecovery) this.$exportRecovery.disabled = ! state?.canExport;
+      if (state?.failure && this.$startupErrorText) {
+        this.$startupErrorText.textContent = `The saved outline could not be opened: ${state.failure}`;
+      }
+    } catch {
+      // Keep the original failure visible even if the background cannot answer.
+    }
+  }
+
+  async exportRecoveryData () {
+    if (this.$exportRecovery) this.$exportRecovery.disabled = true;
+    try {
+      const response = await emit('bkgd_getRecoveryData');
+      if (typeof response?.data !== 'string') throw new Error('No recovery data received');
+      if (! await this.downloadBackupNow({ recoveryData: response.data })) {
+        throw new Error('Recovery download did not complete');
+      }
+    } finally {
+      if (this.$exportRecovery) this.$exportRecovery.disabled = false;
+    }
+  }
+
   async refreshPersistenceState () {
     const response = await emit('bkgd_getPersistenceState');
     this.applyPersistenceState(response?.state);
@@ -475,6 +518,10 @@ export class TreeView extends Tree {
   }
 
   async runUiAction (context, action) {
+    if (this.startupFailed) {
+      this.setStatus('Outline unavailable. Export recovery data before repairing storage.');
+      return;
+    }
     this.uiActionsInFlight++;
     this.modelGeneration++;
     try {

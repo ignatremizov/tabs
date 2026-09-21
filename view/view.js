@@ -13,6 +13,7 @@ function init() {
   tree.init().catch((err) => {
     error('TreeView initialization failed', err);
     tree.setStatus(`Initialization failed: ${err?.message || err}`);
+    tree.showStartupFailure(err);
   });
   return tree;
 }

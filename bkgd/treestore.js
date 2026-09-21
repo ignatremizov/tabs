@@ -235,135 +235,22 @@ export class TreeStore extends Tree {
   }
 
   async loadTreeFromDB () {
-    this.createRootNode();
-
-    // try to load the root node by itself
-    // if it doesn't exist in the DB, then save the root node
-    // (to make sure root is the first node in the DB)
-    const saved = await this.db.loadNode(this.root.id);
-    if (! saved) {
-      log(`TreeStore.createRootNode couldn't load root, fresh install?`);
+    // Read and validate BEFORE writing a new root or doing automatic cleanup.
+    // A missing/corrupt root alongside other records is recovery data, not a
+    // fresh installation. Leave every original database record untouched.
+    const nodeIds = await this.db.loadAllNodes();
+    if (Object.keys(nodeIds).length === 0) {
       await this.persistNodes([this.root]);
       this.needsTutorial = true;
+      return;
     }
-
-    // Load the authoritative per-node records.
-    const loadAllStartedAt = Date.now();
-    const nodeIds = await this.db.loadAllNodes();
-    debug(`db.loadAllNodes: ${Date.now() - loadAllStartedAt}ms`);
-
-    const numIds = Object.keys(nodeIds).length;
-    debug(`loaded ${numIds} nodes`);
-    if (! nodeIds['root'])
-      return error(`loadTreeFromDB(): no root node in DB`);
-
-    // restore session from serialized data
-    const rebuildStartedAt = Date.now();
-    const numLoaded = this.rebuildNodeFromSerializedHash(
-      this.root, nodeIds);
-    debug(
-      `TreeStore.rebuildNodeFromSerializedHash: `
-      + `${Date.now() - rebuildStartedAt}ms`
-    );
-    log(`loadTreeFromDB(): loaded ${numLoaded}/${numIds} nodes`);
-
-    // if there's stale data in the DB
-    // (happens sometimes during development)
-    // re-attach all orphaned nodes
-    if (numLoaded !== numIds) {
-      await this.reattachOrphanedNodes(nodeIds);
-    }
-
-    // look for empty boring windows and delete them
-    // (because Firefox, for some reason, keeps accumulating these)
-    const boringEmptyWinNodes = this.root.findNodes(
-      (n) => (n.isWindow()
-        && (! n.hasKids())
-        && (! n.shouldUnloadNotDelete())),
-      (n) => true,
-    );
-    for (const toDelete of boringEmptyWinNodes) {
-      debug(`delete boringEmptyWinNodes: ${toDelete.toLine()}`, toDelete);
-      await toDelete.deleteSelf({ reason: 'emptyWindowClosed' });
-    }
-    // TODO: if lost+found exists with nothing inside, delete it too?
-  }
-
-  async reattachOrphanedNodes (nodeIds) {
-    const newParentName = 'lost+found';
-    let numToReattach = 1;  // start with 1 for the lost+found node
-
-    // first, find or create a 'lost+found/' node to hold others
-    let lostFound;
-    for (const node of this.root.nodes) {
-      if (newParentName === node.label) {
-        lostFound = node;
-        break;
-      }
-    }
-    if (! lostFound) {
-      log(`fsck: making new ${newParentName} node`);
-      lostFound = await this.root.addChild(
-        //this.root.nodes.length,  // attach as last child
-        0,  // attach as first child
-        { label: newParentName, note: 'orphaned nodes found during fsck' },
-        { reason: 'reattachOrphanedNodes' });
-    }
-    const lfDict = lostFound.toDict();
-    const modifiedNodes = [lostFound.id];
-
-    // warn about nodes not attached to the tree
-    // and list some human-readable info about them
-    for (const nodeId of Object.keys(nodeIds)) {
-      let n = nodeIds[nodeId];
-      if (undefined === this.nodes[nodeId]) {
-        numToReattach ++;
-        let summary = `${n.label} ~ ${n.title} [${n.url}]`;
-        log(`fsck: detached node: ${summary}`, n);
-      }
-    }
-
-    // second, attach orphans to lost+found
-    // (entire branches may have been detached, and attaching the top-most
-    //  node of each detached branch should recover the whole thing)
-    for (const nodeId of Object.keys(nodeIds)) {
-      if ('root' === nodeId) continue; // root can't be orphaned
-
-      const n = nodeIds[nodeId];
-      const parentId = n.parent;
-      const p = nodeIds[parentId];
-      // attach to lost+found if:
-      // - parent ID not in the database
-      // - node is its own parent
-      // - parent doesn't recognize child
-      if ((undefined === p)  // parent ID not in database
-        || (parentId === nodeId)  // is own parent
-        || (! p.nodes.includes(nodeId))  // parent doesn't expect this child
-      ) {
-        log('fsck: attaching orphan to lost+found:', nodeIds[nodeId]);
-        nodeIds[nodeId].parent = lostFound.id;
-        nodeIds[nodeId].loaded = false;
-        nodeIds[nodeId].wasLoaded = false;
-        lfDict.nodes.push(nodeId);
-        modifiedNodes.push(nodeId);
-      }
-    }
-
-    // actually attach the orphaned nodes now
-    nodeIds[lostFound.id] = lfDict;
-    const numAttached = this.rebuildNodeFromSerializedHash(lostFound, nodeIds);
-
-    // write changes to database
-    const nodesToSave = modifiedNodes
-      .map((nodeId) => this.nodes[nodeId])
-      .filter(Boolean);
-    await this.persistNodes(nodesToSave);
-
-    // summary
-    warn(`fsck: reattachOrphanedNodes() attached ${numAttached} orphans under ${newParentName}`);
-    if (numToReattach !== numAttached) {
-      warn(`fsck: attached ${numAttached} nodes but expected ${numToReattach}`);
-    }
+    const count = this.rebuildNodeFromSerializedHash(this.root, nodeIds);
+    log(`loadTreeFromDB(): validated and loaded ${count} nodes`);
+    // Preserve the existing harmless empty-window cleanup, but only after
+    // every persisted record has passed validation and the tree is complete.
+    const emptyWindows = this.root.findNodes(node => node.isWindow()
+      && ! node.hasKids() && ! node.shouldUnloadNotDelete());
+    for (const node of emptyWindows) await node.deleteSelf({ reason: 'emptyWindowClosed' });
   }
 
   async tree_nodeChanged (msg, sender, sendResponse) {
