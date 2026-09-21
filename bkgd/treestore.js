@@ -550,7 +550,10 @@ export class TreeStore extends Tree {
     return await this.bkgd.applyTreeMutation('ensureDeleted', {
       nodeId: node.id,
       ...args,
-      mode: promoteKids ? 'promoteKids' : undefined
+      mode: promoteKids ? 'promoteKids' : undefined,
+      // Unlike a sidebar action, a native browser close has no view which
+      // already broadcast the atomic promote-delete operation.
+      broadcastResult: promoteKids
     });
   }
 

@@ -78,7 +78,7 @@ export const defaultKeyBindings = {
 export const keyBindingActions = [
   { action: 'loadOrEditNode', label: 'Open/load node (or edit label)' },
   { action: 'deleteNode', label: 'Delete node' },
-  { action: 'toggleLoad', label: 'Load/unload node or branch' },
+  { action: 'toggleLoad', label: 'Load/unload node or collapsed branch' },
   {
     action: 'forceToggleLoad',
     label: 'Restore missing tabs, otherwise load/unload'

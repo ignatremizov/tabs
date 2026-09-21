@@ -43,6 +43,7 @@
   <h1>TreeView Action Tests</h1>
   <div id="toc">
     <strong>TOC (test group headers):</strong>
+    <a href="#load-unload">Load / Unload</a> |
     <a href="#move-nodes">Move Nodes</a> |
     <a href="#marked-nodes">Marked Nodes</a> |
     <a href="#text-drops">Text Drops</a> |
@@ -657,6 +658,91 @@
           'Ctrl+Shift+Left should promote children'
         );
       });
+
+      testGroup('Load / Unload');
+      test('expanded parent unloads only the selected tab without prompting',
+        async () => {
+          const view = createView();
+          const win = await addChild(view.root, {
+            id: 'w1', type: 'window', windowId: 10, loaded: true,
+            expanded: true
+          });
+          const parent = await addChild(win, {
+            id: 't1', tabId: 1, windowId: 10, loaded: true,
+            expanded: true, url: 'https://parent.example/'
+          });
+          const firstChild = await addChild(parent, {
+            id: 't2', tabId: 2, windowId: 10, loaded: true,
+            url: 'https://first.example/'
+          });
+          const secondChild = await addChild(parent, {
+            id: 't3', tabId: 3, windowId: 10, loaded: true,
+            url: 'https://second.example/'
+          });
+          let prompts = 0;
+          view.inputDialog = async () => {
+            prompts += 1;
+            return { button: 'All' };
+          };
+          view.cursor = parent;
+          const before = treeSnapshot(view.root);
+
+          await view.action_unloadNode({ type: 'keydown' });
+
+          const after = treeSnapshot(view.root);
+          const snap = { before, after };
+          assertEqual(parent.loaded, false,
+            'Expanded unload should close the selected parent tab', snap);
+          assertEqual(firstChild.loaded, true,
+            'Expanded unload should leave the first child open', snap);
+          assertEqual(secondChild.loaded, true,
+            'Expanded unload should leave the second child open', snap);
+          assertEqual(prompts, 0,
+            'Expanded unload should not open a one-or-all dialog', snap);
+          return snap;
+        });
+
+      test('collapsed parent unloads its loaded branch without prompting',
+        async () => {
+          const view = createView();
+          const win = await addChild(view.root, {
+            id: 'w1', type: 'window', windowId: 10, loaded: true,
+            expanded: true
+          });
+          const parent = await addChild(win, {
+            id: 't1', tabId: 1, windowId: 10, loaded: true,
+            expanded: false, url: 'https://parent.example/'
+          });
+          const firstChild = await addChild(parent, {
+            id: 't2', tabId: 2, windowId: 10, loaded: true,
+            url: 'https://first.example/'
+          });
+          const secondChild = await addChild(parent, {
+            id: 't3', tabId: 3, windowId: 10, loaded: true,
+            url: 'https://second.example/'
+          });
+          let prompts = 0;
+          view.inputDialog = async () => {
+            prompts += 1;
+            return { button: 'One' };
+          };
+          view.cursor = parent;
+          const before = treeSnapshot(view.root);
+
+          await view.action_unloadNode({ type: 'keydown' });
+
+          const after = treeSnapshot(view.root);
+          const snap = { before, after };
+          for (const node of [parent, firstChild, secondChild]) {
+            assertEqual(node.loaded, false,
+              'Collapsed unload should close every loaded branch tab', snap);
+            assertEqual(node.wasLoaded, true,
+              'Collapsed unload should retain branch restore state', snap);
+          }
+          assertEqual(prompts, 0,
+            'Collapsed unload should not open a one-or-all dialog', snap);
+          return snap;
+        });
 
       testGroup('Move Nodes');
       test('move down keeps window above sibling leaf', async () => {
@@ -3110,6 +3196,53 @@
         const snap = { before, after };
         assertEqual(view.root.nodes.length, 0, 'Leaf should be removed', snap);
         return { before, after };
+      });
+
+      test('native close removes selected parent and promotes its children', async () => {
+        const view = createView();
+        view.resolveTreeLoaded();
+        view.viewScope = 'session';
+        const before = await addChild(view.root, {
+          id: 'before',
+          label: 'Before'
+        });
+        const parent = await addChild(view.root, {
+          id: 'parent',
+          tabId: 10,
+          loaded: true,
+          active: true
+        });
+        const child = await addChild(parent, {
+          id: 'child',
+          tabId: 11,
+          loaded: true
+        });
+        const after = await addChild(view.root, {
+          id: 'after',
+          label: 'After'
+        });
+        view.cursor = parent;
+
+        await view.tree_nodeDeleted({
+          nodeId: parent.id,
+          mode: 'promoteKids',
+          actionReason: 'onTabRemoved'
+        });
+
+        assert(! view.nodes[parent.id],
+          'The browser-closed parent should leave the open view');
+        assertEqual(view.root.nodes.length, 3,
+          'The close should preserve all surrounding nodes');
+        assertEqual(view.root.nodes[0], before,
+          'The previous sibling should remain in place');
+        assertEqual(view.root.nodes[1], child,
+          'The child should replace its closed parent');
+        assertEqual(view.root.nodes[2], after,
+          'The next sibling should remain in place');
+        assertEqual(child.parent, view.root,
+          'The child should be promoted to the parent level');
+        assertEqual(view.cursor, child,
+          'The cursor should advance instead of selecting a ghost node');
       });
 
       test('delete hovered node keeps existing cursor without scrolling to it', async () => {

@@ -1936,6 +1936,12 @@ export class Node {
       if (args.openWindowOnRootMove) {
         moveMsg.openWindowOnRootMove = true;
       }
+      if (args.moveNodeOnly) {
+        moveMsg.moveNodeOnly = true;
+        if (args.nodeOnlyDestAdjusted) {
+          moveMsg.nodeOnlyDestAdjusted = true;
+        }
+      }
       moveMsg.actionReason = args.reason;
       await emit('tree_nodeMoved', moveMsg);
 

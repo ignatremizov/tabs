@@ -95,10 +95,9 @@ export class Bkgd {
     });
     this.backupQueued = false;
 
-    // queues for saved nodes which are in the process of being loaded
-    // (empty except during brief moments before browser opens stuff)
-    // ... and a mutex so others can wait until the queue is empty.
-    this.nodesLoadingMutex = new Mutex();
+    // Queues match browser creation events to saved nodes being restored.
+    // Never block browser events waiting for these queues to drain: those
+    // same events are responsible for consuming their pending matches.
     // Browser callbacks can overlap at await boundaries.  Preserve their
     // observed order in memory without writing replayable position records.
     // Keep this separate from Tree.onMessageMutex so onCreated events can
@@ -283,6 +282,13 @@ export class Bkgd {
     if (payload.skipTabReorder) {
       args.skipTabReorder = true;
     }
+    if (payload.moveNodeOnly) {
+      // ensureMovedInBatch promotes the background copy before the final
+      // move.  Preserve that atomic semantic when Node.moveTo rebroadcasts
+      // the persisted result to open TreeViews.
+      args.moveNodeOnly = true;
+      args.nodeOnlyDestAdjusted = true;
+    }
 
     return await this.tree.runPersistenceBatch(
       (operationArgs) => this.ensureMovedInBatch(
@@ -297,6 +303,9 @@ export class Bkgd {
   }
 
   async ensureMovedInBatch (payload, node, destParent, destIndex, args) {
+    const prevParentId = payload.prevParentId
+      || (node.parent ? node.parent.id : null);
+    let promotedChildren = false;
     if (payload.moveNodeOnly && node.hasKids()) {
       const destination = payload.nodeOnlyDestAdjusted
         ? { destParent, destIndex }
@@ -313,6 +322,7 @@ export class Bkgd {
           `ensureMoved(): could not promote every child of "${node.id}"`
         );
       }
+      promotedChildren = true;
     }
     if (payload.moveNodeOnly
       && Number.isInteger(payload.browserIndex)
@@ -331,6 +341,25 @@ export class Bkgd {
       }
     }
     if (node.parent === destParent && node.indexOf() === destIndex) {
+      // Promotion alone is still a structural mutation.  There is no final
+      // Node.moveTo call to broadcast it, so tell each open view to replay the
+      // same atomic node-only operation.
+      if (promotedChildren) {
+        const moveMsg = {
+          nodeId: node.id,
+          destParentId: destParent.id,
+          destIndex,
+          moveNodeOnly: true,
+          nodeOnlyDestAdjusted: true,
+          when: destParent.mtime,
+          prevParentId,
+          actionReason: args.reason
+        };
+        if (args.openWindowOnRootMove) {
+          moveMsg.openWindowOnRootMove = true;
+        }
+        await emit('tree_nodeMoved', moveMsg);
+      }
       return true;
     }
     if (this.tree.applyMove) {
@@ -354,9 +383,20 @@ export class Bkgd {
     if ('promoteKids' === payload.mode) {
       // The originating view and any sibling views apply the same atomic
       // message themselves.  Persist the background transition without
-      // rebroadcasting per-child moves or a second delete.
+      // rebroadcasting per-child moves or a second delete.  Browser-originated
+      // deletions have no originating view, so publish one atomic result after
+      // its persistence transaction completes.
       args.emit = false;
-      return await node.deleteSelfAndPromoteKids(args);
+      const changed = await node.deleteSelfAndPromoteKids(args);
+      if (changed && payload.broadcastResult) {
+        await emit('tree_nodeDeleted', {
+          nodeId: payload.nodeId,
+          mode: 'promoteKids',
+          when: node.mtime,
+          actionReason: args.reason
+        });
+      }
+      return changed;
     }
     return await node.deleteSelf(args);
   }
@@ -1587,21 +1627,6 @@ export class Bkgd {
       node.pinRestorePendingAt = Date.now();
     }
     // - push node to be loaded, and open it (new window or existing window)
-    if (this.nodesLoading.length <= 0) {
-      if (this.nodesLoadingMutexUnlock) {
-        this.nodesLoadingMutexUnlock();
-        this.nodesLoadingMutexUnlock = null;
-      }
-      try {
-        this.nodesLoadingMutexUnlock = await this.nodesLoadingMutex.lock();
-      } catch (err) {
-        if (needsWindow) {
-          this.finishPendingWindowLoad(windowNode, false);
-        }
-        node.browserLoadInProgress = false;
-        throw err;
-      }
-    }
     this.nodesLoading.push(node);
     const popNode = (node, failed = false) => {
       if (node.pendingLoadTimer) {
@@ -1612,10 +1637,6 @@ export class Bkgd {
       if (index !== -1) {
         if (failed) warn('bkgd_loadSavedNode failed:', node);
         this.nodesLoading.splice(index, 1);
-      }
-      if ((this.nodesLoading.length <= 0) && this.nodesLoadingMutexUnlock) {
-        this.nodesLoadingMutexUnlock();
-        this.nodesLoadingMutexUnlock = null;
       }
       node.browserLoadInProgress = false;
     };

@@ -2,8 +2,21 @@
 
 What changed, and when?  You know the drill.
 
+## 0.0.3.8 (2026-09-20)
 
-# 0.0.3 (2026-08-15)
+- Fixed a saved-window restore deadlock: tab-update handlers no longer wait
+  for pending tab creations while holding the browser-event lock needed to
+  finish those creations.  This prevents pending saved-node matches expiring
+  and late events adding duplicate rows in a different order.  Removed the
+  obsolete loading mutex while retaining serialized browser mutations.
+- Added regression coverage for early updates during restore, pinned-first
+  tab order, nested branches, repeated URLs, and Firefox's temporary
+  `about:blank` creation state.  Existing duplicate rows are not removed.
+
+
+# 0.0.3 (2026-08-16)
+
+The latest signed Firefox package for this release line is build `0.0.3.8`.
 
 This is the cumulative fork-versus-upstream inventory for 0.0.3.  It compares
 the fork with upstream `r0.1.181.0` (`e0031c2`) and includes work first shipped
@@ -44,7 +57,9 @@ individually.
   keyboard move.
 - Made browser-native tab-strip moves node-only too.  Moving a parent tab in
   Firefox or Chromium no longer drags its saved descendants to the new
-  location.
+  location.  Background persistence now rebroadcasts the same atomic move to
+  every open sidebar, preventing stale subtree layouts and duplicate-looking
+  live/unloaded entries after a follow-up native move.
 - Added `Ctrl+ArrowUp` / `Ctrl+ArrowDown` navigation to jump to the previous
   sibling or parent and to the next sibling after the current subtree,
   including siblings found by climbing through ancestors.
@@ -76,6 +91,10 @@ individually.
 - Made delete-with-child-promotion one background transaction.  Removing a
   restore wrapper can no longer race with individual child deletes and
   recursively erase the subtree it was meant to preserve.
+- Synchronized browser-native parent-tab closes with every open sidebar after
+  the promote-delete transaction commits.  Closed parents no longer remain as
+  selected ghost rows, their children replace them in place, and persisted
+  child records retain a valid parent instead of becoming Lost+Found orphans.
 - Added window-aware deletion.  An expanded loaded window can be closed while
   retaining its tabs as `wasLoaded`; an unloaded window is unwrapped; nested
   loaded windows merge into or are preserved under a suitable window
@@ -89,8 +108,9 @@ individually.
 
 - Replaced the in-panel Load and Unload actions with one configurable
   **Load / unload** toggle and one hover-menu control.  The default in-panel
-  key is `U`; the existing expanded/collapsed branch policies still determine
-  whether only the selected node or all eligible descendants are affected.
+  key is `U`.  Unloading an expanded parent affects only that node, while
+  unloading a collapsed parent affects every loaded tab in its branch without
+  prompting; loading retains its configurable branch policies.
 - Added a smart Shift variant, default `Shift+U`.  It first loads only missing
   `wasLoaded` tabs below the selected node without disturbing tabs already
   open.  If none are missing, it falls back to the normal load/unload toggle.
@@ -260,10 +280,11 @@ individually.
   explicit DOM construction and text nodes.
 - Added Node-based coverage for tree, persistence, restore, reconciliation,
   message retry, import, backup, keybinding, and movement behavior.  The suite
-  currently contains 179 checks.
+  currently contains 184 checks.
 - Added browser suites for DOM safety, client-ID flow, Firefox / Chromium
-  restore rules, Tree / Node behavior, and 75 TreeView actions in each browser
-  mode.  Added V8/browser coverage collection and a generated README badge.
+  restore rules, Tree / Node behavior, and 78 TreeView actions in each browser
+  mode.  Added V8/browser coverage collection and a generated README badge;
+  the headless runner now fails when a completed page reports failed checks.
 - Added developer documentation for event flow, IndexedDB durability, node
   IDs, marking and paste behavior, plus updated user help for movement,
   shortcuts, windows, pinned tabs, checkboxes, and `wasLoaded` restore.

@@ -604,6 +604,64 @@
           'Unpinned node row should not keep pinned class');
       });
 
+      testGroup('Saved Tab Restore');
+      test('updates before creation reattach pending tabs without blocking', async () => {
+        const api = getApi();
+        const originalCreate = api.tabs.create;
+        const originalUpdate = api.windows.update;
+        const bkgd = new Bkgd();
+        const tree = createTree();
+        tree.bkgd = bkgd;
+        bkgd.tree = tree;
+        bkgd.resolveTreeLoaded();
+        const events = [];
+        let deadline;
+        try {
+          api.tabs.create = async () => ({ id: 77 });
+          api.windows.update = async () => ({});
+          const win = await addChild(tree.root, {
+            id: 'restore-window', type: 'window', windowId: 1, loaded: true
+          });
+          const saved = await addChild(win, {
+            id: 'restore-tab',
+            url: 'https://example.com/saved',
+            title: 'Saved title',
+            wasLoaded: true
+          });
+          await bkgd.bkgd_loadSavedNode({
+            nodeId: saved.id, reason: 'userAction', discarded: true
+          });
+          const tab = {
+            id: 77, windowId: 1, index: 0, pinned: false, discarded: true,
+            url: saved.url, title: saved.title
+          };
+          // Firefox can expose a pending URL in the about:blank title.
+          if (env === 'firefox') {
+            tab.url = 'about:blank';
+            tab.title = 'example.com/saved';
+          }
+          events.push(bkgd.onTabUpdated(77, { discarded: true }, tab));
+          events.push(bkgd.onTabCreated(tab));
+          const completed = await Promise.race([
+            Promise.all(events).then(() => true),
+            new Promise(resolve => {
+              deadline = setTimeout(() => resolve(false), 1000);
+            })
+          ]);
+          assert(completed, 'Restore should finish without a pending-load timeout');
+          assertEqual(saved.tabId, 77, 'Early update should attach the saved node');
+          assertEqual(saved.url, 'https://example.com/saved',
+            'Temporary about:blank must not replace the saved URL');
+          assertEqual(win.nodes.length, 1, 'The later create must not duplicate the node');
+          assertEqual(bkgd.nodesLoading.length, 0, 'The pending match should be consumed');
+        } finally {
+          clearTimeout(deadline);
+          for (const node of bkgd.nodesLoading) clearTimeout(node.pendingLoadTimer);
+          api.tabs.create = originalCreate;
+          api.windows.update = originalUpdate;
+        }
+      });
+
       testGroup('Tab Removal');
       test('onTabRemoved removes boring last tab and window', async () => {
         const tree = createTree();

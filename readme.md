@@ -294,8 +294,8 @@ without having to focus the sidepanel first.
 For example, when the sidepanel is focused, some of the default hotkeys
 include...
 
-- `U`: load or unload the highlighted node (a collapsed branch applies the
-  action to its child tabs)
+- `U`: load or unload the highlighted node; when unloading, a collapsed branch
+  applies the action to its loaded child tabs
 - `Shift+U`: restore missing `wasLoaded` tabs below the highlighted node;
   when none are missing, behave like `U`
 - `Enter`: open or focus the highlighted node
@@ -303,10 +303,10 @@ include...
 - `Shift+Up` / `Shift+Down`: move the node the cursor is on
 - `Space`: expand/collapse the highlighted node
 
-When using keyboard shortcuts on a **collapsed node with children**, the
-load/unload actions will apply to all tabs in that branch.  A confirmation
-dialog may appear according to the branch-action settings.  The hover menu
-uses the same state-based load/unload action.
+Unloading is state-based and does not prompt: an **expanded** parent unloads
+only the highlighted node, while a **collapsed** parent unloads all loaded tabs
+in its branch.  Loading still follows the configured expanded/collapsed branch
+policy.  The hover menu uses the same behavior.
 
 So in your extension hotkeys, I'd recommend assigning them like this:
 

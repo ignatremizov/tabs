@@ -50,8 +50,6 @@ export class TreeView extends Tree {
       hideTopButtonsDuringSearch: false,
       loadCollapsedBranchStyle: 'ask',
       loadExpandedBranchStyle: 'ask',
-      unloadCollapsedBranchStyle: 'ask',
-      unloadExpandedBranchStyle: 'ask',
       deleteExpandedBranchStyle: 'one',
       deleteCollapsedBranchStyle: 'ask',
       defaultViewScope: 'auto',
@@ -2273,68 +2271,32 @@ export class TreeView extends Tree {
     // abort if nothing to unload
     if (! cursor) return;
 
-    // non-window branch w/ loaded tabs needs special care
-    if (cursor.hasLoadedTabs() && (! cursor.isWindow())) {
+    // Match the state-based deletion workflow without its safety prompt:
+    // collapsed branches act as one hidden unit, while expanded branches
+    // affect only the selected row.  A window is already one browser unit,
+    // so Node.unload() handles its tabs regardless of presentation state.
+    const unloadBranch = cursor.isCollapsed()
+      && cursor.hasLoadedTabs()
+      && (! cursor.isWindow());
+    if (unloadBranch) {
       const loadedTabs = cursor.getLoadedTabs();
       loadedTabs.reverse();  // unload from bottom to top
       if (cursor.isLoadedTab()) loadedTabs.push(cursor);
-      // TODO: sort loadedTabs so active tab (if any) is last
-      const cursorLoaded = cursor.isLoadedTab();
-      const numLoaded = loadedTabs.length;
-
-      // check user prefs for what to do
-      let actionStyle = cursor.isCollapsed()
-        ? this.cfg.unloadCollapsedBranchStyle
-        : this.cfg.unloadExpandedBranchStyle;
-
-      // can't use a dialog without a mouse when invoked via command
-      // so change "ask" to "one"
-      if (('ask' === actionStyle) && ('command' === event.type))
-      { actionStyle = 'one'; }
-
-      // ask, if we're gonna
-      if ('ask' === actionStyle) {
-        let description;
-        let buttons;
-        if (cursorLoaded) {
-          description = `Unload one (cursor) tab or all ${numLoaded} tabs?`;
-          buttons = ['Cancel', 'One', 'All'];  // Cancel is default
-        } else {
-          description = `Unload all ${numLoaded} tabs?`;
-          buttons = ['Cancel', 'All'];  // Cancel is default
-        }
-        const result = await this.inputDialog({
-          doc: this.document,
-          title: 'Unload Tabs',
-          input: false,
-          description: description,
-          buttons: buttons,
-        });
-        // abort if user cancelled
-        if ((!result) || (! ['All', 'One'].includes(result.button))) return;
-        actionStyle = result.button.toLowerCase();
+      let numSucceeded = 0;
+      let numFailed = 0;
+      for (const tabNode of loadedTabs) {
+        const success = await tabNode.unload(
+          { reason: 'userAction', wasLoaded: true });
+        if (success) numSucceeded ++;
+        else numFailed ++;
       }
-      if ('one' === actionStyle) {
-        const success = await cursor.unload({ reason: 'userAction' });
-        if (success) this.setStatus(`unloaded ${cursor.toLine()}`);
-        else this.setStatus(`failed to unload ${cursor.toLine()}`);
-      }
-      else if ('all' === actionStyle) {
-        let numSucceeded = 0;
-        let numFailed = 0;
-        for (const tabNode of loadedTabs) {
-          const success = await tabNode.unload(
-            { reason: 'userAction', wasLoaded: true });
-          if (success) numSucceeded ++;
-          else numFailed ++;
-        }
-        const failText = (numFailed ? `, ${numFailed} failed` : '');
-        this.setStatus(`unloaded ${numSucceeded} nodes${failText}`);
-      }
+      const failText = (numFailed ? `, ${numFailed} failed` : '');
+      this.setStatus(`unloaded ${numSucceeded} nodes${failText}`);
     }
     else {
-      await cursor.unload({ reason: 'userAction' });
-      this.setStatus(`unloaded ${cursor.toLine()}`);
+      const success = await cursor.unload({ reason: 'userAction' });
+      if (success) this.setStatus(`unloaded ${cursor.toLine()}`);
+      else this.setStatus(`nothing to unload from ${cursor.toLine()}`);
     }
   }
 

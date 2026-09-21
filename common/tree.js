@@ -1264,10 +1264,6 @@ export class Tree {
       delete savedTabNode.pendingLoadTimer;
     }
     debug(`Tree.onTabCreated() loadingSavedTab=${savedTabNode.id}`);
-    if ((queue.length <= 0) && this.bkgd.nodesLoadingMutexUnlock) {
-      this.bkgd.nodesLoadingMutexUnlock();
-      this.bkgd.nodesLoadingMutexUnlock = null;
-    }
     return savedTabNode;
   }
 
@@ -1924,10 +1920,12 @@ export class Tree {
     // wait, if a tab is currently being created or replaced
     const otcUnlock = await this.onTabCreatedMutex.lock();  otcUnlock();
     const otrUnlock = await this.onTabReplacedMutex.lock();  otrUnlock();
-    if (this.bkgd && this.bkgd.nodesLoadingMutex) {
-      const nlUnlock = await this.bkgd.nodesLoadingMutex.lock();
-      nlUnlock();
-    }
+    // Do not wait for the entire saved-tab load queue here.  Background
+    // browser events are serialized: onCreated needs the same event lock
+    // currently held by this update to consume its pending match.  Waiting
+    // would stall both until the load timeout discards the saved identity.
+    // If this update precedes its own onCreated, the fallback below attaches
+    // it through onTabCreated and consumes the pending match itself.
 
     const tabNode = this.getNodeByTabId(tabId);
 

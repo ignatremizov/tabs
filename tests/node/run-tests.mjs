@@ -1912,6 +1912,150 @@ test('ensureDeleted atomically promotes children before deleting wrapper', async
   }
 });
 
+test('native tab close atomically removes a parent in every open tree',
+async () => {
+  const originalIndexedDb = globalThis.indexedDB;
+  const originalSendMessage = api.runtime.sendMessage;
+  const originalIsBkgd = emit.isBkgd;
+  const originalBkgd = emit.bkgd;
+  const messages = [];
+  const operations = [];
+  const writes = [];
+  try {
+    globalThis.indexedDB = {
+      open: () => ({})
+    };
+    api.runtime.sendMessage = async (msg) => {
+      operations.push('broadcast');
+      messages.push({ ...msg });
+      return {};
+    };
+
+    const bkgd = new Bkgd();
+    const background = new TreeStore(bkgd);
+    background.db = {
+      writeNodes: async (nodes, deleteNodeIds) => {
+        operations.push('persist');
+        writes.push({
+          nodes: nodes.map((node) => node.toDict()),
+          deleteNodeIds: [...deleteNodeIds]
+        });
+      }
+    };
+    bkgd.tree = background;
+    bkgd.ports = [{}];
+    bkgd.resolveTreeLoaded();
+    background.resolveTreeLoaded();
+    emit.isBkgd = true;
+    emit.bkgd = bkgd;
+
+    const buildBranch = async (tree) => {
+      const win = await addChild(tree.root, {
+        id: 'native-close-window',
+        type: 'window',
+        windowId: 1,
+        loaded: true
+      });
+      const before = await addChild(win, {
+        id: 'native-close-before',
+        tabId: 9,
+        windowId: 1,
+        loaded: true
+      });
+      const parent = await addChild(win, {
+        id: 'native-close-parent',
+        tabId: 10,
+        windowId: 1,
+        loaded: true,
+        active: true
+      });
+      const child = await addChild(parent, {
+        id: 'native-close-child',
+        tabId: 11,
+        windowId: 1,
+        loaded: true
+      });
+      const after = await addChild(win, {
+        id: 'native-close-after',
+        tabId: 12,
+        windowId: 1,
+        loaded: true
+      });
+      return { win, before, parent, child, after };
+    };
+
+    const backgroundBranch = await buildBranch(background);
+    const view = createTree(null);
+    view.resolveTreeLoaded();
+    const viewBranch = await buildBranch(view);
+    operations.length = 0;
+    writes.length = 0;
+    messages.length = 0;
+
+    await bkgd.onTabRemoved(10, {
+      windowId: 1,
+      isWindowClosing: false
+    });
+
+    assert(! background.nodes[backgroundBranch.parent.id],
+      'The persisted tree should delete the browser-closed parent');
+    assertEqual(backgroundBranch.child.parent, backgroundBranch.win,
+      'The persisted tree should promote the surviving child');
+    assertEqual(
+      backgroundBranch.win.nodes.map((node) => node.id).join(','),
+      [
+        backgroundBranch.before.id,
+        backgroundBranch.child.id,
+        backgroundBranch.after.id
+      ].join(','),
+      'The child should replace its closed parent in place'
+    );
+    assertEqual(writes.length, 1,
+      'Promotion and deletion should persist in one transaction');
+    assert(writes[0].deleteNodeIds.includes(backgroundBranch.parent.id),
+      'The transaction should delete the closed parent record');
+    const persistedChild = writes[0].nodes.find(
+      (node) => node.id === backgroundBranch.child.id
+    );
+    assertEqual(persistedChild.parent, backgroundBranch.win.id,
+      'The transaction should not leave an orphan for Lost+Found');
+
+    const treeMessages = messages.filter(
+      (msg) => msg.msg?.startsWith('tree_')
+    );
+    assertEqual(treeMessages.length, 1,
+      'A native close should broadcast one atomic tree mutation');
+    assertEqual(treeMessages[0].msg, 'tree_nodeDeleted',
+      'The sidebar should receive a deletion');
+    assertEqual(treeMessages[0].mode, 'promoteKids',
+      'The deletion should preserve the closed parent children');
+    assertEqual(operations.join(','), 'persist,broadcast',
+      'The durable mutation should complete before notifying open views');
+
+    await view.tree_nodeDeleted(treeMessages[0]);
+
+    assert(! view.nodes[viewBranch.parent.id],
+      'The open view should not retain the closed parent as a ghost');
+    assertEqual(viewBranch.child.parent, viewBranch.win,
+      'The open view should promote the same surviving child');
+    assertEqual(
+      viewBranch.win.nodes.map((node) => node.id).join(','),
+      backgroundBranch.win.nodes.map((node) => node.id).join(','),
+      'The open view and persisted tree should remain synchronized'
+    );
+    assertEqual(
+      view.root.findNodes((node) => node.active).length,
+      0,
+      'The deleted active tab should not remain selected in the view model'
+    );
+  } finally {
+    globalThis.indexedDB = originalIndexedDb;
+    api.runtime.sendMessage = originalSendMessage;
+    emit.isBkgd = originalIsBkgd;
+    emit.bkgd = originalBkgd;
+  }
+});
+
 test('promoteChildren keeps its node and emits one atomic mutation',
 async () => {
   const originalSendMessage = api.runtime.sendMessage;
@@ -2302,6 +2446,156 @@ test('ensureMoved can move browser tab node without its children', async () => {
       'Moved tab should land at the browser-reported flat index');
   } finally {
     api.tabs.query = originalQuery;
+  }
+});
+
+test('browser node-only moves replay atomically in open tree views',
+async () => {
+  const originalQuery = api.tabs.query;
+  const originalSendMessage = api.runtime.sendMessage;
+  const originalIsBkgd = emit.isBkgd;
+  const originalBkgd = emit.bkgd;
+  const messages = [];
+  try {
+    emit.isBkgd = false;
+    emit.bkgd = null;
+    api.runtime.sendMessage = async (msg) => {
+      messages.push({ ...msg });
+      return {};
+    };
+
+    const buildTree = async (bkgd = null) => {
+      const tree = createTree(bkgd);
+      tree.resolveTreeLoaded();
+      const win = await addChild(tree.root, {
+        id: 'native-move-window',
+        type: 'window',
+        windowId: 1,
+        loaded: true
+      });
+      const pinned = await addChild(win, {
+        id: 'native-move-pinned',
+        tabId: 9,
+        windowId: 1,
+        loaded: true,
+        pinned: true
+      });
+      const parent = await addChild(win, {
+        id: 'native-move-parent',
+        tabId: 10,
+        windowId: 1,
+        loaded: true
+      });
+      const child = await addChild(parent, {
+        id: 'native-move-child',
+        tabId: 11,
+        windowId: 1,
+        loaded: true
+      });
+      const sibling = await addChild(win, {
+        id: 'native-move-sibling',
+        tabId: 12,
+        windowId: 1,
+        loaded: true
+      });
+      return { tree, win, pinned, parent, child, sibling };
+    };
+
+    const bkgd = new Bkgd();
+    const background = await buildTree(bkgd);
+    const view = await buildTree();
+    bkgd.tree = background.tree;
+
+    api.tabs.query = async () => ([
+      { id: 9, index: 0, windowId: 1, pinned: true },
+      { id: 11, index: 1, windowId: 1, pinned: false },
+      { id: 12, index: 2, windowId: 1, pinned: false },
+      { id: 10, index: 3, windowId: 1, pinned: false }
+    ]);
+
+    await bkgd.ensureMoved({
+      nodeId: background.parent.id,
+      destParentId: background.win.id,
+      destIndex: 3,
+      reason: 'onTabMoved',
+      skipTabReorder: true,
+      moveNodeOnly: true,
+      browserWindowId: 1,
+      browserIndex: 3,
+      pinned: false,
+      prevParentId: background.win.id
+    });
+
+    const parentMove = messages.find((msg) =>
+      ('tree_nodeMoved' === msg.msg)
+      && (background.parent.id === msg.nodeId)
+    );
+    assert(parentMove,
+      'The background should broadcast the browser-originated move');
+    assertEqual(parentMove.moveNodeOnly, true,
+      'The broadcast should preserve node-only move semantics');
+    assertEqual(parentMove.nodeOnlyDestAdjusted, true,
+      'The broadcast destination should be marked post-promotion');
+
+    await view.tree.tree_nodeMoved(parentMove);
+    assertEqual(
+      view.win.nodes.map((node) => node.id).join(','),
+      background.win.nodes.map((node) => node.id).join(','),
+      'An open view should reproduce the persisted parent-only move'
+    );
+    assertEqual(view.parent.nodes.length, 0,
+      'The view should promote the moved parent tab children in place');
+
+    messages.length = 0;
+    api.tabs.query = async () => ([
+      { id: 9, index: 0, windowId: 1, pinned: true },
+      { id: 12, index: 1, windowId: 1, pinned: false },
+      { id: 11, index: 2, windowId: 1, pinned: false },
+      { id: 10, index: 3, windowId: 1, pinned: false }
+    ]);
+    await bkgd.ensureMoved({
+      nodeId: background.child.id,
+      destParentId: background.win.id,
+      destIndex: 3,
+      reason: 'onTabMoved',
+      skipTabReorder: true,
+      moveNodeOnly: true,
+      browserWindowId: 1,
+      browserIndex: 2,
+      pinned: false,
+      prevParentId: background.win.id
+    });
+
+    const childMove = messages.find((msg) =>
+      ('tree_nodeMoved' === msg.msg)
+      && (background.child.id === msg.nodeId)
+    );
+    assert(childMove,
+      'A subsequent browser move should retain the existing child node');
+    assertEqual(childMove.moveNodeOnly, true,
+      'Every native tab move should retain node-only replay semantics');
+    await view.tree.tree_nodeMoved(childMove);
+    assertEqual(
+      view.win.nodes.map((node) => node.id).join(','),
+      background.win.nodes.map((node) => node.id).join(','),
+      'The view should remain synchronized after moving the former child'
+    );
+    assertEqual(Object.keys(view.tree.nodes).length, 6,
+      'Browser moves should not create duplicate nodes in the view');
+    for (const tabId of [9, 10, 11, 12]) {
+      for (const tree of [background.tree, view.tree]) {
+        const matches = tree.root.findNodes(
+          (node) => node.tabId === tabId
+        );
+        assertEqual(matches.length, 1,
+          `Tab ${tabId} should keep one binding after both moves`);
+      }
+    }
+  } finally {
+    api.tabs.query = originalQuery;
+    api.runtime.sendMessage = originalSendMessage;
+    emit.isBkgd = originalIsBkgd;
+    emit.bkgd = originalBkgd;
   }
 });
 
@@ -2907,6 +3201,216 @@ async () => {
   }
 });
 
+test('tab updates cannot block pending saved-tab creation events', async () => {
+  const originalTabsCreate = api.tabs.create;
+  const originalWindowsUpdate = api.windows.update;
+  const bkgd = new Bkgd();
+  const tree = createTree(bkgd);
+  bkgd.tree = tree;
+  bkgd.resolveTreeLoaded();
+  const events = [];
+  let deadline;
+  try {
+    api.tabs.create = async () => ({ id: 77 });
+    api.windows.update = async () => ({});
+    const win = await addChild(tree.root, {
+      id: 'restore-event-window',
+      type: 'window',
+      windowId: 1,
+      loaded: true
+    });
+    const live = await addChild(win, {
+      id: 'restore-event-live',
+      url: 'https://example.com/live',
+      tabId: 10,
+      windowId: 1,
+      loaded: true
+    });
+    const saved = await addChild(win, {
+      id: 'restore-event-saved',
+      url: 'https://example.com/saved',
+      wasLoaded: true
+    });
+    saved.reorderAllTabsInThisWindow = async () => {};
+    await bkgd.bkgd_loadSavedNode({
+      nodeId: saved.id,
+      reason: 'userAction'
+    });
+    events.push(bkgd.onTabUpdated(10, { title: 'Live title' }, {
+      id: 10, windowId: 1, url: live.url
+    }));
+    events.push(bkgd.onTabCreated({
+      id: 77, windowId: 1, index: 1, url: saved.url
+    }));
+    const completed = await Promise.race([
+      Promise.all(events).then(() => true),
+      new Promise(resolve => {
+        deadline = setTimeout(() => resolve(false), 200);
+      })
+    ]);
+    assert(completed,
+      'Updates must not hold the browser-event lock waiting for queued creations');
+    assertEqual(saved.tabId, 77,
+      'The created tab must bind to its saved node before the load timeout');
+    assertEqual(live.title, 'Live title',
+      'Unrelated live tab updates should still be applied');
+    assertEqual(win.nodes.length, 2, 'Restore must not add a duplicate row');
+    assertEqual(bkgd.nodesLoading.length, 0,
+      'Creation should consume the pending match without a failsafe timeout');
+  } finally {
+    clearTimeout(deadline);
+    // Release the old implementation's deadlock as well, so a failing
+    // regression does not leave work or timers running into subsequent tests.
+    bkgd.nodesLoadingMutexUnlock?.();
+    bkgd.nodesLoadingMutexUnlock = null;
+    await Promise.allSettled(events);
+    for (const node of bkgd.nodesLoading) clearTimeout(node.pendingLoadTimer);
+    api.tabs.create = originalTabsCreate;
+    api.windows.update = originalWindowsUpdate;
+  }
+});
+
+test('saved window restore retains node identity and pinned tree order',
+async () => {
+  const originalIndexedDb = globalThis.indexedDB;
+  const originalTabs = { ...api.tabs };
+  const originalWindows = { ...api.windows };
+  const events = [];
+  const bkgd = new Bkgd();
+  let tree;
+  let nextTabId = 100;
+  try {
+    globalThis.indexedDB = { open: () => ({}) };
+    tree = new TreeStore(bkgd);
+    tree.db = { writeNodes: async () => {} };
+    bkgd.tree = tree;
+    bkgd.idGen = { newId: () => `unexpected-${++nextTabId}` };
+    bkgd.resolveTreeLoaded();
+    tree.resolveTreeLoaded();
+    const win = await addChild(tree.root, {
+      id: 'restore-whole-window',
+      type: 'window',
+      wasLoaded: true
+    });
+    const pinned = await addChild(win, {
+      id: 'restore-pinned',
+      url: 'https://example.com/mail',
+      pinned: true,
+      wasLoaded: true
+    });
+    const parent = await addChild(win, {
+      id: 'restore-parent',
+      url: 'https://example.com/repeated',
+      wasLoaded: true
+    });
+    const child = await addChild(parent, {
+      id: 'restore-child',
+      url: 'https://example.com/child',
+      wasLoaded: true
+    });
+    const repeated = await addChild(win, {
+      id: 'restore-repeated',
+      url: parent.url,
+      wasLoaded: true
+    });
+    const savedOnly = await addChild(win, {
+      id: 'restore-not-previously-loaded',
+      url: 'https://example.com/saved-only'
+    });
+    const expected = [pinned, parent, child, repeated];
+    const browserTabs = [];
+    let windowCreates = 0;
+    const reindex = () => browserTabs.forEach((tab, index) => {
+      tab.index = index;
+    });
+    const makeTab = (properties) => {
+      const tab = {
+        id: nextTabId++,
+        windowId: 82,
+        index: browserTabs.length,
+        url: properties.url,
+        title: properties.url,
+        pinned: Boolean(properties.pinned),
+        discarded: Boolean(properties.discarded)
+      };
+      browserTabs.push(tab);
+      return tab;
+    };
+    api.tabs.query = async () => browserTabs.map((tab) => ({ ...tab }));
+    api.tabs.get = async (id) => ({ ...browserTabs.find((tab) => tab.id === id) });
+    api.tabs.update = async (id, changes) => {
+      const tab = browserTabs.find((item) => item.id === id);
+      Object.assign(tab, changes);
+      events.push(bkgd.onTabUpdated(id, changes, { ...tab }));
+      return { ...tab };
+    };
+    api.tabs.move = async (ids, details) => {
+      const moving = (Array.isArray(ids) ? ids : [ids])
+        .map((id) => browserTabs.find((tab) => tab.id === id));
+      for (const tab of moving) browserTabs.splice(browserTabs.indexOf(tab), 1);
+      browserTabs.splice(details.index, 0, ...moving);
+      reindex();
+      return moving;
+    };
+    api.windows.get = async () => ({ id: 82 });
+    api.windows.update = async () => ({ id: 82 });
+    api.windows.create = async (properties) => {
+      windowCreates += 1;
+      const tab = makeTab(properties);
+      const window = { id: 82, tabs: [{ ...tab }] };
+      events.push(bkgd.onWindowCreated(window));
+      events.push(bkgd.onTabCreated({ ...tab }));
+      return window;
+    };
+    api.tabs.create = async (properties) => {
+      const tab = makeTab(properties);
+      // Existing tabs keep emitting updates while a window is restored.
+      // Some restored tabs also report an update before their create event.
+      events.push(bkgd.onTabUpdated(browserTabs[0].id,
+        { title: browserTabs[0].title }, { ...browserTabs[0] }));
+      events.push(bkgd.onTabUpdated(tab.id,
+        { title: tab.title }, { ...tab }));
+      events.push(bkgd.onTabCreated({ ...tab }));
+      return { ...tab };
+    };
+
+    await win.load({ reason: 'userAction' });
+    // Handlers can cause pin updates and therefore append further events.
+    for (let index = 0; index < events.length; index += 1) await events[index];
+    await win.reorderAllTabsInThisWindow();
+    for (let index = 0; index < events.length; index += 1) await events[index];
+
+    assertEqual(windowCreates, 1, 'Restore should create exactly one window');
+    assertEqual(Object.keys(tree.nodes).length, 7,
+      'Restore should reattach saved nodes, not create duplicate rows');
+    assertEqual(win.nodes.map((node) => node.id).join(','),
+      [pinned, parent, repeated, savedOnly].map((node) => node.id).join(','),
+      'The original sibling order should remain unchanged');
+    assertEqual(child.parent, parent, 'Restore should preserve nested branches');
+    assertEqual(savedOnly.loaded, false,
+      'Saved tabs without wasLoaded should remain unloaded');
+    assert(expected.every((node) => node.loaded && node.tabId),
+      'Every previously loaded tab should reuse its saved node');
+    assertEqual(browserTabs.map((tab) => tab.id).join(','),
+      expected.map((node) => node.tabId).join(','),
+      'Native tab order should match the saved tree, not reverse it');
+    assert(browserTabs[0].pinned, 'The first restored tab should remain pinned');
+    assertEqual(bkgd.nodesLoading.length, 0, 'No pending matches should remain');
+  } finally {
+    await Promise.allSettled(events);
+    for (const node of Object.values(tree?.nodes || {})) {
+      clearTimeout(node.pendingLoadTimer);
+      clearTimeout(node.pendingWindowLoadTimer);
+    }
+    Object.assign(api.tabs, originalTabs);
+    Object.assign(api.windows, originalWindows);
+    // Restore optional API methods which were absent from the original stub.
+    if (! originalTabs.create) delete api.tabs.create;
+    if (! originalWindows.create) delete api.windows.create;
+    globalThis.indexedDB = originalIndexedDb;
+  }
+});
+
 test('bkgd_loadSavedNode reattaches Firefox extension pages by resolved URL',
 async () => {
   const originalGetUrl = api.runtime.getURL;
@@ -3023,10 +3527,6 @@ async () => {
 
     if (tab.pendingLoadTimer) clearTimeout(tab.pendingLoadTimer);
     bkgd.nodesLoading.splice(bkgd.nodesLoading.indexOf(tab), 1);
-    if (bkgd.nodesLoadingMutexUnlock) {
-      bkgd.nodesLoadingMutexUnlock();
-      bkgd.nodesLoadingMutexUnlock = null;
-    }
     tab.browserLoadInProgress = false;
   } finally {
     api.tabs.create = originalTabsCreate;
@@ -8294,6 +8794,64 @@ async () => {
   await tree.action_toggleLoad({ type: 'keydown' });
   assertEqual(action, 'unload',
     'An open leaf should unload');
+});
+
+test('TreeView unload follows expansion state without prompting', async () => {
+  const tree = new TreeView({
+    isInert: true,
+    document: null,
+    window: null
+  });
+  const calls = [];
+  let collapsed = false;
+  let prompts = 0;
+  const makeTab = (id) => ({
+    id,
+    unload: async (args) => {
+      calls.push({ id, args });
+      return true;
+    }
+  });
+  const firstChild = makeTab('first-child');
+  const secondChild = makeTab('second-child');
+  const cursor = {
+    id: 'cursor',
+    isCollapsed: () => collapsed,
+    hasLoadedTabs: () => true,
+    isWindow: () => false,
+    isLoadedTab: () => true,
+    getLoadedTabs: () => [firstChild, secondChild],
+    unload: async (args) => {
+      calls.push({ id: 'cursor', args });
+      return true;
+    },
+    toLine: () => 'cursor'
+  };
+  tree.whichCursor = () => cursor;
+  tree.setStatus = () => {};
+  tree.inputDialog = async () => {
+    prompts += 1;
+    return { button: 'All' };
+  };
+
+  await tree.action_unloadNode({ type: 'keydown' });
+  assertEqual(calls.map((call) => call.id).join(','), 'cursor',
+    'An expanded branch should unload only the selected node');
+  assertEqual(calls[0].args.wasLoaded, undefined,
+    'A single-node unload should retain ordinary unload semantics');
+
+  calls.length = 0;
+  collapsed = true;
+  await tree.action_unloadNode({ type: 'keydown' });
+  assertEqual(
+    calls.map((call) => call.id).join(','),
+    'second-child,first-child,cursor',
+    'A collapsed branch should unload descendants bottom-up, then the cursor'
+  );
+  assert(calls.every((call) => call.args.wasLoaded === true),
+    'Collapsed branch tabs should remain available for branch restore');
+  assertEqual(prompts, 0,
+    'Neither expanded nor collapsed unload should open a choice dialog');
 });
 
 test('TreeView smart load restores missing tabs before normal toggle',

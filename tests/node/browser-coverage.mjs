@@ -185,6 +185,14 @@ async function waitForTestDone(cdp, timeoutMs) {
   throw new Error('Timed out waiting for test completion');
 }
 
+async function getTestResults(cdp) {
+  const result = await cdp.send('Runtime.evaluate', {
+    expression: 'window.__TEST_RESULTS__ || null',
+    returnByValue: true
+  });
+  return result?.result?.value || null;
+}
+
 async function run() {
   fs.mkdirSync(coverageDir, { recursive: true });
   const server = await startServer();
@@ -274,6 +282,23 @@ async function run() {
           `Timeout waiting for tests: ${page}\n` +
           (errMsg ? `Errors:\n${errMsg}\n` : '') +
           (logMsg ? `Logs:\n${logMsg}\n` : '')
+        );
+      }
+      const testResults = await getTestResults(cdp);
+      if (! testResults || (! Number.isFinite(testResults.failCount))) {
+        throw new Error(
+          `Test page did not publish results: ${page}\n`
+          + pageLogs.slice(-10).join('\n')
+        );
+      }
+      console.log(
+        `${page}: ${testResults.passCount} passed, `
+        + `${testResults.failCount} failed`
+      );
+      if (testResults.failCount > 0) {
+        throw new Error(
+          `Browser tests failed: ${page}\n`
+          + pageLogs.slice(-20).join('\n')
         );
       }
     }
