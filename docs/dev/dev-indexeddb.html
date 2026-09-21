@@ -125,5 +125,19 @@ to newly opened sidebars too. Pending changes are held in memory: closing or
 crashing the browser before a retry succeeds can still lose those changes.
 Export a backup before closing when storage remains unavailable. Retry does
 not recreate browser tabs or replay already completed commands.</p>
+<h2>Import commit boundary</h2>
+<p>Imports are plain data, not Node properties to copy blindly. Validate known
+fields and their types, IDs, child arrays, and graph limits before constructing
+any nodes. The limits are 200,000 records, 400,000 edges, 512 levels including
+the destination root, 16 MiB per text field, and 128 MiB total text. The Options
+file picker also refuses files larger than 128 MiB before parsing.</p>
+<p>Build the imported subtree detached from the live cache. Write its records
+and the new root child list in one IndexedDB transaction; publish the subtree
+only after commit. A failed import is not queued as an ordinary dirty edit.
+Concurrent edits retain their current in-memory root state and serialize their
+subsequent writes behind the import. Recoverable graph edges are skipped with
+visible warnings; disconnected records are retained beneath the imported root.
+Imported numeric browser bindings are discarded, but container scope and native
+group metadata remain available for safe later restoration.</p>
 </body>
 </html>

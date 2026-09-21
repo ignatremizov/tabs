@@ -26,6 +26,8 @@ import { createNewUserTutorialNodes } from '/bkgd/new-user.js';
 import { runReconcile } from '/bkgd/reconcile.js';
 import { Containers } from '/bkgd/containers.js';
 import { TabGroups } from '/bkgd/tab-groups.js';
+import { validateNodeGraph, nestedRecordsToHash, isRecord } from '/common/serialized-tree.js';
+import { commitImportedGraph } from '/bkgd/import-tree.js';
 
 log('/bkgd/bkgd.js running');
 
@@ -2392,11 +2394,14 @@ export class Bkgd {
     const response = {};
     let total = 0;
     try {
-      total = await handler.bind(this)(msg.data, msg.filename);
+      const imported = await handler.bind(this)(msg.data, msg.filename);
+      total = typeof imported === 'number' ? imported : imported.total;
+      if (imported?.warnings?.length) response.warnings = imported.warnings;
       if ((! Number.isFinite(total)) || (total < 0)) {
         throw new Error('File format was not recognized');
       }
       response.status = `${total} nodes imported`;
+      if (response.warnings?.length) response.status += ` (${response.warnings.length} recovery warnings; see details)`;
     } catch (err) {
       response.status = `Import error: ${err}`;
       response.error = err?.message || String(err);
@@ -2408,116 +2413,25 @@ export class Bkgd {
   }
 
   async importBackupFile(json, filename) {
-    if (jsonSchema !== json?.$schema) {
+    if (! isRecord(json) || jsonSchema !== json.$schema) {
       throw new Error('Does not appear to be a TKTSTO file');
     }
-    if (! json.nodes?.root) {
-      throw new Error('TKTSTO backup has no root node');
+    if (filename != null && typeof filename !== 'string') throw new Error('Invalid import filename');
+    if (json.metadata != null && ! isRecord(json.metadata)) throw new Error('Invalid backup metadata');
+    for (const key of ['sessionStartDate', 'exportDate']) {
+      if (json.metadata?.[key] != null && ! Number.isFinite(json.metadata[key])) {
+        throw new Error(`Invalid backup metadata ${key}`);
+      }
     }
-
-    // don't import to an incomplete tree
+    const graph = validateNodeGraph(json.nodes, { importing: true });
+    const root = graph.records.root;
+    root.expanded = false;
+    root.label = root.label ? `${filename || 'Imported session'} (${root.label})` : filename || 'Imported session';
+    const details = `Filename: ${filename || ''}\nSession Started: ${fmtDate(json.metadata?.sessionStartDate)}\nExported: ${fmtDate(json.metadata?.exportDate)}\nImported: ${fmtDate(Date.now())}`;
+    root.note = root.note ? `${details}\n${root.note}` : details;
     await this.treeLoaded;
-
-    function lookup (id) {
-      const source = json.nodes[id];
-      if (! source) {
-        warn(`Failed to load node "${id}"`);
-        return null;
-      }
-      // Never rewrite the parsed backup object.  Callers may retry an import
-      // or retain it for validation after this method returns.
-      const node = {
-        ...source,
-        nodes: Array.isArray(source.nodes) ? [...source.nodes] : []
-      };
-      // let tree assign new IDs for all nodes
-      // (because we're adding to the current session, not replacing it)
-      node.id = undefined;
-      node.parent = undefined;
-      // Imported numeric browser IDs belong to another session/profile.
-      // Identity references retain their installation scope for safe restore.
-      for (const key of ['tabId', 'oldTabId', 'windowId', 'groupId',
-        'groupWindowId', 'pendingNativeGroupNodeId', 'restoreError']) delete node[key];
-      // nothing is loaded or active in an imported tree
-      if (node.loaded) {
-        node.loaded = false;
-        node.wasLoaded = true;
-      }
-      if (node.active) {
-        node.active = false;
-        node.wasActive = true;
-      }
-      // root node needs special care
-      if ('root' === id) {
-        const itimeStr = fmtDate(Date.now());
-        const ctimeStr = fmtDate(json.metadata?.sessionStartDate);
-        const etimeStr = fmtDate(json.metadata?.exportDate);
-        // imports always start collapsed
-        // (avoids a ton of drawing during load)
-        node.expanded = false;
-        // generate a title
-        const label = filename;
-        if (node.label) node.label = `${label} (${node.label})`;
-        else node.label = label;
-        // generate a description
-        const filenameStr = `Filename: ${filename}\n`;
-        const importText = `${filenameStr}Session Started: ${ctimeStr}\nExported: ${etimeStr}\nImported: ${itimeStr}`;
-        if (node.note) node.note = importText + '\n' + node.note;
-        else node.note = importText;
-      }
-      return node;
-    }
-
-    const importedIds = new Set();
-    const visitingIds = new Set();
-    async function createNodes (parent, childIds, args) {
-      let firstNode;
-      for (const childId of childIds) {
-        //debug(`loading "${parent.id}" :: "${childId}"`);
-        if (visitingIds.has(childId)) {
-          warn(`Skipping import cycle at node "${childId}"`);
-          continue;
-        }
-        if (importedIds.has(childId)) {
-          warn(`Skipping repeated import node "${childId}"`);
-          continue;
-        }
-        const destIndex = parent.nodes.length;
-        const childDict = lookup(childId);
-        if (! childDict) continue;
-        importedIds.add(childId);
-        visitingIds.add(childId);
-        const newNode = await parent.addChild(destIndex, childDict, args);
-        // first node created is the "root" of this sub-tree
-        if (! firstNode) firstNode = newNode;
-        try {
-          if (childDict.nodes.length > 0) {
-            await createNodes(newNode, childDict.nodes, args);
-          }
-        } finally {
-          visitingIds.delete(childId);
-        }
-      }
-      return firstNode;
-    }
-
-    return await this.tree.runPersistenceBatch(async (args) => {
-      // actually create the nodes now
-      const sessionRoot = await createNodes(this.tree.root, ['root'], args);
-      if (! sessionRoot) {
-        throw new Error('TKTSTO backup root could not be imported');
-      }
-
-      // if imported session is older than current session,
-      // set the current session's creation date to the older date
-      if (sessionRoot.ctime < this.tree.root.ctime) {
-        await this.tree.root.setTabFields({
-          ctime: sessionRoot.ctime
-        }, args);
-      }
-
-      return sessionRoot.countNodes();
-    }, { reason: 'importFile' });
+    await commitImportedGraph(this.tree, graph);
+    return { total: graph.order.length - 1, warnings: graph.warnings };
   }
 
   async importTabsOutlinerExport(json, filename) {
@@ -2683,37 +2597,9 @@ export class Bkgd {
   }
 
   async importParsedNodes(parsedNodes) {
-    // don't import to an incomplete tree
+    const graph = validateNodeGraph(nestedRecordsToHash(parsedNodes), { importing: true });
     await this.treeLoaded;
-
-    return await this.tree.runPersistenceBatch(async (args) => {
-      let rootNode;
-      async function createNodes (parent, children) {
-        for (const node of children) {
-          const destIndex = parent.nodes.length;
-          const newNode = await parent.addChild(destIndex, node, args);
-          // first node created is the "root" of this sub-tree
-          if (! rootNode) rootNode = newNode;
-          if (node.nodes) {
-            await createNodes(newNode, node.nodes);
-          }
-        }
-      }
-
-      // actually create the nodes now
-      await createNodes(this.tree.root, parsedNodes);
-
-      // if imported session is older than current session,
-      // set the current session's creation date to the older date
-      if (rootNode && (rootNode.ctime < this.tree.root.ctime)) {
-        await this.tree.root.setTabFields({
-          ctime: rootNode.ctime
-        }, args);
-      }
-      // return the root of the new subtree
-      //debug('rootNode:', rootNode);
-      return rootNode;
-    }, { reason: 'importFile' });
+    return commitImportedGraph(this.tree, graph);
   }
 
   async onCommand (command, tab) {

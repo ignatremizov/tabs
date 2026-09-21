@@ -307,6 +307,9 @@ class OptionsPage extends ThemedPage {
           $button.textContent = '... Loading ...';
           log(`loading ${file.name} (${file.size} bytes) ...`);
           try {
+            if (file.size > 128 * 1024 * 1024) {
+              throw new Error('Import exceeds the 128 MiB limit; split it before importing.');
+            }
             const fileContent = await readFileAsText(file);
             const data = JSON.parse(fileContent);
             // A lost response must not import the same backup a second time.
@@ -319,7 +322,9 @@ class OptionsPage extends ThemedPage {
             }
             const total = response ? response.total : 0;
             log(`${total} nodes imported from: "${file.name}"`);
-            alert(`${total} nodes imported from: "${file.name}"`);
+            const warnings = response?.warnings?.length
+              ? '\n\nRecovery warnings:\n' + response.warnings.join('\n') : '';
+            alert(`${total} nodes imported from: "${file.name}"${warnings}`);
           } catch (err) {
             warn(`Could not import "${file.name}":`, err);
             alert(`Could not import "${file.name}": ${err.message || err}`);

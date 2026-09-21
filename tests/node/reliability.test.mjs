@@ -4,7 +4,7 @@
 
 export async function registerReliabilityTests(h) {
   const { test, assert, assertEqual: eq, api, emit, Bkgd, Tree, TreeStore,
-    NodeStore, TreeView, addChild } = h;
+    NodeStore, TreeView, addChild, jsonSchema } = h;
   const waitFor = async (check) => {
     const until = Date.now() + 3000;
     while (! check()) {
@@ -270,6 +270,132 @@ export async function registerReliabilityTests(h) {
     await tree.root.flushPendingPersistence();
     eq(records.get(node.id).label, 'Second');
     eq(tree.root.getPersistenceState().unsaved, false);
+  });
+
+  const validBackup = () => ({ $schema: jsonSchema, metadata: { exportDate: 2, sessionStartDate: 1 },
+    nodes: { root: { id: 'root', nodes: ['child'], label: 'Imported', ctime: 1 },
+      child: { id: 'child', label: 'Пример', note: 'Notes', url: 'https://example.test/account', nodes: [],
+        cookieStoreId: 'firefox-container-7', containerProfileId: 'foreign-profile',
+        loaded: true, active: true, tabId: 43, windowId: 5, groupId: 8 } } });
+
+  test('reserved fields and invalid import values are rejected without changing live or durable data', async () => {
+    const { tree, bkgd, records } = store();
+    await addChild(tree.root, { label: 'Keep me' });
+    const memory = JSON.stringify(tree.serializeNodes());
+    const disk = JSON.stringify([...records]);
+    const cases = [ ['toDict', null], ['constructor', {}], ['__proto__', {}], ['tree', {}],
+      ['note', {}], ['url', []], ['loaded', 'true'], ['geometry', [1,2,3]],
+      ['nodes', [123]], ['id', 'mismatched'], ['mtime', Infinity], ['pointer', 0.5] ];
+    const oldError = console.error;
+    try {
+      console.error = () => {};
+      for (const [field, value] of cases) {
+        const backup = validBackup();
+        Object.defineProperty(backup.nodes.child, field, { value, enumerable: true, configurable: true });
+        const response = await bkgd.bkgd_importBackupFile({ data: backup, filename: 'invalid.json' });
+        assert(response.error, `Accepted invalid field ${field}`); eq(response.total, 0);
+        eq(JSON.stringify(tree.serializeNodes()), memory);
+        eq(JSON.stringify([...records]), disk);
+        assert(tree.makeBackupObject(tree.root).nodes.root, 'Rejected import broke later backup');
+        eq(tree.root.getPersistenceState().pending, 0);
+      }
+    } finally { console.error = oldError; }
+  });
+
+  test('valid imported metadata is preserved but browser IDs cannot leak into live bindings', async () => {
+    const { tree, bkgd, records } = store();
+    const backup = validBackup();
+    backup.nodes.root.nodes = ['group'];
+    backup.nodes.group = { id: 'group', nodes: ['child'], nativeGroup: true,
+      label: 'Research', groupTitle: 'Research', groupColor: 'green', groupCollapsed: true,
+      expanded: false, groupId: 8, groupWindowId: 5 };
+    const before = JSON.stringify(backup);
+    const response = await bkgd.bkgd_importBackupFile({ data: backup, filename: 'valid.json' });
+    eq(response.error, undefined); eq(response.total, 2); eq(JSON.stringify(backup), before);
+    const imported = tree.root.nodes[0], group = imported.nodes[0], child = group.nodes[0];
+    eq(group.nativeGroup, true); eq(group.groupColor, 'green'); eq(group.groupId, undefined);
+    eq(group.groupCollapsed, true); eq(child.label, 'Пример'); eq(child.note, 'Notes');
+    eq(child.cookieStoreId, 'firefox-container-7'); eq(child.containerProfileId, 'foreign-profile');
+    eq(child.loaded, false); eq(child.active, false); eq(child.wasLoaded, true);
+    eq(child.tabId, undefined); eq(child.windowId, undefined);
+    eq(records.get(child.id).parent, group.id);
+    eq(imported.expanded, false); eq(tree.root.ctime, 1);
+  });
+
+  test('failed atomic imports publish nothing and a later clean import succeeds once', async () => {
+    const { tree, bkgd, records } = store();
+    await addChild(tree.root, { label: 'Keep me' });
+    const memory = JSON.stringify(tree.serializeNodes()), disk = JSON.stringify([...records]);
+    const write = tree.db.writeNodes;
+    let writes = 0;
+    tree.db.writeNodes = async (...args) => {
+      if (++writes === 1) throw new Error('Synthetic import transaction failure');
+      return write(...args);
+    };
+    const oldError = console.error;
+    try {
+      console.error = () => {};
+      const failed = await bkgd.bkgd_importBackupFile({ data: validBackup(), filename: 'retry.json' });
+      assert(failed.error); eq(failed.total, 0);
+      eq(JSON.stringify(tree.serializeNodes()), memory); eq(JSON.stringify([...records]), disk);
+      eq(tree.root.getPersistenceState().pending, 0);
+      const done = await bkgd.bkgd_importBackupFile({ data: validBackup(), filename: 'retry.json' });
+      eq(done.error, undefined); eq(done.total, 1); eq(writes, 2);
+      eq(tree.root.nodes.length, 2); eq(records.size, 4);
+    } finally { console.error = oldError; }
+  });
+
+  test('an import committing alongside another root mutation retains both changes', async () => {
+    const { tree, bkgd, records } = store();
+    await addChild(tree.root, { label: 'Original' });
+    let release, entered;
+    const reached = new Promise(resolve => { entered = resolve; });
+    const gate = new Promise(resolve => { release = resolve; });
+    let writes = 0;
+    tree.db.writeNodes = async (nodes, deletes = []) => {
+      const snapshots = nodes.map(node => structuredClone(node.toDict()));
+      if (++writes === 1) { entered(); await gate; }
+      for (const record of snapshots) records.set(record.id, record);
+      for (const id of deletes) records.delete(id);
+    };
+    const importing = bkgd.bkgd_importBackupFile({ data: validBackup(), filename: 'concurrent.json' });
+    await reached;
+    const adding = addChild(tree.root, { label: 'Concurrent note' });
+    await new Promise(resolve => setTimeout(resolve, 0));
+    release(); const [response, concurrent] = await Promise.all([importing, adding]);
+    eq(response.error, undefined);
+    eq(tree.root.nodes.length, 3); assert(tree.root.nodes.includes(concurrent));
+    eq(JSON.stringify(records.get('root').nodes), JSON.stringify(tree.root.nodes.map(node => node.id)));
+    eq(records.get(concurrent.id).label, 'Concurrent note');
+  });
+
+  test('import graph sanitation preserves disconnected data and reports skipped edges', async () => {
+    const { tree, bkgd } = store();
+    const data = validBackup();
+    data.nodes.root.nodes.push('child', 'missing');
+    data.nodes.child.nodes = ['root'];
+    data.nodes.detached = { id: 'detached', label: 'Recovered note', nodes: [] };
+    const result = await bkgd.bkgd_importBackupFile({ data, filename: 'recover.json' });
+    eq(result.error, undefined); eq(result.total, 2);
+    assert(result.warnings.length >= 3);
+    const imported = tree.root.nodes[0];
+    eq(imported.nodes.length, 2); eq(imported.nodes[0].nodes.length, 0);
+    eq(imported.nodes[1].label, 'Recovered note');
+  });
+
+  test('excessive import depth is rejected before live reconstruction', async () => {
+    const { tree, bkgd } = store();
+    const { treeDataLimits } = await import('/common/serialized-tree.js');
+    const data = { $schema: jsonSchema, nodes: { root: { nodes: ['n0'] } } };
+    for (let i = 0; i <= treeDataLimits.depth; i++) {
+      data.nodes[`n${i}`] = { nodes: i < treeDataLimits.depth ? [`n${i+1}`] : [] };
+    }
+    const oldError = console.error;
+    try {
+      console.error = () => {};
+      const result = await bkgd.bkgd_importBackupFile({ data, filename: 'deep.json' });
+      assert(result.error.includes('depth')); eq(tree.root.nodes.length, 0);
+    } finally { console.error = oldError; }
   });
 
 }

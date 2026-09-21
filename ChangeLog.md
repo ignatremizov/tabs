@@ -4,6 +4,11 @@ What changed, and when?  You know the drill.
 
 ## Unreleased
 
+- Validate imported fields, types, identifiers, and bounded graph structure
+  before constructing nodes. Commit detached imports atomically before
+  publishing them; rejected imports and failed writes leave the existing tree
+  unchanged. Recover disconnected records and report skipped cyclic/repeated
+  edges while preserving container scope and stripping browser bindings.
 - Retain failed persistence batches and deletion tombstones for explicit retry
   or the next edit, including unchanged edits. Never acknowledge dirty data as
   saved; keep a persistent sidebar warning and Retry saving button until the
