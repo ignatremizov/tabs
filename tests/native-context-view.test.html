@@ -254,6 +254,12 @@
       await test('unsaved warning survives status updates and exposes a keyboard retry control', async () => {
         const template = new DOMParser().parseFromString(
           await (await fetch('/view/sidepanel.html')).text(), 'text/html');
+        for (const id of ['persistence-warning', 'startup-warning']) {
+          const warning = template.getElementById(id);
+          assert(warning.closest('#storage-notices') && warning.closest('#top-area'),
+            'Storage notice must reserve space above the tree');
+          assert(! warning.closest('#notifications'), 'Storage notice is inside the floating overlay');
+        }
         const notice = document.importNode(template.getElementById('persistence-warning'), true);
         document.body.append(notice);
         const view = new TreeView({ isInert: true });

@@ -2,6 +2,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later */
 .persistence-warning, .startup-warning {
   padding: 0.4em;
+  background: var(--tree-view-bg);
   color: var(--tab-was-loaded-fg);
   border: 1px solid currentColor;
   white-space: normal;

@@ -4,6 +4,10 @@ What changed, and when?  You know the drill.
 
 ## Unreleased
 
+- Reserve toolbar space for persistent storage/recovery warnings instead of
+  placing them in the floating notification overlay, keeping text and retry
+  controls readable without overlapping the tree.
+
 - Treat native group movement and metadata editing separately: reordering an
   existing group no longer overwrites newer native names/colors/collapse state,
   and one-field outline edits preserve the other current native values.
