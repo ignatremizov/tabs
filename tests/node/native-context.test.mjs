@@ -588,6 +588,54 @@ export async function registerNativeContextTests(h) {
     assert(result.error); eq(creates, 0); assert(node.restoreError.includes('unknown'));
   }));
 
+  test('missed cross-window group events preserve live and saved ancestry during recovery', () => fixture(async ({ state, bkgd, tree, win, addTab, addGroup }) => {
+    const { runReconcile } = await import('/bkgd/reconcile.js');
+    const a = await addTab(win), b = await addTab(a);
+    addGroup(7, [a.tabId, b.tabId]); await bkgd.tabGroups.sync();
+    const note = a.getNativeGroupNode();
+    const saved = await addChild(a, { url: 'https://example.test/saved', wasLoaded: true,
+      cookieStoreId: 'firefox-container-9', containerProfileId: 'test-profile' });
+    const annotation = await addChild(saved, { label: 'Retain this annotation' });
+    const outside = await addTab(win);
+    state.windows.push({ id: 2, type: 'normal', incognito: false });
+    const other = await addChild(tree.root, { type: 'window', windowId: 2, loaded: true });
+    await api.tabGroups.move(7, { windowId: 2, index: 0 });
+    await runReconcile.call(bkgd, { reason: 'alarm' });
+    eq(note.parent, other); eq(a.parent, note); eq(b.parent, a);
+    eq(saved.parent, a); eq(saved.getNativeGroupNode(), note);
+    eq(annotation.parent, saved); eq(outside.parent, win);
+    eq(saved.cookieStoreId, 'firefox-container-9');
+    eq(saved.containerProfileId, 'test-profile'); eq(note.groupId, 7);
+    await runReconcile.call(bkgd, { reason: 'alarm' });
+    eq(saved.parent, a); eq(state.groups.size, 1);
+    eq(tree.root.findNodes(node => node.nativeGroup).length, 1);
+  }));
+
+  test('recovery refuses to flatten groups when native metadata is unavailable or inconsistent', () => fixture(async ({ state, bkgd, tree, win, addTab, addGroup }) => {
+    const { runReconcile } = await import('/bkgd/reconcile.js');
+    const a = await addTab(win); addGroup(7, [a.tabId]); await bkgd.tabGroups.sync();
+    const note = a.getNativeGroupNode();
+    const saved = await addChild(a, { url: 'https://example.test/saved' });
+    state.windows.push({ id: 2, type: 'normal', incognito: false });
+    await addChild(tree.root, { type: 'window', windowId: 2, loaded: true });
+    await api.tabGroups.move(7, { windowId: 2, index: 0 });
+    const query = api.tabGroups.query;
+    api.tabGroups.query = async () => { throw new Error('Synthetic group snapshot failure'); };
+    const before = JSON.stringify(tree.serializeNodes());
+    const oldWarn = console.warn;
+    try {
+      console.warn = () => {};
+      eq(await runReconcile.call(bkgd, { reason: 'alarm' }), null);
+      eq(JSON.stringify(tree.serializeNodes()), before);
+      // The two native API queries can straddle a browser-native move.
+      api.tabGroups.query = async () => [{ ...(await api.tabGroups.get(7)), windowId: 1 }];
+      eq(await runReconcile.call(bkgd, { reason: 'alarm' }), null);
+      eq(JSON.stringify(tree.serializeNodes()), before);
+    } finally { console.warn = oldWarn; api.tabGroups.query = query; }
+    await runReconcile.call(bkgd, { reason: 'alarm' });
+    eq(saved.parent, a); eq(a.parent, note); eq(note.getWindowNode().windowId, 2);
+  }));
+
   test('backups retain container scope and group metadata but discard native binding IDs', () => fixture(async ({ bkgd, tree, win, addTab, addGroup }) => {
     const a = await addTab(win, { cookieStoreId: 'firefox-container-1', containerProfileId: 'test-profile' });
     addGroup(7, [a.tabId]); await bkgd.tabGroups.sync();

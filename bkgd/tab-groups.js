@@ -145,14 +145,57 @@ export class TabGroups {
     }
   }
 
-  async syncSnapshot() {
-    const tree = this.bkgd.tree;
-    if (! tree) return false;
+  async readSnapshot() {
     // Fetch both before mutating anything. A failed API call must not be
     // interpreted as every group having disappeared.
     const [groups, windows] = await Promise.all([
       api.tabGroups.query({}), api.windows.getAll({ populate: true })
     ]);
+    const byId = new Map(groups.map(group => [group.id, group]));
+    for (const win of windows) {
+      for (const tab of win.tabs || []) {
+        if (nativeGroupId(tab.groupId) === undefined) continue;
+        if (byId.get(tab.groupId)?.windowId !== win.id) {
+          // Queries can straddle a browser-native move/removal. Do not turn
+          // a torn snapshot into a destructive ungroup or per-tab move.
+          this.requestSync();
+          return null;
+        }
+      }
+    }
+    return { groups, windows };
+  }
+
+  async withReconciliation(operation) {
+    // Generic recovery must normalize groups before moving individual tabs.
+    // Use one snapshot and the same ownership boundary as outline edits;
+    // never wait on a move that needs this browser-event callback to finish.
+    const blocked = () => this.outlineApplying || this.syncing || this.applying
+      || this.bkgd.tabReorderInProgress;
+    if (blocked()) { this.requestSync(); return null; }
+    const unlock = await this.contextMutex.lock();
+    try {
+      if (blocked()) { this.requestSync(); return null; }
+      this.syncing = true;
+      const snapshot = await this.readSnapshot();
+      if (! snapshot || this.outlineApplying) {
+        this.requestSync();
+        return null;
+      }
+      const changed = await this.syncSnapshot(snapshot);
+      return await operation(snapshot, changed);
+    } finally {
+      this.syncing = false;
+      unlock();
+    }
+  }
+
+  async syncSnapshot(snapshot) {
+    const tree = this.bkgd.tree;
+    if (! tree) return false;
+    if (! snapshot) snapshot = await this.readSnapshot();
+    if (! snapshot) return false;
+    const { groups, windows } = snapshot;
     // A user mutation queued while the browser snapshot was in flight. It
     // owns the next transition; discard this stale snapshot without changes.
     if (this.outlineApplying) {

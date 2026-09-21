@@ -4,6 +4,10 @@ What changed, and when?  You know the drill.
 
 ## Unreleased
 
+- Recover missed cross-window native-group events as whole groups before
+  generic tab repair, preserving saved descendants and annotations. Abort
+  recovery on unavailable or inconsistent native snapshots rather than
+  flattening the saved member tree.
 - Serialize native-group renames and collapse edits with outline movement and
   browser snapshots. Failed native updates can be retried with the same value;
   stale snapshots no longer cancel newer edits.

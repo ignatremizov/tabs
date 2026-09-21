@@ -101,7 +101,7 @@ async function ensureTabNodeAttached(node, winNode, tabInfo, reason) {
   return changed;
 }
 
-export async function runReconcile ({ reason } = {}) {
+export async function runReconcile ({ reason, nativeSnapshot, groupsChanged = false } = {}) {
   const bkgd = this;
   if (! bkgd || ! bkgd.tree) {
     return error('runReconcile() missing bkgd tree');
@@ -113,15 +113,27 @@ export async function runReconcile ({ reason } = {}) {
   // Conflict policy: browser truth for loaded tabs/windows, tree truth for saved nodes.
   if (! reason) reason = 'reconcile';
 
+  if (bkgd.tabGroups?.supported && ! nativeSnapshot) {
+    if (reason !== 'startup') await bkgd.treeLoaded;
+    try {
+      return await bkgd.tabGroups.withReconciliation((snapshot, changed) =>
+        runReconcile.call(bkgd, { reason, nativeSnapshot: snapshot, groupsChanged: changed })
+      );
+    } catch (err) {
+      warn('Reconciliation retained the prior tree: native snapshot failed', err);
+      return null;
+    }
+  }
+
   bkgd.reconcileInFlight = true;
-  let didWork = false;
+  let didWork = groupsChanged;
   try {
     if ('startup' !== reason) {
       await bkgd.treeLoaded;
     }
     let windows;
     try {
-      windows = await api.windows.getAll({ populate: true });
+      windows = nativeSnapshot?.windows || await api.windows.getAll({ populate: true });
     } catch (err) {
       error('runReconcile: failed to get windows', err);
       return null;
@@ -315,7 +327,13 @@ export async function runReconcile ({ reason } = {}) {
 
     if (bkgd.containers) didWork = (await bkgd.containers.refresh()) || didWork;
     if (bkgd.tabGroups) {
-      try { didWork = (await bkgd.tabGroups.sync()) || didWork; }
+      // Bind any members first discovered by generic recovery, using the
+      // same native snapshot. The outer reconciliation owns the context lock.
+      try {
+        didWork = (await (nativeSnapshot
+          ? bkgd.tabGroups.syncSnapshot(nativeSnapshot)
+          : bkgd.tabGroups.sync())) || didWork;
+      }
       catch (err) { warn('Reconciliation retained the prior native group snapshot', err); }
     }
 
