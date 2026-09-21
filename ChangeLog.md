@@ -4,6 +4,9 @@ What changed, and when?  You know the drill.
 
 ## Unreleased
 
+- Treat native group movement and metadata editing separately: reordering an
+  existing group no longer overwrites newer native names/colors/collapse state,
+  and one-field outline edits preserve the other current native values.
 - Separate deliberate version selection from current-version builds/signing.
   Package reproducible tracked inputs, refuse output replacement, and sign one
   immutable prebuilt archive with pinned tooling and environment-only secrets.

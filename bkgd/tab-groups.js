@@ -416,14 +416,14 @@ export class TabGroups {
     }
   }
 
-  async ensureGroup(note, tabIds, windowId) {
+  async ensureGroup(note, tabIds, windowId, editFields = []) {
     if (! this.noteLocks.has(note)) this.noteLocks.set(note, new Mutex());
     const unlock = await this.noteLocks.get(note).lock();
-    try { return await this.ensureGroupLocked(note, tabIds, windowId); }
+    try { return await this.ensureGroupLocked(note, tabIds, windowId, editFields); }
     finally { unlock(); }
   }
 
-  async ensureGroupLocked(note, tabIds, windowId) {
+  async ensureGroupLocked(note, tabIds, windowId, editFields = []) {
     let group = null;
     const boundId = [...this.bindings].find(([, candidate]) => candidate === note)?.[0];
     if (boundId !== undefined) {
@@ -435,6 +435,7 @@ export class TabGroups {
         group = await api.tabGroups.move(group.id, { windowId, index: -1 });
       } else group = null;
     }
+    const creating = ! group;
     let id;
     if (group) {
       const current = await api.tabs.query({ groupId: group.id });
@@ -446,11 +447,16 @@ export class TabGroups {
       id = await api.tabs.group({ createProperties: { windowId }, tabIds });
       group = await api.tabGroups.get(id);
     }
-    const desired = {
+    const metadata = {
       title: groupTitle(note),
       color: groupColors.has(note.groupColor) ? note.groupColor : 'gray',
       collapsed: Boolean(note.groupCollapsed)
     };
+    // Reordering/restoring into an existing group is not a metadata edit.
+    // Its native rename/color/collapse event may still be in flight. Apply
+    // only the explicitly edited fields, or all saved metadata for a NEW group.
+    const desired = Object.fromEntries(Object.entries(metadata)
+      .filter(([key]) => creating || editFields.includes(key)));
     if (Object.keys(desired).some(key => group[key] !== desired[key])) {
       group = await api.tabGroups.update(id, desired);
     }
@@ -543,14 +549,14 @@ export class TabGroups {
     }
   }
 
-  async updateNote(note) {
+  async updateNote(note, editFields = ['title', 'color', 'collapsed']) {
     if (! this.supported || ! note.nativeGroup) return;
     const ids = note.getLoadedTabs().filter(node => nearestGroup(node) === note)
       .map(node => node.tabId);
     const windowId = note.getWindowNode(false)?.windowId;
     if (! ids.length || windowId === undefined) return;
     this.applying++;
-    try { await this.ensureGroup(note, ids, windowId); }
+    try { await this.ensureGroup(note, ids, windowId, editFields); }
     finally { this.applying--; }
   }
 }

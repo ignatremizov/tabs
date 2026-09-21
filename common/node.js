@@ -1132,7 +1132,7 @@ export class Node {
 
     if (this.nativeGroup && this.tree.bkgd
       && ['userAction', 'tree_nodeChanged'].includes(args.reason)) {
-      await this.tree.bkgd.tabGroups?.updateNote(this);
+      await this.tree.bkgd.tabGroups?.updateNote(this, ['title']);
     }
 
     return true;  // the data changed
@@ -2113,7 +2113,7 @@ export class Node {
       this.groupCollapsed = ! this.expanded;
       if (this.tree.bkgd
         && ['userAction', 'tree_nodeChanged'].includes(args.reason)) {
-        await this.tree.bkgd.tabGroups?.updateNote(this);
+        await this.tree.bkgd.tabGroups?.updateNote(this, ['collapsed']);
       }
     }
 

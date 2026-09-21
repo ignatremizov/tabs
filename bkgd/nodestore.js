@@ -232,7 +232,7 @@ export class NodeStore extends Node {
         const changed = await super.setNotes(label, note, operationArgs);
         // A failed browser update can leave the desired value in memory.
         // Equality alone must not prevent retrying that native operation.
-        if (! changed && nativeEdit) await groups.updateNote(this);
+        if (! changed && nativeEdit) await groups.updateNote(this, ['title']);
         return changed;
       },
       args
@@ -333,7 +333,7 @@ export class NodeStore extends Node {
     return await this.persistMutation(
       async (operationArgs) => {
         const changed = await super.setExpanded(expanded, operationArgs);
-        if (! changed && nativeEdit) await groups.updateNote(this);
+        if (! changed && nativeEdit) await groups.updateNote(this, ['collapsed']);
         return changed;
       },
       args

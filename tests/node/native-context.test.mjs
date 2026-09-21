@@ -535,6 +535,29 @@ export async function registerNativeContextTests(h) {
     eq(bkgd.tabGroups.outlineApplying, 0);
   }));
 
+  test('outline moves and one-field edits preserve unrelated newer native group metadata', () => fixture(async ({ bkgd, win, addTab, addGroup }) => {
+    const a = await addTab(win); addGroup(7, [a.tabId]); await bkgd.tabGroups.sync();
+    const note = a.getNativeGroupNode();
+    bkgd.tabGroups.requestSync = () => {};
+    // A native rename/color update has happened but its notification has not
+    // reached the outline. Reordering is not permission to overwrite it.
+    await api.tabGroups.update(7, { title: 'Native rename', color: 'red' });
+    await bkgd.tabGroups.reorder(win, win.getLoadedTabs(), 0);
+    eq((await api.tabGroups.get(7)).title, 'Native rename');
+    eq(note.label, 'Native rename'); eq(note.groupColor, 'red');
+    await api.tabGroups.update(7, { title: 'Another native rename', color: 'green' });
+    await note.setExpanded(false, { reason: 'userAction' });
+    const collapsed = await api.tabGroups.get(7);
+    eq(collapsed.collapsed, true); eq(collapsed.title, 'Another native rename');
+    eq(collapsed.color, 'green');
+    // Conversely, changing the name must not revert a newer native collapse.
+    await api.tabGroups.update(7, { collapsed: false });
+    await note.setNotes('Outline rename', note.note, { reason: 'userAction' });
+    const renamed = await api.tabGroups.get(7);
+    eq(renamed.title, 'Outline rename'); eq(renamed.collapsed, false);
+    eq(renamed.color, 'green'); eq(note.expanded, true);
+  }));
+
   test('moving a group into a provisional live window does not create another window', () => fixture(async ({ state, bkgd, tree, win, addTab, addGroup }) => {
     const a = await addTab(win), b = await addTab(a);
     addGroup(7, [a.tabId, b.tabId]); await bkgd.tabGroups.sync();
