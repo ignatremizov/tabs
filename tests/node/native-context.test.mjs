@@ -471,6 +471,70 @@ export async function registerNativeContextTests(h) {
     await moving; eq(ran, true); eq(bkgd.tabGroups.outlineApplying, 0);
   }));
 
+  for (const kind of ['rename', 'collapse']) {
+    test(`in-flight snapshots cannot cancel a newer group ${kind}`, () => fixture(async ({ bkgd, win, addTab, addGroup }) => {
+      const a = await addTab(win); addGroup(7, [a.tabId]); await bkgd.tabGroups.sync();
+      const note = a.getNativeGroupNode();
+      const originalWindows = api.windows.getAll, originalGet = api.tabGroups.get;
+      let entered, releaseSnapshot, releaseLookup;
+      const reached = new Promise(resolve => { entered = resolve; });
+      const snapshotGate = new Promise(resolve => { releaseSnapshot = resolve; });
+      const lookupGate = new Promise(resolve => { releaseLookup = resolve; });
+      // Do not let a debounce timer hide the ordering under test.
+      bkgd.tabGroups.requestSync = () => {};
+      api.windows.getAll = async () => {
+        const snapshot = await originalWindows(); entered();
+        await snapshotGate; return snapshot;
+      };
+      const syncing = bkgd.tabGroups.sync();
+      await reached;
+      api.tabGroups.get = async (...args) => {
+        const result = await originalGet(...args); await lookupGate; return result;
+      };
+      const editing = kind === 'rename'
+        ? note.setNotes('New group name', note.note, { reason: 'userAction' })
+        : note.setExpanded(false, { reason: 'userAction' });
+      // In the old implementation, the API update enters the lookup gate.
+      // With early intent locking it waits outside the snapshot instead.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      releaseSnapshot(); await syncing;
+      releaseLookup(); await editing;
+      const live = await originalGet(7);
+      if (kind === 'rename') {
+        eq(note.label, 'New group name'); eq(live.title, 'New group name');
+      } else {
+        eq(note.expanded, false); eq(live.collapsed, true);
+      }
+      eq(bkgd.tabGroups.outlineApplying, 0);
+    }));
+  }
+
+  test('failed native metadata updates release the guard and identical edits retry', () => fixture(async ({ bkgd, win, addTab, addGroup }) => {
+    const a = await addTab(win); addGroup(7, [a.tabId]); await bkgd.tabGroups.sync();
+    const note = a.getNativeGroupNode();
+    bkgd.tabGroups.requestSync = () => {};
+    const original = api.tabGroups.update;
+    let calls = 0;
+    api.tabGroups.update = async (...args) => {
+      if (++calls === 1) throw new Error('Synthetic native update failure');
+      return original(...args);
+    };
+    let failed = false;
+    try { await note.setNotes('Retry name', 'note', { reason: 'userAction' }); }
+    catch (err) { failed = err.message.includes('Synthetic'); }
+    assert(failed); eq(bkgd.tabGroups.outlineApplying, 0);
+    await note.setNotes('Retry name', 'note', { reason: 'userAction' });
+    eq((await api.tabGroups.get(7)).title, 'Retry name'); eq(calls, 2);
+    const first = note.setNotes('First', 'note', { reason: 'userAction' });
+    const second = note.setExpanded(false, { reason: 'userAction' });
+    const last = note.setNotes('Last', 'note', { reason: 'userAction' });
+    await Promise.all([first, second, last]);
+    const live = await api.tabGroups.get(7);
+    eq(live.title, 'Last'); eq(live.collapsed, true);
+    eq(note.label, 'Last'); eq(note.expanded, false);
+    eq(bkgd.tabGroups.outlineApplying, 0);
+  }));
+
   test('moving a group into a provisional live window does not create another window', () => fixture(async ({ state, bkgd, tree, win, addTab, addGroup }) => {
     const a = await addTab(win), b = await addTab(a);
     addGroup(7, [a.tabId, b.tabId]); await bkgd.tabGroups.sync();

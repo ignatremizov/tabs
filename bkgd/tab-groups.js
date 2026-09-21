@@ -128,7 +128,9 @@ export class TabGroups {
   }
 
   async withOutlineMutation(operation) {
-    // Protect the complete outline move, not just its eventual tabs.move.
+    // Protect the complete outline move or metadata edit, not just its API
+    // call. Renames and collapse changes must announce intent before changing
+    // the note, or an older in-flight snapshot can erase the desired value.
     // Otherwise a delayed browser snapshot can move the note back to its old
     // window while the user's move is awaiting persistence or broadcasting.
     // Announce intent BEFORE waiting, so a browser-event callback never holds

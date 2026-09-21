@@ -2,6 +2,12 @@
 
 What changed, and when?  You know the drill.
 
+## Unreleased
+
+- Serialize native-group renames and collapse edits with outline movement and
+  browser snapshots. Failed native updates can be retried with the same value;
+  stale snapshots no longer cancel newer edits.
+
 ## 0.0.3.10 (2026-09-21)
 
 - Draw compact container-badge frames and icons in the same SVG coordinate

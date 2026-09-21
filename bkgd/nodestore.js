@@ -167,8 +167,21 @@ export class NodeStore extends Node {
 
   async setNotes (label, note, args) {
     debug(`NodeStore.setNotes(${args.reason}, ${this.id})`, args);
+    const groups = this.tree.bkgd?.tabGroups;
+    const nativeEdit = this.nativeGroup && groups?.supported
+      && ['userAction', 'tree_nodeChanged'].includes(args.reason);
+    if (nativeEdit && ! args._nativeContextMutation) {
+      return groups.withOutlineMutation(() => this.setNotes(label, note,
+        { ...args, _nativeContextMutation: true }));
+    }
     return await this.persistMutation(
-      (operationArgs) => super.setNotes(label, note, operationArgs),
+      async (operationArgs) => {
+        const changed = await super.setNotes(label, note, operationArgs);
+        // A failed browser update can leave the desired value in memory.
+        // Equality alone must not prevent retrying that native operation.
+        if (! changed && nativeEdit) await groups.updateNote(this);
+        return changed;
+      },
       args
     );
   }
@@ -257,8 +270,19 @@ export class NodeStore extends Node {
 
   async setExpanded (expanded, args) {
     debug(`NodeStore.setExpanded(${args.reason}, ${this.id})`, args);
+    const groups = this.tree.bkgd?.tabGroups;
+    const nativeEdit = this.nativeGroup && groups?.supported
+      && ['userAction', 'tree_nodeChanged'].includes(args.reason);
+    if (nativeEdit && ! args._nativeContextMutation) {
+      return groups.withOutlineMutation(() => this.setExpanded(expanded,
+        { ...args, _nativeContextMutation: true }));
+    }
     return await this.persistMutation(
-      (operationArgs) => super.setExpanded(expanded, operationArgs),
+      async (operationArgs) => {
+        const changed = await super.setExpanded(expanded, operationArgs);
+        if (! changed && nativeEdit) await groups.updateNote(this);
+        return changed;
+      },
       args
     );
   }
