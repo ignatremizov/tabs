@@ -37,7 +37,11 @@ function validId(id) {
     && ! reservedIds.has(id) && ! /[\u0000-\u001f]/.test(id);
 }
 
-function invalid(message) { throw new TypeError(`Invalid tree data: ${message}`); }
+function invalid(message) {
+  // Untrusted field names must not turn validation failures into huge UI/log
+  // payloads. Never truncate actual saved data, only this diagnostic message.
+  throw new TypeError(`Invalid tree data: ${message.slice(0, 500)}`);
+}
 
 export function validateNodeGraph(hash, { importing = false, rootId = 'root' } = {}) {
   if (! isRecord(hash)) invalid('node dictionary is not an object');
@@ -71,7 +75,6 @@ export function validateNodeGraph(hash, { importing = false, rootId = 'root' } =
         if (textLength > treeDataLimits.textLength) invalid('text size exceeds limits');
         if (key === 'id' && value !== id) invalid(`record ID differs from key ${id}`);
         if (key === 'type' && ! ['', 'window', 'tab'].includes(value)) invalid('unknown node type');
-        if (key === 'checkbox' && value.length > 1) invalid('invalid checkbox');
       } else if (booleans.has(key)) {
         if (typeof value !== 'boolean') invalid(`invalid boolean ${key}`);
       } else if (numbers.has(key) || integers.has(key)) {

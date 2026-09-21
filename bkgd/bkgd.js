@@ -2460,6 +2460,9 @@ export class Bkgd {
     root.label = root.label ? `${filename || 'Imported session'} (${root.label})` : filename || 'Imported session';
     const details = `Filename: ${filename || ''}\nSession Started: ${fmtDate(json.metadata?.sessionStartDate)}\nExported: ${fmtDate(json.metadata?.exportDate)}\nImported: ${fmtDate(Date.now())}`;
     root.note = root.note ? `${details}\n${root.note}` : details;
+    // Generated import headers count toward the same limits as persisted
+    // data. Never accept an import that would fail validation on next startup.
+    validateNodeGraph(graph.records);
     await this.treeLoaded;
     await commitImportedGraph(this.tree, graph);
     return { total: graph.order.length - 1, warnings: graph.warnings };

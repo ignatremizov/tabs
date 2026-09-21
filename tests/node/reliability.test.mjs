@@ -537,4 +537,43 @@ export async function registerReliabilityTests(h) {
     } finally { api.downloads = previous; }
   });
 
+  test('custom checkbox symbols and labels survive import and stored-model validation', async () => {
+    const { tree, bkgd } = store();
+    const { validateNodeGraph } = await import('/common/serialized-tree.js');
+    for (const checkbox of ['🔒', 'TODO', '✓', '/', '%']) {
+      const data = validBackup();
+      data.nodes.child.checkbox = checkbox;
+      data.nodes.child.checkboxPx = 0.5;
+      const result = await bkgd.bkgd_importBackupFile({ data, filename: 'checkbox.json' });
+      eq(result.error, undefined);
+      eq(tree.root.nodes.at(-1).nodes[0].checkbox, checkbox);
+    }
+    const graph = validateNodeGraph(tree.serializeNodes());
+    eq(graph.order.length, Object.keys(tree.nodes).length);
+  });
+
+  test('generated import headers cannot push accepted data beyond startup limits', async () => {
+    const { tree, bkgd, records } = store();
+    const { treeDataLimits } = await import('/common/serialized-tree.js');
+    const data = validBackup();
+    data.nodes.root.note = 'x'.repeat(treeDataLimits.fieldLength);
+    const oldError = console.error;
+    try {
+      console.error = () => {};
+      const result = await bkgd.bkgd_importBackupFile({ data, filename: 'large-note.json' });
+      assert(result.error?.includes('text field note'));
+      eq(tree.root.nodes.length, 0); eq(records.size, 0);
+      eq(data.nodes.root.note.length, treeDataLimits.fieldLength);
+    } finally { console.error = oldError; }
+  });
+
+  test('untrusted field names produce bounded validation diagnostics', async () => {
+    const { validateNodeGraph } = await import('/common/serialized-tree.js');
+    const data = validBackup();
+    data.nodes.child['z'.repeat(5000)] = null;
+    let error;
+    try { validateNodeGraph(data.nodes); } catch (err) { error = err; }
+    assert(error instanceof TypeError); assert(error.message.length < 550);
+  });
+
 }
