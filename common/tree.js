@@ -16,6 +16,7 @@ const {
 import { Node } from '/common/node.js';
 import { Mutex } from '/common/mutex.js';
 import { Config } from '/common/config.js';
+import { cookieStoreKey, sameCookieStore, isContainerTab } from '/common/containers.js';
 
 
 export class Tree {
@@ -67,6 +68,19 @@ export class Tree {
       'type',
       'windowId',
       'tabId',
+      'cookieStoreId',
+      'containerProfileId',
+      'containerName',
+      'containerColor',
+      'containerIcon',
+      'containerMissing',
+      'restoreError',
+      'nativeGroup',
+      'groupId',
+      'groupWindowId',
+      'groupTitle',
+      'groupColor',
+      'groupCollapsed',
       'geometry',
       'windowState',
       'incognito',
@@ -327,7 +341,8 @@ export class Tree {
           //if ((null === v) || ('' === v))
           //  delete node[k];
           // remove data which shouldn't persist
-          if (['tabId', 'oldTabId', 'windowId', 'marked'].includes(k))
+          if (['tabId', 'oldTabId', 'windowId', 'marked',
+            'groupId', 'groupWindowId', 'restoreError'].includes(k))
             delete node[k];
           // remove values which haven't changed from default
           if (defaultNode[k] === node[k])
@@ -689,6 +704,9 @@ export class Tree {
 
   browserTabToNodeDetails (tab, windowId = tab?.windowId) {
     return {
+      ...(this.bkgd?.containers?.fieldsForTab(tab || {}) || (
+        tab?.cookieStoreId === undefined ? {} : { cookieStoreId: tab.cookieStoreId }
+      )),
       windowId,
       tabId: tab?.id,
       title: tab?.title,
@@ -732,6 +750,12 @@ export class Tree {
       'frozen',
       'hidden',
       'incognito',
+      'cookieStoreId',
+      'containerProfileId',
+      'containerName',
+      'containerColor',
+      'containerIcon',
+      'containerMissing',
       'atime'
     ]) {
       if ((undefined !== desired[field]) && (node[field] !== desired[field])) {
@@ -742,7 +766,29 @@ export class Tree {
       && (node.pinned !== desired.pinned)) {
       changes.pinned = desired.pinned;
     }
+    for (const field of ['containerProfileId', 'containerName',
+      'containerColor', 'containerIcon', 'containerMissing']) {
+      if (Object.hasOwn(desired, field) && node[field] !== desired[field]) {
+        changes[field] = desired[field];
+      }
+    }
     return changes;
+  }
+
+  browserTabContextMatches (node, tab, trusted = false) {
+    // A session-value match can upgrade pre-container records. Heuristics
+    // must instead treat missing metadata as the default cookie store.
+    if (trusted && ! node.cookieStoreId) {
+      return node.incognito === undefined || tab.incognito === undefined
+        || Boolean(node.incognito) === Boolean(tab.incognito);
+    }
+    if (! sameCookieStore(node, tab)) return false;
+    const profile = this.bkgd?.containers?.profileId;
+    if (! isContainerTab(node)) return true;
+    if (node.containerProfileId && profile) return node.containerProfileId === profile;
+    // Only an actual tab/session binding can establish provenance for a
+    // legacy record. An imported numeric store ID alone is not an identity.
+    return trusted;
   }
 
   tabUrlsMatch (left, right) {
@@ -1234,6 +1280,11 @@ export class Tree {
     if (! queue || (queue.length <= 0)) return;
 
     const matchesTab = (node) => {
+      if (! this.browserTabContextMatches(node, tab)) return false;
+      if (node.browserCreateTracked) {
+        return Number.isInteger(node.pendingCreatedTabId)
+          && node.pendingCreatedTabId === tab.id;
+      }
       const windowNode = node.getWindowNode(false);
       if (windowNode
         && (undefined !== windowNode.windowId)
@@ -1259,6 +1310,8 @@ export class Tree {
     const index = queue.findIndex(matchesTab);
     if (index < 0) return;
     const [savedTabNode] = queue.splice(index, 1);
+    delete savedTabNode.browserCreateTracked;
+    delete savedTabNode.pendingCreatedTabId;
     if (savedTabNode.pendingLoadTimer) {
       clearTimeout(savedTabNode.pendingLoadTimer);
       delete savedTabNode.pendingLoadTimer;
@@ -1334,6 +1387,7 @@ export class Tree {
         try {
           // re-attach this tab to the found Node
           await savedTabNode.setTabFields({
+            ...(this.bkgd?.containers?.fieldsForTab(tab) || {}),
             tabId: tab.id,
             windowId: tab.windowId,
             loaded: true,
@@ -1351,6 +1405,7 @@ export class Tree {
             savedTabNode.pinRestorePendingAt = 0;
           }
           // put the tab in the right position
+          await this.bkgd?.tabGroups?.restoreTab(savedTabNode, tab);
           await savedTabNode.reorderAllTabsInThisWindow();
           return;
         } finally {
@@ -1486,11 +1541,17 @@ export class Tree {
       }
     }
     // create the tree node
-    await destParent.addChild(
+    const newNode = await destParent.addChild(
       destIndex,
       this.browserTabToNodeDetails(tab),
       { reason: 'onTabCreated' }
     );
+    if (this.bkgd?.tabGroups?.supported) {
+      await this.bkgd.tabGroups.sync();
+      if (this.reorderTabsOnCreate !== false) {
+        await newNode.reorderAllTabsInThisWindow();
+      }
+    }
     }
     finally { unlock(); }
   }
@@ -1975,6 +2036,7 @@ export class Tree {
         tabNode.pinRestorePendingAt = 0;
       }
       // clean up sloppy titles
+      if (value === undefined) continue;
       if ('title' === field) value = value.trim().replace(/\s+/g, ' ');
       // Map browser API's favIconUrl to our faviconUrl property for comparison
       const nodeField = (field === 'favIconUrl') ? 'faviconUrl' : field;
@@ -1982,6 +2044,10 @@ export class Tree {
       if (tabNode[nodeField] !== value) changes[field] = value;
     }
     const pinnedChanged = Object.prototype.hasOwnProperty.call(changes, 'pinned');
+    const contextFields = this.bkgd?.containers?.fieldsForTab(tab) || {};
+    for (const [field, value] of Object.entries(contextFields)) {
+      if (tabNode[field] !== value) changes[field] = value;
+    }
     // apply changes, if any
     if (Object.keys(changes).length > 0) {
       await tabNode.setTabFields(changes, { reason: 'onTabUpdated' });
@@ -2380,6 +2446,7 @@ export class Tree {
     for (const realTab of window.tabs) {
       // make an object we can safely modify
       const tabCopy = { ...realTab };
+      Object.assign(tabCopy, this.bkgd?.containers?.fieldsForTab(realTab) || {});
       tabCopy.url = this.getTabPendingUrl(realTab);
       realTabList.push(tabCopy);
     }
@@ -2437,7 +2504,8 @@ export class Tree {
         // unpinned copies before the full merge pass runs.
         const realTab = realTabMatches.take(
           tabNode.url,
-          tabNode.isPinned()
+          tabNode.isPinned(),
+          tabNode
         );
         if (realTab) {
           const tabArgs = { reason: 'mergeOpenWindowsIntoTree' };
@@ -2447,6 +2515,7 @@ export class Tree {
             tabArgs.ensureUniqueBindings = false;
           }
           await tabNode.setTabFields({
+            ...(this.bkgd?.containers?.fieldsForTab(realTab) || {}),
             tabId: realTab.id,
             windowId: window.id,
             loaded: true,
@@ -2476,14 +2545,14 @@ function buildRealTabMatchIndex(tabs) {
     if (! map.has(key)) map.set(key, { tabs: [], index: 0 });
     map.get(key).tabs.push(tab);
   };
-  const pinnedKey = (url, pinned) =>
-    JSON.stringify([url || '', Boolean(pinned)]);
+  const pinnedKey = (url, pinned, context) =>
+    JSON.stringify([contextUrlKey(context, url), Boolean(pinned)]);
   for (const tab of tabs) {
     const comparableUrl = normalizeUrlForMatch(tab.url);
-    add(exactPinned, pinnedKey(tab.url, tab.pinned), tab);
-    add(comparablePinned, pinnedKey(comparableUrl, tab.pinned), tab);
-    add(exact, tab.url || '', tab);
-    add(comparable, comparableUrl, tab);
+    add(exactPinned, pinnedKey(tab.url, tab.pinned, tab), tab);
+    add(comparablePinned, pinnedKey(comparableUrl, tab.pinned, tab), tab);
+    add(exact, contextUrlKey(tab, tab.url), tab);
+    add(comparable, contextUrlKey(tab, comparableUrl), tab);
   }
   const take = (map, key) => {
     const bucket = map.get(key);
@@ -2499,15 +2568,15 @@ function buildRealTabMatchIndex(tabs) {
     return tab;
   };
   return {
-    take (url, pinned) {
+    take (url, pinned, context) {
       const comparableUrl = normalizeUrlForMatch(url);
       return (
-        take(exactPinned, pinnedKey(url, pinned))
-        || take(comparablePinned, pinnedKey(comparableUrl, pinned))
+        take(exactPinned, pinnedKey(url, pinned, context))
+        || take(comparablePinned, pinnedKey(comparableUrl, pinned, context))
         // Fallback for older saved data or changed browser state; the later
         // merge pass refreshes pinned state and position.
-        || take(exact, url || '')
-        || take(comparable, comparableUrl)
+        || take(exact, contextUrlKey(context, url))
+        || take(comparable, contextUrlKey(context, comparableUrl))
       );
     }
   };
@@ -2519,6 +2588,7 @@ function tabArraysEqual(a, b) {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) {
     if (a[i].url !== b[i].url) return false;
+    if (contextUrlKey(a[i], '') !== contextUrlKey(b[i], '')) return false;
     if (getPinnedState(a[i]) !== getPinnedState(b[i])) return false;
   }
   return true;
@@ -2529,6 +2599,7 @@ function countPinnedPositionMatches(candidate, needle) {
   let count = 0;
   for (let i = 0; i < limit; i++) {
     if (urlsMatch(candidate[i].url, needle[i].url)
+      && (contextUrlKey(candidate[i], '') === contextUrlKey(needle[i], ''))
       && (getPinnedState(candidate[i]) === getPinnedState(needle[i]))) {
       count += 1;
     }
@@ -2540,7 +2611,8 @@ function countExactUrlPositionMatches(candidate, needle) {
   const limit = Math.min(candidate.length, needle.length);
   let count = 0;
   for (let i = 0; i < limit; i++) {
-    if (candidate[i].url === needle[i].url) count += 1;
+    if (contextUrlKey(candidate[i], candidate[i].url)
+      === contextUrlKey(needle[i], needle[i].url)) count += 1;
   }
   return count;
 }
@@ -2557,7 +2629,8 @@ function getPinnedState(item) {
 function isTabSubSequence(sub, arr) {
   let subIndex = 0;
   for (let i = 0; i < arr.length && subIndex < sub.length; i++) {
-    if (urlsMatch(sub[subIndex].url, arr[i].url)) {
+    if (urlsMatch(sub[subIndex].url, arr[i].url)
+      && (contextUrlKey(sub[subIndex], '') === contextUrlKey(arr[i], ''))) {
       subIndex++;
     }
   }
@@ -2568,7 +2641,7 @@ function isTabSubSequence(sub, arr) {
 function countTabUrls(tabs) {
   const counts = new Map();
   for (const tab of tabs) {
-    const url = normalizeUrlForMatch(tab.url);
+    const url = contextUrlKey(tab, normalizeUrlForMatch(tab.url));
     counts.set(url, (counts.get(url) || 0) + 1);
   }
   return counts;
@@ -2585,6 +2658,13 @@ function normalizeUrlForMatch(url) {
   if (! url) return '';
   return String(resolveBrowserTabUrl(url))
     .replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+}
+
+function contextUrlKey(tab, url) {
+  return JSON.stringify([
+    url || '', cookieStoreKey(tab),
+    isContainerTab(tab) ? (tab?.containerProfileId || '') : ''
+  ]);
 }
 
 function resolveBrowserTabUrl(url) {

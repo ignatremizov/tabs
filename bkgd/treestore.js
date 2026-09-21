@@ -147,7 +147,9 @@ export class TreeStore extends Tree {
   }
 
   async onTabCreated (tab) {
-    const savedTabNode = await this.getTabNodeFromSession(tab.id);
+    const candidate = await this.getTabNodeFromSession(tab.id);
+    const savedTabNode = candidate && this.browserTabContextMatches(candidate, tab, true)
+      ? candidate : null;
     if (savedTabNode) {
       // A duplicated live tab may inherit session values.  Only reclaim the
       // saved node when its previous binding does not still identify a live
@@ -185,6 +187,7 @@ export class TreeStore extends Tree {
           }
 
           await savedTabNode.setTabFields({
+            ...(this.bkgd?.containers?.fieldsForTab(tab) || {}),
             tabId: tab.id,
             windowId: tab.windowId,
             loaded: true,
@@ -211,6 +214,13 @@ export class TreeStore extends Tree {
           }
 
           await this.rememberTabNode(savedTabNode, tab.id);
+          await this.bkgd?.tabGroups?.restoreTab(savedTabNode, tab);
+          if (this.bkgd?.tabGroups?.supported) {
+            // Native session restore may attach the tabs before assigning
+            // their new group IDs. Observe the settled burst, not each interim
+            // ungrouped tab, or the saved member hierarchy would be promoted.
+            this.bkgd.tabGroups.requestSync();
+          }
           return savedTabNode;
         } finally {
           savedTabNode.browserLoadInProgress = false;

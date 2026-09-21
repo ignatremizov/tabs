@@ -2,6 +2,42 @@
 
 What changed, and when?  You know the drill.
 
+## 0.0.3.10 (2026-09-21)
+
+- Draw compact container-badge frames and icons in the same SVG coordinate
+  system, avoiding independent CSS-border snapping that made icons appear
+  off-center at small sizes and fractional sidebar zoom. Preserve hover
+  names, missing-container warnings, and native group styling.
+- Reuse an already existing Firefox window when its initial tab event arrives
+  before its window-created event. Moving a native group into that provisional
+  window no longer opens an extra window and unnecessarily recreates the group.
+- Wait for complete native-ungroup reconciliation in the Firefox integration
+  test, and retain the original movement failure when cleanup also fails.
+
+## 0.0.3.9 (2026-09-21)
+
+- Added Firefox container tracking, compact colored icon badges, persistent
+  cookie-store references, and exact-container restoration for tabs and the
+  initial tab of a saved window. Deleted, inaccessible, foreign-profile, and
+  private-window-incompatible container restores fail closed without opening
+  another account. No cookie contents or authentication tokens are backed up.
+- Kept container names in hover tooltips, accessible labels, and the details
+  panel instead of repeating them on every tab row. Missing-container
+  warnings remain visible, and renames update the tooltip immediately.
+- Added native tab-group notes with bidirectional name/collapse updates,
+  native color and membership tracking, member nesting, and promotion of
+  nonmember descendants. Saved groups retain history and reconnect through
+  stable outline member identities rather than stale browser group IDs.
+- Added group-aware block reordering and cross-window moves, including
+  protection against a browser snapshot undoing an in-flight outline move.
+- Bound saved-tab creation to the authoritative returned tab ID, handling
+  Firefox's initial blank-page events and overlapping same-URL restores.
+  Browser event callbacks no longer return uncloneable outline objects.
+- Added deterministic container/group regressions, DOM presentation and
+  metadata-safety checks, and an isolated real-Firefox lifecycle/reload suite.
+  Release validation passed 209 Node tests, 297 browser/DOM checks, and 16
+  real-Firefox integration checks.
+
 ## 0.0.3.8 (2026-09-20)
 
 - Fixed a saved-window restore deadlock: tab-update handlers no longer wait
@@ -16,7 +52,7 @@ What changed, and when?  You know the drill.
 
 # 0.0.3 (2026-08-16)
 
-The latest signed Firefox package for this release line is build `0.0.3.8`.
+The latest signed Firefox package for this release line is build `0.0.3.10`.
 
 This is the cumulative fork-versus-upstream inventory for 0.0.3.  It compares
 the fork with upstream `r0.1.181.0` (`e0031c2`) and includes work first shipped
@@ -280,7 +316,7 @@ individually.
   explicit DOM construction and text nodes.
 - Added Node-based coverage for tree, persistence, restore, reconciliation,
   message retry, import, backup, keybinding, and movement behavior.  The suite
-  currently contains 184 checks.
+  contains 209 checks as of build 0.0.3.9.
 - Added browser suites for DOM safety, client-ID flow, Firefox / Chromium
   restore rules, Tree / Node behavior, and 78 TreeView actions in each browser
   mode.  Added V8/browser coverage collection and a generated README badge;

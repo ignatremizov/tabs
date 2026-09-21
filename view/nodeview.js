@@ -7,6 +7,54 @@ import { api } from '/api.js';
 
 import { debug, error, fmtDate } from '/common/common.js';
 import { Node } from '/common/node.js';
+import { isContainerTab } from '/common/containers.js';
+
+const contextColors = new Set([
+  'blue', 'turquoise', 'cyan', 'green', 'yellow', 'orange', 'red',
+  'pink', 'purple', 'violet', 'gray', 'toolbar'
+]);
+// Local, fixed SVG paths. Browser/backup icon strings can select a known
+// symbol, but can never become markup, a stylesheet, or an external URL.
+const contextIcons = {
+  briefcase: 'M2 5h12v8H2z M6 5V3h4v2 M5 5v8 M11 5v8',
+  fingerprint: 'M3 9V7a5 5 0 0 1 10 0v2 M5 12V7a3 3 0 0 1 6 0v3 M7 14V7a1 1 0 0 1 2 0v5 M3 11v1 M11 12v1',
+  dollar: 'M11 4H7a2 2 0 0 0 0 4h2a2 2 0 0 1 0 4H5 M8 2v12',
+  cart: 'M2 3h2l2 7h6l2-5H5 M7 13h.1 M12 13h.1',
+  circle: 'M13 8a5 5 0 1 1-10 0 5 5 0 0 1 10 0',
+  gift: 'M2 6h12v3H2z M3 9v5h10V9 M8 5v9 M8 6C1-1 2 7 8 6 M8 6c7-7 6 1 0 0',
+  vacation: 'M8 14V4 M2 6q6-7 12 0 M4 8q4-6 8 0 M5 14h6',
+  food: 'M3 2v5h3V2 M4.5 7v7 M12 2v12 M12 2q-5 5 0 6',
+  fruit: 'M8 5C0 1 1 14 6 13l2-1 2 1c5 1 6-12-2-8 M8 5q-1-4 3-3',
+  pet: 'M4 11q4-7 8 0c2 5-2 1-4 2-2-1-6 3-4-2 M3 5h.1 M6 3h.1 M10 3h.1 M13 5h.1',
+  tree: 'M8 2l-5 7h3l-3 3h10l-3-3h3z M8 12v3',
+  chill: 'M2 5h12 M4 5v8h8V5 M5 9h6 M6 2v1 M10 2v1',
+  fence: 'M2 7h12 M2 11h12 M4 14V3l1-1 1 1v11 M10 14V3l1-1 1 1v11',
+  group: 'M2 5h12v9H2z M4 2h8 M3 3.5h10'
+};
+
+function contextIcon(document, name, framed = false) {
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', framed ? '-4 -1 24 18' : '0 0 16 16');
+  svg.setAttribute('aria-hidden', 'true');
+  svg.setAttribute('focusable', 'false');
+  svg.classList.add('context-icon');
+  if (framed) {
+    // Paint the frame and glyph in one coordinate system. A CSS border can
+    // snap independently of the fractional SVG position at small sidebar
+    // sizes, making an otherwise centered icon appear to shift left/right.
+    // Frame and viewBox share center (8, 8); allow for the 1.4-unit stroke.
+    const frame = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    frame.classList.add('container-icon-frame');
+    for (const [key, value] of Object.entries({
+      x: -3.3, y: -0.3, width: 22.6, height: 16.6, rx: 3.3
+    })) frame.setAttribute(key, value);
+    svg.append(frame);
+  }
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', Object.hasOwn(contextIcons, name) ? contextIcons[name] : contextIcons.circle);
+  svg.append(path);
+  return svg;
+}
 
 
 export class NodeView extends Node {
@@ -176,6 +224,20 @@ export class NodeView extends Node {
     // ... where "[3/14]" is num children open/total, "[X]" is a checkbox,
     // and "@" is a favicon
     let urlTitle = this.title ? this.title : this.url;  // handle blank title
+    const namedContainer = Boolean(this.cookieStoreId && isContainerTab(this));
+    this.$row.classList.toggle('container-tab', namedContainer);
+    this.$row.classList.toggle('container-missing', namedContainer && Boolean(this.containerMissing));
+    this.$row.classList.toggle('native-group', this.nativeGroup === true);
+    this.$row.classList.toggle('restore-error', Boolean(this.restoreError));
+    for (const color of contextColors) this.$row.classList.remove(`context-color-${color}`);
+    const requestedColor = this.nativeGroup ? this.groupColor : this.containerColor;
+    if (namedContainer || this.nativeGroup) {
+      const color = contextColors.has(requestedColor) ? requestedColor : 'gray';
+      this.$row.classList.add(`context-color-${color}`);
+    }
+    // Clear obsolete tooltips as well as old badges on subsequent renders.
+    this.$row.removeAttribute('title');
+    if (this.restoreError) this.$row.title = this.restoreError;
 
     // node stats
     // unsure if always include stats or only when collapsed
@@ -281,7 +343,44 @@ export class NodeView extends Node {
       this.$row.append($favicon);
     }
 
-    // indicate when there's a long note attached
+    // Keep repeated container names out of the row; the icon's tooltip and
+    // accessible name retain the complete identity for live and saved tabs.
+    if (namedContainer) {
+      const badge = doc.createElement('span');
+      badge.className = 'container-badge';
+      const name = this.containerName || this.cookieStoreId;
+      const missing = this.containerMissing ? ' — unavailable; restore will not switch accounts' : '';
+      badge.title = `Container: ${name} (${this.cookieStoreId})${missing}`;
+      badge.setAttribute('role', 'img');
+      badge.setAttribute('aria-label', badge.title);
+      badge.append(contextIcon(doc, this.containerIcon, true));
+      if (this.containerMissing) {
+        const warning = doc.createElement('span');
+        warning.className = 'context-warning';
+        warning.textContent = '!';
+        badge.append(warning);
+      }
+      this.$row.append(badge);
+    }
+    if (this.nativeGroup) {
+      const badge = doc.createElement('span');
+      badge.className = 'native-group-badge';
+      const live = Number.isInteger(this.groupId) && this.groupId >= 0;
+      badge.title = `Native tab group: ${this.label || 'Tab group'} — ${live ? 'open' : 'saved'}, ${this.groupCollapsed ? 'collapsed' : 'expanded'}`;
+      badge.setAttribute('aria-label', badge.title);
+      badge.append(contextIcon(doc, 'group'));
+      this.$row.append(badge);
+    }
+    if (this.restoreError) {
+      const warning = doc.createElement('span');
+      warning.className = 'restore-error-icon';
+      warning.textContent = '⚠';
+      warning.title = this.restoreError;
+      warning.setAttribute('aria-label', this.restoreError);
+      this.$row.append(warning);
+    }
+
+    // Indicate when there's a long note attached.
     if (this.note) {
       const $noteIcon = doc.createElement('span');
       $noteIcon.className = 'node-note-icon';
@@ -312,7 +411,7 @@ export class NodeView extends Node {
       }
       else {  // label only
         // dividers
-        if (['-', '='].includes(this.label)) {
+        if (! this.nativeGroup && ['-', '='].includes(this.label)) {
           const $hr = doc.createElement('hr');
           $hr.className = 'node-divider1';
           if ('=' === this.label) $hr.className = 'node-divider2';
@@ -354,6 +453,12 @@ export class NodeView extends Node {
     }
     if (this.isWindow() && this.isIncognito()) {
       $title.append(' (private)');
+    }
+    if (this.nativeGroup && !(Number.isInteger(this.groupId) && this.groupId >= 0)) {
+      const saved = doc.createElement('span');
+      saved.className = 'group-saved-state';
+      saved.textContent = ' (saved group)';
+      $title.append(saved);
     }
     this.$row.append($title);
 
@@ -455,6 +560,22 @@ export class NodeView extends Node {
     // long note
     let $note = getOrCreate('detail-note', 'div');
     setOrHide($note, this.note);
+
+    const $restoreError = getOrCreate('detail-restore-error', 'div');
+    $restoreError.setAttribute('role', 'status');
+    setLabeledDetail($restoreError, 'Restore blocked', this.restoreError);
+    const $container = getOrCreate('detail-container', 'div');
+    const $group = getOrCreate('detail-native-group', 'div');
+    if (mode <= 1) {
+      hide($container);
+      hide($group);
+    } else {
+      const named = this.cookieStoreId && isContainerTab(this);
+      setLabeledDetail($container, 'Container', named
+        ? `${this.containerName || this.cookieStoreId} (${this.cookieStoreId})${this.containerMissing ? ' — unavailable' : ''}` : undefined);
+      setLabeledDetail($group, 'Native group', this.nativeGroup
+        ? `${this.label || 'Tab group'} · ${this.groupColor || 'gray'} · ${this.groupCollapsed ? 'collapsed' : 'expanded'}` : undefined);
+    }
 
     // link title
     let $title = getOrCreate('detail-title', 'div');

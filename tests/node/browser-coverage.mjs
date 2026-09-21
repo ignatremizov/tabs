@@ -17,8 +17,12 @@ let debugPort = 9222;
 
 const testPages = [
   '/tests/dom-safety.test.html',
+  '/tests/native-context-view.test.html',
   '/tests/tree-node.test.html?env=chrome',
   '/tests/tree-node.test.html?env=firefox',
+  '/tests/client-id-flow.test.html',
+  '/tests/treeview-actions.test.html?env=chrome',
+  '/tests/treeview-actions.test.html?env=firefox',
   '/tests/merge-open-windows.test.html?env=chrome',
   '/tests/merge-open-windows.test.html?env=firefox'
 ];
@@ -285,6 +289,10 @@ async function run() {
         );
       }
       const testResults = await getTestResults(cdp);
+      if (page === '/tests/native-context-view.test.html') {
+        const screenshot = await cdp.send('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
+        fs.writeFileSync(path.join(coverageDir, 'native-context-view.png'), Buffer.from(screenshot.data, 'base64'));
+      }
       if (! testResults || (! Number.isFinite(testResults.failCount))) {
         throw new Error(
           `Test page did not publish results: ${page}\n`

@@ -3733,6 +3733,7 @@
         }
 
         renderLegend($results);
+        window.__TEST_RESULTS__ = { results: results.filter(result => result.type === 'test'), passCount, failCount };
         window.__TEST_DONE__ = true;
       }
 

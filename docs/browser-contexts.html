@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<!-- Copyright (C) 2026 Ignat Remizov; SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Firefox Containers and Native Tab Groups</title>
+  <script type="module" src="./docs.js"></script>
+</head>
+<body class="docs">
+<h1>Firefox Containers and Native Tab Groups</h1>
+
+<h2>Containers: keep the correct account</h2>
+<p>Open a tab in a container using Firefox's normal container controls. The
+outline displays a compact colored container icon next to the page title,
+without repeating the container name on every row. Hover over the icon to see
+the container's name and cookie-store identifier, or use the details panel.
+The full identity is also available to screen readers. Container renames and
+appearance changes update both live and saved rows. Missing containers retain
+a visible warning as well as an explanatory tooltip.</p>
+
+<p>Unloading and reopening a saved tab uses its exact original cookie store,
+including when it is the first tab of a restored window. Two copies of the
+same URL in different containers remain separate. The extension never opens
+the URL in the default container first and then moves it.</p>
+
+<p><b>Existing history:</b> live tabs are annotated when this version attaches
+to them. Older closed entries that never recorded a container do not contain
+enough information to reconstruct their original account context; they retain
+the legacy default/inherited-window restoration behavior. Open those URLs in
+the intended container manually when the choice of account matters. Imported
+entries that name a container ID but omit its profile scope are blocked.</p>
+
+<p><b>This preserves the choice of session, not a copy of authentication.</b>
+Cookie contents, passwords, and authentication tokens are not read or saved
+by this feature. Existing cookies remain in Firefox; a site can still expire
+your login. Restoring a tree backup does not restore deleted cookies.</p>
+
+<p>A deleted, inaccessible, foreign-profile, or unscoped imported container blocks restoration
+with an explanation instead of silently using another account. The saved
+row remains intact. Creating a new container with the same name is not the
+same identity. Restore from the original Firefox profile, or explicitly open
+the URL in your chosen container using Firefox. Automatic cross-profile
+container remapping is not provided. Named containers cannot be restored
+into private windows or browsers without Firefox container support.</p>
+
+<h2>Native groups: a note for each group</h2>
+<p>Create a native tab group in Firefox. It appears as a colored note with the
+same name beneath the window. Renaming, moving, or collapsing the native
+group updates the outline. Editing the note's name or expanded state, or
+moving its members in the outline, updates the live native group.</p>
+
+<p>Only actual members belong beneath a native group note. Member-to-member
+nesting is preserved, while unrelated live and saved descendants are promoted
+to the nearest compatible ancestor outside the group. For example, grouping
+A and C in the following branch produces:</p>
+<pre>Before                 After
+Window                 Window
+  A                      Research [native group]
+    B                      A
+      C                      C
+                         B</pre>
+
+<p>Ordinary notes remain annotations, not implicit groups. Group names such
+as <code>Pinned</code>, <code>-</code>, and <code>=</code> are literal titles,
+not pin commands or dividers. Native groups are separate membership domains;
+they are not nested native groups.</p>
+
+<p>Closing or unloading group members preserves their saved history beneath
+the group note. A note with no live binding displays <b>(saved group)</b>.
+Loading a saved member reuses the corresponding live native group or creates
+one with the saved name, color, and collapsed state. Restored native session
+tabs reconnect to their existing notes instead of creating duplicate groups.
+Ephemeral browser group IDs are not exported in backups.</p>
+
+<h2>Permissions and compatibility</h2>
+<p>The Firefox build requests <code>cookies</code> and
+<code>contextualIdentities</code> for container identification and exact-store
+creation, and <code>tabGroups</code> for native group metadata. It does not add
+required website access. The container feature does not call cookie-reading
+APIs; the isolated developer integration test uses only synthetic loopback
+cookies.</p>
+<p>Native group functionality is enabled only when the browser exposes the
+required group APIs. Ordinary tabs and outline notes continue to work without
+them. Firefox container identity is not interchangeable with a similarly
+named container in another profile or a Chrome profile.</p>
+
+<p>API references:
+<a href="https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/Work_with_contextual_identities">Mozilla: contextual identities</a>,
+<a href="https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabGroups">Mozilla: tabGroups</a>, and
+<a href="https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/API/tabGroups/move">Mozilla: moving a complete group</a>.
+</p>
+<p><a href="./index.html">Back to help</a></p>
+</body>
+</html>

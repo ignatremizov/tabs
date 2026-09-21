@@ -1,0 +1,266 @@
+<!doctype html>
+<!-- Copyright (C) 2026 Ignat Remizov; SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Container and native-group presentation tests</title>
+  <link rel="stylesheet" href="/view/sidepanel.css">
+  <link rel="stylesheet" href="/themes/tk.css">
+  <link rel="stylesheet" href="/themes/tk-night.css" id="fixture-theme">
+  <style>
+    :root { --font-family: system-ui, sans-serif; --global-font-size: 13px;
+      --row-line-height: 19px; --row-min-height: 19px; --row-padding: 1px; }
+    body { max-width: 620px; margin: 16px; height: auto; }
+    h1 { font-size: 18px; }
+    #tree-view { min-height: 310px; padding: 8px; box-sizing: border-box; }
+    #test-summary { margin: 16px 0; }
+    #test-results { white-space: pre-wrap; font-size: 12px; }
+  </style>
+  <script>
+    window.__TKTSTO_TEST__ = true;
+    window.__TKTSTO_TEST_QUIET__ = true;
+    window.chrome = {
+      runtime: { getURL: path => new URL(path, location.origin).href,
+        sendMessage: async () => ({}), onMessage: { addListener() {} } },
+      i18n: { getMessage: key => key },
+      storage: { local: { get: async defaults => defaults }, onChanged: { addListener() {} } },
+      tabs: { query: async () => [] }
+    };
+    // In actual Firefox too, keep this fixture detached from real browser APIs.
+    window.browser = window.chrome;
+  </script>
+</head>
+<body>
+  <h1>Containers &amp; native tab groups</h1>
+  <p>Synthetic display fixture — no browser tabs or account data are accessed.</p>
+  <div id="tree-view"></div>
+  <div id="details"></div>
+  <strong id="test-summary">Running…</strong>
+  <pre id="test-results"></pre>
+  <script type="module">
+    "use strict";
+    import { Tree } from '/common/tree.js';
+    import { NodeView } from '/view/nodeview.js';
+    import { emit } from '/common/common.js';
+    emit.disabled = true;
+    const results = [];
+    const assert = (value, message) => { if (! value) throw new Error(message); };
+    async function test(name, run) {
+      try { await run(); results.push({ name, pass: true }); }
+      catch (err) { results.push({ name, pass: false, error: err.message }); console.error(name, err); }
+    }
+    try {
+      const tree = new Tree(NodeView);
+      tree.document = document; tree.window = window;
+      tree.treeViewLoaded = Promise.resolve(); tree.resolveTreeLoaded();
+      tree.viewRoot = tree.root;
+      tree.cfg = { showFavicons: false, detailsMode: 2, expandedRowPrefix: true, alwaysShowNodeStats: true };
+      tree.$detailsBox = document.getElementById('details');
+      let id = 0;
+      tree.newNodeId = async () => `fixture-${++id}`;
+      const add = (parent, fields) => parent.addChild(parent.nodes.length, fields, { reason: 'test' });
+      const win = await add(tree.root, { type: 'window', windowId: 1, loaded: true, label: 'Synthetic browser window' });
+      const group = await add(win, { nativeGroup: true, label: 'Payments research', groupTitle: 'Payments research',
+        groupColor: 'blue', groupId: 3, groupWindowId: 1, groupCollapsed: false });
+      const personal = await add(group, { url: 'https://example.test/account', title: 'Account — personal session', loaded: true,
+        cookieStoreId: 'firefox-container-1', containerName: 'Personal', containerColor: 'blue', containerIcon: 'fingerprint' });
+      const work = await add(personal, { url: personal.url, title: 'Account — work session', loaded: true, active: true,
+        cookieStoreId: 'firefox-container-2', containerName: 'iremizov', containerColor: 'green', containerIcon: 'briefcase' });
+      const office = await add(win, { url: 'https://example.test/office', title: 'Office dashboard', loaded: true,
+        cookieStoreId: 'firefox-container-3', containerName: 'office', containerColor: 'toolbar', containerIcon: 'briefcase' });
+      const outside = await add(win, { url: 'https://example.test/outside', title: 'Promoted outside the native group', loaded: true });
+      const savedGroup = await add(win, { nativeGroup: true, label: 'Saved research', groupColor: 'purple', groupCollapsed: false });
+      const missing = await add(savedGroup, { url: 'https://example.test/saved', title: 'Saved tab — original session required', wasLoaded: true,
+        cookieStoreId: 'firefox-container-4', containerName: 'Removed container', containerColor: 'orange', containerIcon: 'briefcase',
+        containerMissing: true, restoreError: 'The saved Firefox container is missing. This tab was not opened in another cookie store.' });
+      function render(node) {
+        node.$render();
+        for (const child of node.nodes) { render(child); node.$nodes.append(child.$); }
+      }
+      render(win); document.getElementById('tree-view').append(win.$);
+
+      await test('container badges show only the colored icon with the full name on hover', () => {
+        const badge = personal.$row.querySelector('.container-badge');
+        assert(! badge.querySelector('.container-name') && badge.textContent === '', 'Repeated name visible in row');
+        assert(badge.title === 'Container: Personal (firefox-container-1)', 'Hover name missing');
+        assert(badge.getAttribute('role') === 'img' && badge.getAttribute('aria-label') === badge.title, 'Icon has no accessible name');
+        assert(personal.$row.classList.contains('context-color-blue'), 'Color missing');
+        assert(personal.$row.querySelector('.context-icon path'), 'Identity icon missing');
+        assert(personal.$row.querySelector('.url-title').textContent.includes('personal session'), 'Site title replaced');
+        assert(work.$row.classList.contains('active'), 'Active-tab styling lost');
+      });
+      await test('container frame and glyph share one centered SVG instead of a separately snapped CSS border', () => {
+        const badge = work.$row.querySelector('.container-badge');
+        const svg = badge.querySelector('.context-icon');
+        const frame = svg.querySelector('.container-icon-frame');
+        assert(frame?.localName === 'rect', 'Frame must be drawn with the icon');
+        assert(frame.ownerSVGElement === svg.querySelector('path').ownerSVGElement,
+          'Frame and glyph must share a coordinate system');
+        assert(getComputedStyle(badge).borderLeftWidth === '0px'
+          && getComputedStyle(badge).borderRightWidth === '0px', 'Separate CSS border remains');
+        assert(! group.$row.querySelector('.container-icon-frame'), 'Native group icon acquired a container frame');
+        const box = svg.viewBox.baseVal;
+        const bounds = frame.getBBox();
+        assert(Math.abs(bounds.x + bounds.width / 2 - box.x - box.width / 2) < 0.001,
+          'Frame is not horizontally centered');
+        assert(Math.abs(bounds.y + bounds.height / 2 - box.y - box.height / 2) < 0.001,
+          'Frame is not vertically centered');
+      });
+      await test('briefcase stays centered across compact fonts, fractional indents, zoom, and row states', () => {
+        const probe = document.createElement('div');
+        const row = work.$row.cloneNode(true);
+        probe.append(row); document.body.append(probe);
+        try {
+          const badge = row.querySelector('.container-badge');
+          const frame = badge.querySelector('.container-icon-frame');
+          const glyph = badge.querySelector('path');
+          assert(frame, 'Missing shared SVG frame');
+          for (const font of [10, 11.55, 13, 18.666667]) {
+            row.style.fontSize = `${font}px`;
+            for (const zoom of [0.7, 1, 1.25]) {
+              probe.style.zoom = zoom;
+              for (const indent of [0, 0.25, 0.5, 0.75]) {
+                row.style.paddingInlineStart = `${indent}px`;
+                for (const state of ['', 'active', 'cursor', 'marked']) {
+                  row.classList.remove('active', 'cursor', 'marked');
+                  if (state) row.classList.add(state);
+                  const border = frame.getBoundingClientRect();
+                  const icon = glyph.getBoundingClientRect();
+                  const wrapper = badge.getBoundingClientRect();
+                  const center = (rect, axis) => axis === 'x'
+                    ? rect.left + rect.width / 2 : rect.top + rect.height / 2;
+                  for (const axis of ['x', 'y']) {
+                    const label = `${font}px / ${zoom} zoom / ${indent}px / ${state} / ${axis}`;
+                    assert(Math.abs(center(border, axis) - center(icon, axis)) < 0.05,
+                      `Frame/glyph centers differ: ${label}`);
+                    assert(Math.abs(center(wrapper, axis) - center(icon, axis)) < 0.05,
+                      `Badge/glyph centers differ: ${label}`);
+                  }
+                  assert(icon.width > 0 && icon.height > 0, 'Icon collapsed');
+                }
+              }
+            }
+          }
+        } finally { probe.remove(); }
+      });
+      await test('container renames update hover and accessible names without adding inline text', () => {
+        const oldName = work.containerName;
+        work.containerName = 'Renamed work account'; work.$render();
+        const badge = work.$row.querySelector('.container-badge');
+        assert(badge.title.includes(work.containerName) && ! badge.title.includes(oldName), 'Stale hover name');
+        assert(badge.getAttribute('aria-label') === badge.title && badge.textContent === '', 'Name not accessible or repeated inline');
+        work.$renderDetails(tree.$detailsBox);
+        assert(document.getElementById('detail-container').textContent.includes(work.containerName), 'Details name stale');
+        work.containerName = oldName; work.$render();
+      });
+      await test('container icons without cached names expose the cookie-store identifier on hover', () => {
+        const oldName = office.containerName;
+        office.containerName = undefined; office.$render();
+        const badge = office.$row.querySelector('.container-badge');
+        assert(badge.title.includes(office.cookieStoreId), 'Fallback identity missing');
+        assert(badge.getAttribute('aria-label') === badge.title && badge.textContent === '', 'Fallback identity repeated inline');
+        office.containerName = oldName; office.$render();
+      });
+      await test('default and private cookie stores never display a named-container badge', () => {
+        assert(! outside.$row.querySelector('.container-badge'), 'Default badge must be absent');
+        outside.cookieStoreId = 'firefox-private'; outside.$render();
+        assert(! outside.$row.querySelector('.container-badge'), 'Private mislabeled as container');
+        outside.cookieStoreId = undefined; outside.$render();
+      });
+      await test('current Firefox violet and legacy container colors render safely', () => {
+        const oldColor = office.containerColor;
+        for (const color of ['violet', 'cyan', 'gray', 'turquoise', 'toolbar']) {
+          office.containerColor = color; office.$render();
+          assert(office.$row.classList.contains(`context-color-${color}`), `Missing ${color} accent`);
+        }
+        office.containerColor = oldColor; office.$render();
+      });
+      await test('missing container warning and full identity are available in tooltip and details', () => {
+        const badge = missing.$row.querySelector('.container-badge');
+        assert(badge.title.includes('unavailable') && badge.title.includes('firefox-container-4'), 'Missing tooltip');
+        assert(badge.querySelector('.context-warning')?.textContent === '!', 'Missing warning removed with name');
+        const frame = badge.querySelector('.container-icon-frame');
+        assert(frame && getComputedStyle(frame).strokeDasharray !== 'none', 'Missing container frame is not dashed');
+        assert(missing.$row.classList.contains('container-missing'), 'Missing visual state');
+        missing.$renderDetails(tree.$detailsBox);
+        assert(document.getElementById('detail-container').textContent.includes('Removed container'), 'Missing details');
+        assert(document.getElementById('detail-restore-error').textContent.includes('not opened'), 'Missing restore error');
+      });
+      await test('restore failure is visible even in notes-only details mode', () => {
+        tree.cfg.detailsMode = 1; missing.$renderDetails(tree.$detailsBox);
+        assert(! document.getElementById('detail-restore-error').classList.contains('hidden'), 'Error hidden');
+        tree.cfg.detailsMode = 2;
+      });
+      await test('native groups display their own color, name, and saved/live status', () => {
+        assert(group.$row.classList.contains('native-group') && group.$row.classList.contains('context-color-blue'), 'Group marker absent');
+        assert(group.$row.querySelector('.native-group-badge').title.includes('open'), 'Live status absent');
+        assert(savedGroup.$row.querySelector('.group-saved-state').textContent.includes('saved group'), 'Saved status absent');
+      });
+      await test('native group labels Pinned, minus, and equals remain literal notes', () => {
+        for (const label of ['Pinned', '-', '=']) {
+          savedGroup.label = label; savedGroup.$render();
+          assert(savedGroup.$row.querySelector('.node-label').textContent === label, 'Literal title changed');
+          assert(! savedGroup.isPinnedBranch(), 'Group became pinned branch');
+          assert(! savedGroup.$row.querySelector('hr'), 'Group became divider');
+        }
+        savedGroup.label = 'Saved research'; savedGroup.$render();
+      });
+      await test('backup-provided names, colors, icons, and errors cannot inject markup or URLs', () => {
+        const old = { containerName: office.containerName, containerColor: office.containerColor, containerIcon: office.containerIcon };
+        office.containerName = '<b data-injected="1">Untrusted</b>';
+        office.containerColor = 'blue; background:url(https://invalid.test/pixel)';
+        office.containerIcon = '"><img src=x onerror=1>';
+        office.restoreError = '<em data-injected="1">Blocked</em>';
+        office.$render(); office.$renderDetails(tree.$detailsBox);
+        assert(! document.querySelector('[data-injected]'), 'Metadata parsed as HTML');
+        assert(office.$row.classList.contains('context-color-gray'), 'Unsafe color not normalized');
+        assert(! office.$row.querySelector('[style]'), 'Unsafe inline CSS');
+        assert(! office.$row.querySelector('img'), 'Unsafe icon created image');
+        const badge = office.$row.querySelector('.container-badge');
+        assert(badge.title.includes(office.containerName) && badge.getAttribute('aria-label') === badge.title, 'Name not preserved as literal tooltip text');
+        assert(badge.textContent === '', 'Untrusted name rendered inline');
+        Object.assign(office, old); office.restoreError = undefined; office.$render();
+      });
+      await test('rerender removes stale badges, color classes, and restore errors without duplicates', () => {
+        for (let count = 0; count < 3; count++) office.$render();
+        assert(office.$row.querySelectorAll('.container-badge').length === 1, 'Duplicate badge');
+        office.cookieStoreId = 'firefox-default'; office.containerMissing = false; office.$render();
+        assert(! office.$row.querySelector('.container-badge'), 'Stale badge');
+        assert(! office.$row.classList.contains('context-color-toolbar'), 'Stale color');
+        assert(! office.$row.hasAttribute('title') && ! office.$row.querySelector('.restore-error-icon'), 'Stale error');
+        office.cookieStoreId = 'firefox-container-3'; office.$render();
+      });
+      await test('long identity names do not widen icon badges and remain available on hover', () => {
+        const old = personal.containerName;
+        const before = personal.$row.querySelector('.container-badge').getBoundingClientRect().width;
+        personal.containerName = 'A very long identity name '.repeat(12); personal.$render();
+        const badge = personal.$row.querySelector('.container-badge');
+        const width = badge.getBoundingClientRect().width;
+        assert(width > 0 && width < 32 && Math.abs(width - before) < 0.1, 'Name changed compact icon width');
+        assert(badge.title.includes(personal.containerName), 'Full hover name missing');
+        assert(badge.getAttribute('aria-label').includes(personal.containerName), 'Full name inaccessible');
+        personal.containerName = old; personal.$render();
+      });
+      await test('toolbar-colored container badge stays visible in light and dark palettes', async () => {
+        const theme = document.getElementById('fixture-theme');
+        for (const variant of ['day', 'night']) {
+          await new Promise((resolve, reject) => { theme.onload = resolve; theme.onerror = reject; theme.href = `/themes/tk-${variant}.css`; });
+          const stroke = getComputedStyle(office.$row.querySelector('.context-icon')).stroke;
+          assert(stroke && stroke !== 'none' && stroke !== 'rgba(0, 0, 0, 0)', `Invisible ${variant} icon`);
+          assert(office.$row.querySelector('.container-badge').getBoundingClientRect().width > 0, `Collapsed ${variant} badge`);
+        }
+      });
+      missing.$renderDetails(tree.$detailsBox);
+    } catch (err) {
+      results.push({ name: 'fixture setup', pass: false, error: `${err.message}\n${err.stack}` });
+      console.error(err);
+    } finally {
+      window.__TEST_RESULTS__ = { results, passCount: results.filter(item => item.pass).length,
+        failCount: results.filter(item => ! item.pass).length };
+      document.getElementById('test-summary').textContent = `${window.__TEST_RESULTS__.passCount} passed; ${window.__TEST_RESULTS__.failCount} failed`;
+      document.getElementById('test-results').textContent = results.map(item => `${item.pass ? 'PASS' : 'FAIL'} ${item.name}${item.error ? ': ' + item.error : ''}`).join('\n');
+      window.__TEST_DONE__ = true;
+    }
+  </script>
+</body>
+</html>

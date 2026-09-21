@@ -15,7 +15,14 @@ What to expect in each type of browser.
 
 ## Firefox
 
-Tested: Firefox ESR 115 to 140, 149 (via Floorp)
+Earlier testing: Firefox ESR 115 to 140, 149 (via Floorp).
+
+The current fork manifest requires Firefox 142 or newer. Build 0.0.3.9 was
+additionally tested in Firefox 156.0 with real container and native tab-group
+APIs, saved-tab/window restoration, cross-window group moves, and extension
+reload in a disposable profile. See [Containers and Native Tab Groups](docs/browser-contexts.html)
+for exact-cookie-store restoration, icon-only badges with hover names,
+bidirectional group collapse, and migration limits for older saved entries.
 
 Known issues:
 
@@ -34,10 +41,9 @@ Known issues:
 
 - In FF 128 and older, the hoverMenu buttons are a weird size when zoomed.
 
-- **Older versions of Firefox** generate warnings during install because the
-  manifest file contains clauses for newer versions.  The manifest may also
-  need some sections removed in Firefox 115 ESR.  The extension itself still
-  works though, so I've chosen NOT to increase the minimum allowed version.
+- **Older versions of Firefox** are outside the current fork manifest's
+  minimum version. Earlier upstream compatibility notes do not establish
+  support for installing the current signed build on those versions.
 
 - Rendering is sometimes off by 1 pixel at some zoom settings.
 

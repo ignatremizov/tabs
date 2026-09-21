@@ -4,7 +4,7 @@
 
 "use strict";
 import { api } from '/api.js';
-import { debug, log, error, emit } from '/common/common.js';
+import { debug, log, warn, error, emit } from '/common/common.js';
 
 function buildBrowserSnapshot(tree, windows) {
   const windowById = new Map();
@@ -311,6 +311,12 @@ export async function runReconcile ({ reason } = {}) {
         await node.setTabFields({ loaded: true }, { reason });
         didWork = true;
       }
+    }
+
+    if (bkgd.containers) didWork = (await bkgd.containers.refresh()) || didWork;
+    if (bkgd.tabGroups) {
+      try { didWork = (await bkgd.tabGroups.sync()) || didWork; }
+      catch (err) { warn('Reconciliation retained the prior native group snapshot', err); }
     }
 
     if (didWork && ('startup' !== reason)) {

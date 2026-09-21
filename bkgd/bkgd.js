@@ -24,6 +24,8 @@ import { TreeStore } from './treestore.js';
 import { base32encode } from '/common/base32.js';
 import { createNewUserTutorialNodes } from '/bkgd/new-user.js';
 import { runReconcile } from '/bkgd/reconcile.js';
+import { Containers } from '/bkgd/containers.js';
+import { TabGroups } from '/bkgd/tab-groups.js';
 
 log('/bkgd/bkgd.js running');
 
@@ -46,38 +48,41 @@ function buildStartupTabCandidateIndex(tree, windowNode) {
     add(byComparableUrl, tree.getTabUrlMatchKey(node.url), node);
   }
 
-  const available = (nodes, claimedNodeIds, pinnedState) =>
+  const available = (nodes, claimedNodeIds, pinnedState, tab, trusted = false) =>
     (nodes || []).filter((node) =>
       (! claimedNodeIds.has(node.id))
+      && (! tab || tree.browserTabContextMatches(node, tab, trusted))
       && ((undefined === pinnedState)
         || (node.isPinned() === pinnedState))
     );
-  const choose = (nodes, claimedNodeIds, pinnedState) =>
+  const choose = (nodes, claimedNodeIds, pinnedState, tab) =>
     tree.choosePreferredTabNode(
-      available(nodes, claimedNodeIds, pinnedState)
+      available(nodes, claimedNodeIds, pinnedState, tab)
   );
 
   return {
-    findByTabId (tabId, claimedNodeIds) {
-      return available(byTabId.get(tabId), claimedNodeIds)[0] || null;
+    findByTabId (tabId, claimedNodeIds, tab) {
+      return available(byTabId.get(tabId), claimedNodeIds, undefined, tab, true)[0] || null;
     },
-    findByUrl (url, pinnedState, claimedNodeIds) {
+    findByUrl (url, pinnedState, claimedNodeIds, tab) {
       const comparableUrl = tree.getTabUrlMatchKey(url);
       return (
-        choose(byExactUrl.get(url), claimedNodeIds, pinnedState)
+        choose(byExactUrl.get(url), claimedNodeIds, pinnedState, tab)
         || choose(
           byComparableUrl.get(comparableUrl),
           claimedNodeIds,
-          pinnedState
+          pinnedState,
+          tab
         )
-        || choose(byExactUrl.get(url), claimedNodeIds)
-        || choose(byComparableUrl.get(comparableUrl), claimedNodeIds)
+        || choose(byExactUrl.get(url), claimedNodeIds, undefined, tab)
+        || choose(byComparableUrl.get(comparableUrl), claimedNodeIds, undefined, tab)
       );
     },
-    findFallback (pinnedState, claimedNodeIds) {
+    findFallback (pinnedState, claimedNodeIds, tab) {
       const nodes = pinnedState ? pinned : movable;
       return nodes.find((node) =>
         (! claimedNodeIds.has(node.id)) && (! node.isWindow())
+        && (! tab || tree.browserTabContextMatches(node, tab))
       ) || null;
     }
   };
@@ -106,6 +111,10 @@ export class Bkgd {
     this.nodesLoading = [];
     this.windowsLoading = [];
     this.pendingBrowserLoadTimeoutMs = 5000;
+    this.activeBrowserCreates = 0;
+    this.deferredCreatedTabs = new Map();
+    this.containers = new Containers(this);
+    this.tabGroups = new TabGroups(this);
 
     // Reorder requests are debounced per browser window, then executed
     // serially because the browser tab strip APIs are shared mutable state.
@@ -165,12 +174,14 @@ export class Bkgd {
     this.initMessageListener();
     this.initWindowListeners();
     this.initTabListeners();
+    this.initContextListeners();
     this.initMiscListeners();
 
     // tell the browser the sidepanel can be opened via hotkey or icon click
     sidepanel.init();
 
-    this.initConfig().then(() => {
+    this.initConfig().then(async () => {
+      await this.containers.init();
       this.idGen = new IdGenerator(this.cfg.clientId, 9, 2);
       this.clientId = this.cfg.clientId;
       this.cfg.watch('clientId', (key, newVal, oldVal) => {
@@ -189,6 +200,11 @@ export class Bkgd {
         this.idGen.cache = this.tree.nodes;
         // grab all the open windows and tabs, and put them in the tree
         await this.mergeOpenWindowsIntoTree();
+        try { await this.tabGroups.sync(); }
+        catch (err) {
+          warn('Initial native tab-group snapshot unavailable', err);
+          this.tabGroups.requestSync();
+        }
         // and if this is the first boot, add tutorial nodes
         if (this.tree.needsTutorial) {
           await createNewUserTutorialNodes(this.tree);
@@ -410,6 +426,50 @@ export class Bkgd {
     }
   }
 
+  async createTrackedSavedTab (node, create, getTab = value => value) {
+    // Firefox's first onCreated/onUpdated payload can still be about:blank.
+    // The creation result is the authoritative identity, including for two
+    // simultaneous restores of the same URL in the same cookie store.
+    node.browserCreateTracked = true;
+    this.activeBrowserCreates++;
+    try {
+      const result = await create();
+      const tab = getTab(result);
+      if (tab && Number.isInteger(tab.id)) {
+        node.pendingCreatedTabId = tab.id;
+        this.deferredCreatedTabs.set(tab.id, tab);
+      }
+      return result;
+    } finally {
+      this.activeBrowserCreates--;
+      // Do not wait inside a browser event handler for this promise. Events
+      // are buffered without holding the event mutex and drained afterwards.
+      await this.drainCreatedTabs();
+    }
+  }
+
+  deferCreatedTab (tab) {
+    if (! this.activeBrowserCreates || ! Number.isInteger(tab?.id)) return false;
+    if (this.tree.getNodeByTabId(tab.id)) return false;
+    this.deferredCreatedTabs.set(tab.id, tab);
+    return true;
+  }
+
+  async drainCreatedTabs () {
+    if (this.activeBrowserCreates || ! this.deferredCreatedTabs.size) return;
+    await this.runSerializedBrowserMutation(async () => {
+      while (! this.activeBrowserCreates && this.deferredCreatedTabs.size) {
+        const [id] = this.deferredCreatedTabs.keys();
+        this.deferredCreatedTabs.delete(id);
+        let tab;
+        try { tab = await api.tabs.get(id); }
+        catch { continue; } // Already closed: never resurrect it.
+        if (tab?.id !== id) continue;
+        await this.tree.onTabCreated(tab);
+      }
+    });
+  }
+
   startPendingWindowLoad (windowNode) {
     if (! windowNode || windowNode.browserLoadInProgress) return false;
     windowNode.browserLoadInProgress = true;
@@ -464,11 +524,14 @@ export class Bkgd {
       try {
         const result = handler(...args);
         if (result && ('function' === typeof result.then)) {
-          return result.catch((err) => {
+          return result.then(() => undefined, (err) => {
             error(`Bkgd.${name} failed`, err);
           });
         }
-        return result;
+        // Browser notifications do not consume our domain return values.
+        // Firefox otherwise tries to structured-clone returned Node/Tree
+        // objects back across its process boundary and rejects the callback.
+        return undefined;
       } catch (err) {
         error(`Bkgd.${name} failed`, err);
       }
@@ -611,6 +674,23 @@ export class Bkgd {
       });
     });
     await this.initReconcileAlarm(true);
+  }
+
+  initContextListeners () {
+    for (const name of ['onCreated', 'onUpdated', 'onRemoved']) {
+      const event = api.contextualIdentities?.[name];
+      if (! event?.addListener) continue;
+      this.addSafeListener(event, `contextualIdentities.${name}`, async () => {
+        await this.treeLoaded;
+        await this.runSerializedBrowserMutation(() => this.containers.refresh());
+      });
+    }
+    for (const name of ['onCreated', 'onUpdated', 'onMoved', 'onRemoved']) {
+      const event = api.tabGroups?.[name];
+      if (event?.addListener) {
+        this.addSafeListener(event, `tabGroups.${name}`, () => this.tabGroups.requestSync());
+      }
+    }
   }
 
   async initLocalBackupAlarm (reset = false) {
@@ -944,11 +1024,13 @@ export class Bkgd {
         const sessionTabNode = sessionTabNodesById.get(tab.id);
         let tabNode = null;
         if (sessionTabNode
+          && this.tree.browserTabContextMatches(sessionTabNode, tab, true)
           && (! unavailableTabNodeIds.has(sessionTabNode.id))) {
           tabNode = sessionTabNode;
         }
         if ((! tabNode)
           && attachedTabNode
+          && this.tree.browserTabContextMatches(attachedTabNode, tab, true)
           && (! unavailableTabNodeIds.has(attachedTabNode.id))
           && (attachedTabNode.getWindowNode(false) === winNode)) {
           tabNode = attachedTabNode;
@@ -956,7 +1038,8 @@ export class Bkgd {
         if (! tabNode) {
           tabNode = candidates.findByTabId(
             tab.id,
-            unavailableTabNodeIds
+            unavailableTabNodeIds,
+            tab
           );
         }
         if (! tabNode) {
@@ -965,16 +1048,19 @@ export class Bkgd {
           tabNode = candidates.findByUrl(
             tabUrl,
             Boolean(tab.pinned),
-            unavailableTabNodeIds
+            unavailableTabNodeIds,
+            tab
           );
         }
         if (! tabNode) {
           tabNode = candidates.findFallback(
             Boolean(tab.pinned),
-            unavailableTabNodeIds
+            unavailableTabNodeIds,
+            tab
           );
         }
         if ((! tabNode) && attachedTabNode
+          && this.tree.browserTabContextMatches(attachedTabNode, tab, true)
           && (! unavailableTabNodeIds.has(attachedTabNode.id))) {
           tabNode = attachedTabNode;
         }
@@ -1216,9 +1302,10 @@ export class Bkgd {
     // tab.windowId: number
     debug(`bkgd.onTabCreated(${tab.id}): ${tab.url} : ${tab.title}`, tab);
     await this.treeLoaded;
-    return await this.runSerializedBrowserMutation(
-      () => this.tree.onTabCreated(tab)
-    );
+    return await this.runSerializedBrowserMutation(() => {
+      if (this.deferCreatedTab(tab)) return;
+      return this.tree.onTabCreated(tab);
+    });
   }
 
   async onTabRemoved (tabId, removeInfo) {
@@ -1227,9 +1314,11 @@ export class Bkgd {
     // removeInfo.windowId: number
     debug(`bkgd.onTabRemoved(tabId=${tabId}, windowId=${removeInfo.windowId}, isWindowClosing=${removeInfo.isWindowClosing})`);
     await this.treeLoaded;
-    return await this.runSerializedBrowserMutation(
-      () => this.tree.onTabRemoved(tabId, removeInfo)
-    );
+    return await this.runSerializedBrowserMutation(async () => {
+      const result = await this.tree.onTabRemoved(tabId, removeInfo);
+      this.tabGroups.requestSync();
+      return result;
+    });
   }
 
   async onTabActivated (activeInfo) {
@@ -1252,13 +1341,19 @@ export class Bkgd {
     // moveInfo.windowId: number
     debug(`bkgd.onTabMoved(tabId=${tabId}, windowId=${moveInfo.windowId}): ${moveInfo.fromIndex} -> ${moveInfo.toIndex}`);
     await this.treeLoaded;
-    return await this.runSerializedBrowserMutation(() => {
+    return await this.runSerializedBrowserMutation(async () => {
       if (this.tabReorderInProgress && (! this.tabReorderStalled)) {
         return debug(
           'bkgd.onTabMoved ignored (tabReorderInProgress)'
         );
       }
-      return this.tree.onTabMoved(tabId, moveInfo);
+      if (await this.tabGroups.isWholeGroupMove(tabId)) {
+        this.tabGroups.requestSync();
+        return;
+      }
+      const result = await this.tree.onTabMoved(tabId, moveInfo);
+      this.tabGroups.requestSync();
+      return result;
     });
   }
 
@@ -1269,14 +1364,20 @@ export class Bkgd {
     //   (may refer to a window which doesn't exist yet)
     debug(`bkgd.onTabAttached(tabId=${tabId}, windowId=${attachInfo.newWindowId}, ${attachInfo.newPosition})`);
     await this.treeLoaded;
-    return await this.runSerializedBrowserMutation(() => {
+    return await this.runSerializedBrowserMutation(async () => {
       if (this.tabReorderInProgress) {
         this.onTabAttachedRequested = true;
         return debug(
           'bkgd.onTabAttached ignored (tabReorderInProgress)'
         );
       }
-      return this.tree.onTabAttached(tabId, attachInfo);
+      if (await this.tabGroups.isWholeGroupMove(tabId)) {
+        await this.tabGroups.sync();
+        return;
+      }
+      const result = await this.tree.onTabAttached(tabId, attachInfo);
+      this.tabGroups.requestSync();
+      return result;
     });
   }
 
@@ -1306,9 +1407,12 @@ export class Bkgd {
     // changeInfo.autoDiscardable: boolean
     debug(`bkgd.onTabUpdated(tabId=${tabId})`, changeInfo, tab);
     await this.treeLoaded;
-    return await this.runSerializedBrowserMutation(
-      () => this.tree.onTabUpdated(tabId, changeInfo, tab)
-    );
+    return await this.runSerializedBrowserMutation(async () => {
+      if (this.deferCreatedTab(tab)) return;
+      const result = await this.tree.onTabUpdated(tabId, changeInfo, tab);
+      if ('groupId' in changeInfo || 'pinned' in changeInfo) this.tabGroups.requestSync();
+      return result;
+    });
   }
 
   async onTabReplaced (addedTabId, removedTabId) {
@@ -1560,6 +1664,22 @@ export class Bkgd {
       response.result = 'ok pending';
       return response;
     }
+    let cookieStoreId;
+    try {
+      // Validate BEFORE opening a window or loading the URL. Both Firefox
+      // creation APIs accept cookieStoreId; no default-container detour.
+      cookieStoreId = await this.containers.validateRestore(node, node.getWindowNode(false));
+      if (node.restoreError) {
+        await node.setTabFields({ restoreError: undefined }, { reason: 'browserContext' });
+      }
+    } catch (err) {
+      const message = String(err?.message || err);
+      await node.setTabFields({ restoreError: message }, { reason: 'browserContext' });
+      return { error: message, result: `Error: ${message}` };
+    }
+    // Two callers can overlap while validating the identity above.
+    if (node.browserLoadInProgress || node.isLoaded()) return { result: 'ok pending' };
+    node.pendingNativeGroupNodeId = node.getNativeGroupNode()?.id;
     node.browserLoadInProgress = true;
     // - otherwise...
     // - get the parent window Node
@@ -1570,7 +1690,7 @@ export class Bkgd {
         const config = await api.storage.local.get({
           openWindowOnRootLoadTopmost: false
         });
-        let wrapNode = node;
+        let wrapNode = node.getNativeGroupNode() || node;
         if (config.openWindowOnRootLoadTopmost) {
           while (wrapNode.parent
             && (! wrapNode.parent.isRoot())
@@ -1582,7 +1702,7 @@ export class Bkgd {
         const parentNode = wrapNode.parent;
         // insert new window node in place of current node
         windowNode = await parentNode.addChild(wrapNode.indexOf(),
-          { type: 'window' },
+          { type: 'window', incognito: cookieStoreId === 'firefox-private' || node.isIncognito() },
           { reason: 'bkgd_loadSavedNode:autoWindow' });
         // move current node as child of window node
         await this.applyTreeMutation('ensureMoved', {
@@ -1629,6 +1749,8 @@ export class Bkgd {
     // - push node to be loaded, and open it (new window or existing window)
     this.nodesLoading.push(node);
     const popNode = (node, failed = false) => {
+      delete node.browserCreateTracked;
+      delete node.pendingCreatedTabId;
       if (node.pendingLoadTimer) {
         clearTimeout(node.pendingLoadTimer);
         delete node.pendingLoadTimer;
@@ -1648,6 +1770,7 @@ export class Bkgd {
 
     // actually open the tab
     const createProperties = {};
+    if (cookieStoreId !== undefined) createProperties.cookieStoreId = cookieStoreId;
     createProperties.url = this.tree.resolveBrowserTabUrl(node.url);
     // Firefox may initially report extension pages as about:blank with the
     // moz-extension UUID and path in the title.  Match against the fully
@@ -1660,11 +1783,13 @@ export class Bkgd {
     if (needsWindow) {
       const createData = windowNode.windowCreateData();
       createData.url = createProperties.url;
+      if (cookieStoreId !== undefined) createData.cookieStoreId = cookieStoreId;
       debug('bkgd_loadSavedNode() creating saved window', createData);
       try {
         let createdWindow;
         try {
-          createdWindow = await api.windows.create(createData);
+          createdWindow = await this.createTrackedSavedTab(node,
+            () => api.windows.create(createData), value => value.tabs?.[0]);
         } catch (err) {
           // handle "Error: Invalid value for bounds. Bounds must be at least 50% within visible screen space."
           if (err.message.includes('Invalid value for bounds')) {
@@ -1677,7 +1802,8 @@ export class Bkgd {
             delete createData.height;
             delete createData.left;
             delete createData.top;
-            createdWindow = await api.windows.create(createData);
+            createdWindow = await this.createTrackedSavedTab(node,
+              () => api.windows.create(createData), value => value.tabs?.[0]);
           }
           else { throw err; }
         }
@@ -1718,6 +1844,8 @@ export class Bkgd {
         node.pinRestorePending = false;
         popNode(node);
         warn(`loadSavedTab failed: ${err}`);
+        response.error = String(err?.message || err);
+        await node.setTabFields({ restoreError: response.error }, { reason: 'browserContext' });
         response.result = err;
       }
     }
@@ -1749,7 +1877,7 @@ export class Bkgd {
       }
       debug('bkgd_loadSavedNode() using existing window', createProperties);
       try {
-        await api.tabs.create(createProperties);
+        await this.createTrackedSavedTab(node, () => api.tabs.create(createProperties));
         if ('userAction' === msg.reason) {
           try {
             await api.windows.update(windowNode.windowId, { focused: true });
@@ -1763,6 +1891,8 @@ export class Bkgd {
         node.pinRestorePending = false;
         popNode(node);
         warn(`loadSavedTab failed: ${err}`);
+        response.error = String(err?.message || err);
+        await node.setTabFields({ restoreError: response.error }, { reason: 'browserContext' });
         response.result = err;
       }
     }
@@ -2002,6 +2132,24 @@ export class Bkgd {
       response.result = 'ok pending';
       return response;
     }
+    if (windowHasId) {
+      // onTabCreated can publish a provisional window node before
+      // onWindowCreated marks it loaded. Confirm browser truth without
+      // waiting for that event (which may be queued behind this move).
+      // Opening another window would pull out the group's first member,
+      // dissolve its native binding, and then move everything back again.
+      let liveWindow;
+      try { liveWindow = await api.windows.get(windowNode.windowId); }
+      catch { /* An actually closed window still needs normal restoration. */ }
+      if (liveWindow && liveWindow.id === windowNode.windowId) {
+        await windowNode.setTabFields(
+          { loaded: true },
+          { reason: 'onWindowCreated' }
+        );
+        response.result = 'ok';
+        return response;
+      }
+    }
     // list of open tabs in the new window
     const loadedKids = node.findNodes(
       (n) => (n.tabId && (! n.isWindow()))
@@ -2124,7 +2272,16 @@ export class Bkgd {
         request.dirty = false;
         const force = request.force;
         request.force = false;
-        await request.node.reorderAllTabsInThisWindow({ force });
+        if (this.tabGroups?.supported) {
+          // Creation-driven reorders must not race the native group/window
+          // events which update the same outline. Direct user moves already
+          // protect their intent through TabGroups.withOutlineMutation.
+          await this.runSerializedBrowserMutation(
+            () => request.node.reorderAllTabsInThisWindow({ force })
+          );
+        } else {
+          await request.node.reorderAllTabsInThisWindow({ force });
+        }
       } while (request.dirty);
     } catch (err) {
       error(`bkgd_reorderAllTabsInThisWindow error:`, err);
@@ -2244,6 +2401,10 @@ export class Bkgd {
       // (because we're adding to the current session, not replacing it)
       node.id = undefined;
       node.parent = undefined;
+      // Imported numeric browser IDs belong to another session/profile.
+      // Identity references retain their installation scope for safe restore.
+      for (const key of ['tabId', 'oldTabId', 'windowId', 'groupId',
+        'groupWindowId', 'pendingNativeGroupNodeId', 'restoreError']) delete node[key];
       // nothing is loaded or active in an imported tree
       if (node.loaded) {
         node.loaded = false;

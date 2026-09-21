@@ -26,6 +26,8 @@ rm -rf build/*
 
 # copy root-level files
 for f in LICENSE LICENSE.* Makefile *.js *.md *.html ; do
+  # Local agent handoffs contain host-specific diagnostics, not user help.
+  [ "$f" = "COMMUNICATION.md" ] && continue
   [ -e "$f" ] && cp -v "$f" build
 done
 

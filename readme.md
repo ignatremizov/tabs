@@ -20,6 +20,25 @@ those things, but why bother when you have something better?
 
 [TOC]
 
+## Firefox containers and native tab groups
+
+Container tabs display a compact colored icon, with the full container name
+on hover and in the details panel, and resume in their exact original cookie
+store, including the first tab of a saved window. Matching
+and backups preserve container identity; identical URLs in different
+containers are not interchangeable. Missing or foreign-profile containers
+produce a visible restore error rather than opening a different login.
+Cookies and authentication tokens themselves are not included in tree backups.
+
+Native groups appear as named, colored note nodes. Live group membership,
+name, color, collapsed state, and window moves are tracked. Member nesting is
+preserved, and unrelated descendants are promoted outside the group. Saved
+groups retain their history and recreate or reconnect their native group when
+members are restored. Normal notes remain normal notes.
+
+See [Firefox Containers and Native Tab Groups](docs/browser-contexts.html)
+for behavior, permissions, and cross-profile restrictions.
+
 
 ## Screenshots
 
@@ -49,6 +68,21 @@ Coverage is collected via `make coverage`, which runs:
 
 The coverage % is line-based and updates the README badge automatically after
 `make coverage`. If Chrome isn’t on PATH, set `CHROME_BIN=/path/to/chrome`.
+
+`make test-firefox-context` runs the native container/group integration suite
+using Geckodriver and a new headless Firefox profile. It tests synthetic
+loopback cookie separation, native and outline group moves, saved tab/window
+restoration, deleted containers, and extension reload. It never opens an
+existing Firefox profile or changes the installed user addon. Diagnostics and
+a production-sidebar screenshot are retained in the printed test directory.
+For an explicit output directory or driver path:
+
+```sh
+python3 tests/firefox-native-context.py --geckodriver /path/to/geckodriver --output /tmp/tabs-context-results
+```
+
+The API-mocked presentation fixture is `tests/native-context-view.test.html`;
+the headless browser runner includes it and the existing TreeView action tests.
 
 
 ## Background / Inspiration

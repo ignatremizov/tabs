@@ -4,7 +4,7 @@
 
 .PHONY: all help firefox-zip firefox-zip-current chrome-zip \
 	chrome-zip-current chrome-dir firefox-sign tag test test-node todo \
-	coverage v
+	coverage test-firefox-context v
 
 ifneq ($(filter v,$(MAKECMDGOALS)),)
 VERBOSE=1
@@ -31,6 +31,7 @@ help:
 	@echo "  tag          - Bump version tag (default: patch) or set a tag"
 	@echo "  test         - Open unit tests in browser"
 	@echo "  test-node    - Run node-based tests only"
+	@echo "  test-firefox-context - Native container/group tests in a disposable Firefox profile"
 	@echo "  todo         - List TODO/FIXME comments in source files"
 	@echo "  coverage     - Run node-based tests with V8 coverage"
 	@echo "  help         - Show this help message"
@@ -74,6 +75,9 @@ NODE_TEST_CMD = TKTSTO_TEST_VERBOSE=$(if $(filter 1 true yes,$(VERBOSE) $(V)),1,
 test-node:
 	@echo "Running node-based tests..."
 	@$(NODE_TEST_CMD)
+
+test-firefox-context:
+	@python3 tests/firefox-native-context.py
 
 test:
 	@echo "Running node-based tests..."

@@ -218,6 +218,13 @@ export class NodeStore extends Node {
 
   async moveTo (destParent, destIndex, args) {
     debug(`NodeStore.moveTo(${args.reason}, ${this.id})`, args);
+    const groups = this.tree.bkgd?.tabGroups;
+    if (groups?.supported && ! args._nativeContextMutation
+      && ['userAction', 'tree_nodeMoved'].includes(args.reason)) {
+      return await groups.withOutlineMutation(() => this.moveTo(
+        destParent, destIndex, { ...args, _nativeContextMutation: true }
+      ));
+    }
     const prevParent = this.parent;
     return await this.withPersistenceBatch(
       async (operationArgs, persistNodesLater) => {

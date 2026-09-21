@@ -441,6 +441,66 @@ foo {
   text-shadow: var(--medium-text-shadow);
 }
 
+/* Firefox container and native-group identity accents. Container badges are
+ * icon-only; full names remain in tooltips, accessible names, and details.
+ * Keep loaded/active/cursor styling independent of these identity cues. */
+.context-color-blue { --context-accent: #37adff; }
+.context-color-turquoise, .context-color-cyan { --context-accent: #00b8ad; }
+.context-color-green { --context-accent: #51a826; }
+.context-color-yellow { --context-accent: #c9a119; }
+.context-color-orange { --context-accent: #ed8a20; }
+.context-color-red { --context-accent: #e65a64; }
+.context-color-pink { --context-accent: #dc63bc; }
+.context-color-purple { --context-accent: #a776e8; }
+.context-color-violet { --context-accent: #8c78ff; }
+.context-color-gray { --context-accent: #92929c; }
+.context-color-toolbar { --context-accent: var(--toolbar-fg); }
+.container-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.18em;
+  margin-inline-end: 0.4em;
+  color: var(--tab-loaded-fg);
+  font-size: 0.86em;
+  line-height: 1;
+  vertical-align: baseline;
+}
+.context-icon {
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  flex: 0 0 1em;
+  fill: none;
+  stroke: var(--context-accent, currentColor);
+  stroke-width: 1.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vertical-align: -0.15em;
+}
+.container-badge .context-icon {
+  /* The frame is inside the SVG, centered around the original 16x16 glyph.
+   * Match the 24x18 viewBox without stretching or shrinking the artwork. */
+  display: block;
+  width: 1.5em;
+  height: 1.125em;
+  flex-basis: 1.5em;
+}
+.native-group-badge { margin-inline-end: 0.3em; }
+.row.native-group {
+  border-inline-start: 2px solid var(--context-accent);
+  padding-inline-start: 0.3em;
+}
+.row.native-group .node-label { font-weight: 600; }
+.group-saved-state { font-size: 0.9em; opacity: 0.8; }
+.container-missing .container-icon-frame { stroke-dasharray: 2 2; }
+.context-warning, .restore-error-icon {
+  color: var(--tab-was-loaded-fg);
+  font-weight: bold;
+  margin-inline-end: 0.25em;
+}
+#detail-restore-error { color: var(--tab-was-loaded-fg); white-space: normal; }
+
 .row a {
   text-decoration: none;
 }

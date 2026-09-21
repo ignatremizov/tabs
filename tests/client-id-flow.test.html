@@ -84,6 +84,8 @@
       if ('file:' === location.protocol) {
         $summary.textContent = 'Run via http (example: python3 -m http.server).';
         $summary.className = 'has-fail';
+        window.__TEST_RESULTS__ = { passCount: 0, failCount: 1, results: [{ pass: false, name: 'HTTP required' }] };
+        window.__TEST_DONE__ = true;
         return;
       }
 
@@ -103,6 +105,8 @@
       } catch (err) {
         $summary.textContent = `Failed to load modules: ${err}`;
         $summary.className = 'has-fail';
+        window.__TEST_RESULTS__ = { passCount: 0, failCount: 1, results: [{ pass: false, name: 'Module loading', error: String(err) }] };
+        window.__TEST_DONE__ = true;
         return;
       }
 
@@ -168,6 +172,8 @@
 
       $summary.textContent = `${passCount} passed, ${failCount} failed.`;
       $summary.className = failCount ? 'has-fail' : 'all-pass';
+      window.__TEST_RESULTS__ = { results, passCount, failCount };
+      window.__TEST_DONE__ = true;
     }
 
     main();

@@ -9326,6 +9326,11 @@ async function runTests() {
     }
   };
 
+  const { registerNativeContextTests } = await import('./native-context.test.mjs');
+  await registerNativeContextTests({
+    test, assert, assertEqual, api, Bkgd, Tree, Node, NodeStore, createTree, addChild
+  });
+
   let passCount = 0;
   let failCount = 0;
 

@@ -22,6 +22,21 @@ export class Node {
     // browser attachment
     this.windowId = undefined;
     this.tabId = undefined;
+    // Store references and presentation metadata only, never cookie contents.
+    this.cookieStoreId = undefined;
+    this.containerProfileId = undefined;
+    this.containerName = undefined;
+    this.containerColor = undefined;
+    this.containerIcon = undefined;
+    this.containerMissing = undefined;
+    this.restoreError = undefined;
+    // A native group is a note, not a browser window or a pinned branch.
+    this.nativeGroup = undefined;
+    this.groupId = undefined;
+    this.groupWindowId = undefined;
+    this.groupTitle = undefined;
+    this.groupColor = undefined;
+    this.groupCollapsed = undefined;
     // misc window/tab states
     this.geometry = undefined;
     this.windowState = undefined;
@@ -617,7 +632,8 @@ export class Node {
     // true if node has any metadata worth keeping
     //debug(`Node.shouldUnloadNotDelete: ${this.toLine()}`,
     //  this.label, this.note, this.checkbox);
-    if (this.label
+    if (this.nativeGroup || this.getNativeGroupNode()
+      || this.label
       || this.note
       || this.hasCheckbox()
       || (this.isPinned() && (! isNewTabPage(this.url)))
@@ -740,6 +756,7 @@ export class Node {
     // and is the first child of a window
     // ... and false otherwise
     if (('Pinned' !== this.label)
+      || this.nativeGroup
       || this.isTab()
       || this.isWindow()
       || this.isRoot()
@@ -747,6 +764,14 @@ export class Node {
       || (0 !== this.indexOf())
     ) return false;
     return true;
+  }
+
+  getNativeGroupNode () {
+    for (let node = this; node && (! node.isRoot()); node = node.parent) {
+      if (node.isWindow()) return null;
+      if (node.nativeGroup === true) return node;
+    }
+    return null;
   }
 
   isPinned () {
@@ -1037,6 +1062,7 @@ export class Node {
       'userAction',
       'onTabCreated', 'onTabAttached', 'onWindowCreated',
       'setPinned',
+      'browserContext',
       'bkgd_loadSavedNode:autoWindow',
       'importFile', 'tutorial', 'reattachOrphanedNodes'
     ].includes(args.reason))
@@ -1048,7 +1074,10 @@ export class Node {
       'userAction',
       'onTabCreated', 'onTabAttached', 'onWindowCreated'
     ].includes(args.reason)) {
-      if (this.tree.reorderTabsOnCreate !== false) {
+      if (this.tree.reorderTabsOnCreate !== false
+        && args.skipTabReorder !== true
+        // Attach first, then normalize native membership before reordering.
+        && !(args.reason === 'onTabCreated' && this.tree.bkgd?.tabGroups?.supported)) {
         // make sure the tab bar matches the tree
         await this.reorderAllTabsInThisWindow();
         this.updateOpenerTabId();
@@ -1065,6 +1094,7 @@ export class Node {
     const wasPinnedBranch = this.isPinnedBranch();
     const canBecomePinnedBranch = (
       ('Pinned' === label)
+      && (! this.nativeGroup)
       && (! this.isTab())
       && (! this.isWindow())
       && (! this.isRoot())
@@ -1098,6 +1128,11 @@ export class Node {
       && windowNode.hasLoadedTabs()
       && this.tree.bkgd) {
       await windowNode.reorderAllTabsInThisWindow();
+    }
+
+    if (this.nativeGroup && this.tree.bkgd
+      && ['userAction', 'tree_nodeChanged'].includes(args.reason)) {
+      await this.tree.bkgd.tabGroups?.updateNote(this);
     }
 
     return true;  // the data changed
@@ -1428,6 +1463,7 @@ export class Node {
       'onTabMoved', 'onTabAttached',
       'onWindowCreated', 'onWindowFocusChanged', 'onWindowBoundsChanged',
       'convertNodeToWindow', 'convertNodeFromWindow',
+      'browserContext',
       'mergeOpenWindowsIntoTree'
     ].includes(args.reason))
       await emit('tree_nodeChanged',
@@ -1483,7 +1519,8 @@ export class Node {
         };
         const bkgd = this.tree.bkgd;
         if (bkgd && bkgd.bkgd_loadSavedNode) {
-          await bkgd.bkgd_loadSavedNode(loadMsg);
+          const response = await bkgd.bkgd_loadSavedNode(loadMsg);
+          if (response?.error) throw new Error(response.error);
         } else {
           await emit('bkgd_loadSavedNode', loadMsg);
         }
@@ -1542,6 +1579,7 @@ export class Node {
     this.windowId = undefined;
     // save briefly so onTabRemoved can find it in a few milliseconds
     this.oldTabId = tabId;
+    this.groupId = undefined;
     // distinguish between manual unload and "bkgd woken up by onTabRemoved"
     if (wasActuallyLoaded && (undefined !== tabId) && (! isWindowClosing))
       this.tabClosedReason = 'unload';
@@ -1918,6 +1956,7 @@ export class Node {
       'onTabMoved', 'onTabRemoved', 'onTabAttached',
       'moveTo',
       'setPinned',
+      'browserContext',
       'bkgd_loadSavedNode:autoWindow'
     ].includes(args.reason)) {
       if (args.reason === 'userAction'
@@ -2070,6 +2109,14 @@ export class Node {
     else this.expanded = expanded;
     const changed = (wasExpanded !== this.expanded);
 
+    if (this.nativeGroup && changed) {
+      this.groupCollapsed = ! this.expanded;
+      if (this.tree.bkgd
+        && ['userAction', 'tree_nodeChanged'].includes(args.reason)) {
+        await this.tree.bkgd.tabGroups?.updateNote(this);
+      }
+    }
+
     // bump timestamp
     if (changed) this.bump('atime', args);
 
@@ -2111,6 +2158,10 @@ export class Node {
     const showTabIds = [];
     for (const node of tabNodeList) {
       if (node.tabId) {
+        // Native group collapse owns these tabs' visibility. tabs.show/hide
+        // must not fight Firefox's own group state (including its active tab).
+        const group = node.getNativeGroupNode();
+        if (group && Number.isInteger(group.groupId) && group.groupId >= 0) continue;
         const shouldBeVisible =
           node.isVisible(viewRoot) || node.isPinned() || node.isActive();
         // show if hidden and needs to be visible
@@ -2541,10 +2592,14 @@ export class Node {
             });
           }
           if (tabIds.length > 0) {
-            await api.tabs.move(tabIds, {
-              index: firstMovableIndex,
-              windowId: windowNode.windowId
-            });
+            if (bkgd.tabGroups?.supported) {
+              await bkgd.tabGroups.reorder(windowNode, tabNodeList, firstMovableIndex);
+            } else {
+              await api.tabs.move(tabIds, {
+                index: firstMovableIndex,
+                windowId: windowNode.windowId
+              });
+            }
           }
           if (isFirefox) await windowNode.syncTabHideState();
           debug('tab reorder success');
@@ -2594,6 +2649,9 @@ export class Node {
     finally {
       this.tabReorderInProgress = false;
       queueMicrotask(() => bkgd.tabReorderInProgress = false);
+      if (bkgd.tabGroups?.supported) {
+        await bkgd.tabGroups.sync({ force: true });
+      }
     }
     return;
   }

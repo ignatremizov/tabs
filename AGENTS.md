@@ -316,6 +316,8 @@ From the browser manifests:
 | `storage` | Persist settings |
 | `downloads` | Save backup files |
 | `tabs` | Monitor and control browser tabs |
+| `cookies`, `contextualIdentities` (Firefox) | Identify containers and restore directly into the original cookie store; production code does not read cookie values |
+| `tabGroups` | Track and restore native group metadata and membership |
 | `sessions` (Firefox) | Preserve tree identity across tab/window restore |
 | `alarms` | Schedule periodic backups |
 | `favicon` | Display tab favicons |
@@ -588,6 +590,7 @@ Browser-based tests live in `tests/`. Run them with `make test` (starts a local 
 | `client-id-flow.test.html` | Tests for the background client ID handler, storage updates, and IdGenerator state |
 | `merge-open-windows.test.html` | Tests for mergeOpenWindowsIntoTree matching across browsers |
 | `treeview-actions.test.html` | Tests for TreeView actions (delete/unwrap/move behavior) |
+| `native-context-view.test.html` | Icon-only container badges, hover/accessibility names, group markers, and untrusted metadata safety |
 
 `tree-node.test.html`, `merge-open-windows.test.html`, and `treeview-actions.test.html` support `?env=firefox` and `?env=chrome` to force browser-specific rules; otherwise they auto-detect via user agent.
 
@@ -597,6 +600,12 @@ Browser-based tests live in `tests/`. Run them with `make test` (starts a local 
 
 - Run `make test-node` for Node-based checks; the Make target wires in `tests/node/loader.mjs` so extension-root imports like `/api.js` resolve correctly under Node.
 - Run `make coverage` to collect V8 coverage and update the badge in `readme.md`.
+
+`make test-firefox-context` runs actual Firefox container and native-group APIs
+in a new disposable Geckodriver profile. It checks synthetic cookie separation,
+restoration, both cross-window movement paths, and extension reload. The
+test-only addon ID and background hooks are staged, never shipped. Do not use
+the user's live profile for integration tests.
 
 #### Writing New Tests
 
@@ -886,8 +895,14 @@ Closes #123
 
 ## Known Limitations
 
-- Pinned tabs not supported (for now)
-- Tab groups not supported (for now)
+- Firefox containers are tracked by cookieStoreId plus installation scope;
+  missing or foreign-profile identities must fail closed on restore. Never
+  read/export cookie values or silently remap to a different account.
+- Native tab groups are supported where the required APIs are available.
+  Preserve member nesting, promote nonmembers, and treat browser group IDs
+  as transient bindings. Do not bulk-move tabs across unrelated groups.
+  Native group reconciliation and outline moves share a context mutex; avoid
+  holding browser-event locks while waiting for creation events.
 - Vivaldi stacked tabs incompatible
 - Extension shortcuts affect all open views in same window
 - Firefox cannot access `file:`, `about:`, or other extension URLs
