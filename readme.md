@@ -85,6 +85,23 @@ The API-mocked presentation fixture is `tests/native-context-view.test.html`;
 the headless browser runner includes it and the existing TreeView action tests.
 
 
+## Reliability and rendering checks
+
+`tests/render-cost.test.html` checks title/favicon-only updates against 1,000,
+10,000, and 30,000 collapsed archived nodes. It asserts zero descendant-count
+visits and no complete row rebuilds, preserves container badge DOM identity,
+and checks that load-state changes still refresh ancestor statistics once.
+
+```sh
+python3 -B tests/firefox-presentation.py --output /tmp/tabs-firefox-presentation
+python3 -B tests/firefox-recovery.py --output /tmp/tabs-firefox-recovery
+```
+
+Use a new output directory for each run. Both commands create fresh marked
+Firefox profiles and retain synthetic diagnostics; they never use your normal
+profile. Recovery testing inserts a synthetic stored cycle, checks the actual
+failure view, and verifies the downloaded raw-record recovery file.
+
 ## Background / Inspiration
 
 I used Tabs Outliner for a long time.  It was great.  But it was missing some

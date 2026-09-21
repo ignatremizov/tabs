@@ -1,0 +1,127 @@
+<!doctype html>
+<!-- Rendering cost and field-aware DOM update regressions.
+     SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Field-aware outline rendering</title>
+  <link rel="stylesheet" href="/view/sidepanel.css">
+  <link rel="stylesheet" href="/themes/tk.css">
+  <link rel="stylesheet" href="/themes/tk-night.css">
+  <style>
+    body { height: auto; margin: 12px; max-width: 700px; }
+    :root { --global-font-size: 13px; }
+    #metrics, #results { white-space: pre-wrap; }
+  </style>
+  <script>
+    window.__TKTSTO_TEST__ = true;
+    window.__TKTSTO_TEST_QUIET__ = true;
+    window.chrome = { runtime: { getURL: path => new URL(path, location.origin).href,
+      sendMessage: async () => ({}), onMessage: { addListener() {} } },
+      tabs: { query: async () => [] }, i18n: { getMessage: key => key },
+      storage: { local: { get: async defaults => defaults }, onChanged: { addListener() {} } } };
+    window.browser = window.chrome;
+  </script>
+</head>
+<body>
+<h1>Field-aware outline rendering</h1>
+<p>Synthetic archived history; no real browser data is read.</p>
+<div id="fixture"></div>
+<pre id="metrics"></pre>
+<pre id="results"></pre>
+<script type="module">
+  import { Tree } from '/common/tree.js';
+  import { NodeView } from '/view/nodeview.js';
+  import { emit } from '/common/common.js';
+  emit.disabled = true;
+  const results = [], metrics = [];
+  const assert = (value, message) => { if (!value) throw new Error(message); };
+  const test = async (name, run) => {
+    try { await run(); results.push({ name, pass: true }); }
+    catch (error) { results.push({ name, pass: false, error: String(error) }); }
+  };
+  let lastTree;
+  try {
+    for (const archived of [1000, 10000, 30000]) {
+      const tree = new Tree(NodeView);
+      tree.document = document; tree.window = window;
+      tree.treeViewLoaded = Promise.resolve(); tree.resolveTreeLoaded();
+      tree.viewScope = 'session'; tree.viewRoot = tree.root;
+      tree.cfg = { alwaysShowNodeStats: true, wasLoadedNodeStats: true, expandedRowPrefix: true };
+      let id = 0;
+      const add = (parent, data) => {
+        const node = new NodeView(tree, parent);
+        Object.assign(node, data, { id: `render-${archived}-${++id}` });
+        parent.nodes.push(node); tree.nodes[node.id] = node; return node;
+      };
+      const win = add(tree.root, { type: 'window', windowId: 10, loaded: true, label: 'Synthetic window' });
+      const live = add(win, { loaded: true, title: 'Original title', url: 'https://example.test/live',
+        cookieStoreId: 'firefox-container-1', containerName: 'Work', containerColor: 'green', containerIcon: 'briefcase' });
+      const archive = add(tree.root, { label: `${archived.toLocaleString()} archived nodes`, expanded: false });
+      for (let i = 0; i < archived; i++) add(archive, { url: `https://example.test/saved/${i}`, title: `Saved ${i}` });
+      lastTree?.root.$destroy(); lastTree = tree;
+      tree.root.$renderChildren(); document.getElementById('fixture').append(tree.root.$);
+      const badge = live.$row.querySelector('.container-badge');
+      const title = live.$row.querySelector('.url-title');
+      const count = NodeView.prototype.countNodes, render = NodeView.prototype.$render;
+      const ownCount = Object.hasOwn(NodeView.prototype, 'countNodes');
+      let visits = 0, renders = 0;
+      NodeView.prototype.countNodes = function (...args) {
+        if (this.tree === tree) visits += this.nodes.length;
+        return count.apply(this, args);
+      };
+      NodeView.prototype.$render = function (...args) {
+        if (this.tree === tree) renders++;
+        return render.apply(this, args);
+      };
+      try {
+        await test(`title updates do not visit ${archived} archived descendants`, async () => {
+          visits = 0; renders = 0;
+          await live.setTabFields({ title: '<b>Updated title</b>' }, { reason: 'test' });
+          metrics.push({ archived, descendantVisits: visits, rowsRebuilt: renders });
+          assert(visits === 0, `Title-only update visited ${visits} descendants`);
+          assert(renders === 0, `Title-only update rebuilt ${renders} rows`);
+          assert(live.$row.querySelector('.url-title') === title, 'Title element replaced');
+          assert(title.textContent === '<b>Updated title</b>' && !title.querySelector('b'), 'Title parsed as markup');
+          assert(live.$row.querySelector('.container-badge') === badge, 'Unchanged badge replaced');
+        });
+        await test(`favicon updates and failures do not rescan the ${archived}-node archive`, async () => {
+          visits = 0; renders = 0;
+          const first = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg"/%3E';
+          await live.setTabFields({ favIconUrl: first }, { reason: 'test' });
+          const image = live.$row.querySelector('.favicon');
+          assert(image && image.nextElementSibling === badge, 'Favicon inserted in wrong location');
+          image.onerror(); assert(image.style.display === 'none', 'Fixture failure was not hidden');
+          await live.setTabFields({ faviconUrl: first + '#updated' }, { reason: 'test' });
+          assert(live.$row.querySelector('.favicon') === image && image.style.display !== 'none', 'New favicon did not recover from prior failure');
+          await live.setTabFields({ faviconUrl: undefined }, { reason: 'test' });
+          assert(!live.$row.querySelector('.favicon'), 'Removed favicon persists');
+          assert(visits === 0 && renders === 0, 'Favicon update scanned/rebuilt unrelated history');
+          assert(live.$row.querySelector('.container-badge') === badge, 'Badge identity changed');
+        });
+        await test(`load state still refreshes ancestors once with ${archived} archived nodes`, async () => {
+          renders = 0;
+          await live.setTabFields({ loaded: false, wasLoaded: true }, { reason: 'test' });
+          assert(renders === 3, `Expected one render per changed ancestry row, got ${renders}`);
+          assert(!win.$row.querySelector('.node-stat-open'), 'Loaded count is stale');
+          assert(win.$row.querySelector('.node-stat-was-loaded')?.textContent === '1', 'Saved-loaded count is stale');
+          await live.setTabFields({ loaded: true, wasLoaded: false }, { reason: 'test' });
+          assert(win.$row.querySelector('.node-stat-open')?.textContent === '1', 'Reload count is stale');
+        });
+      } finally {
+        if (ownCount) NodeView.prototype.countNodes = count; else delete NodeView.prototype.countNodes;
+        NodeView.prototype.$render = render;
+      }
+    }
+  } catch (error) { results.push({ name: 'Fixture setup', pass: false, error: String(error) }); }
+  finally {
+    window.__RENDER_METRICS__ = metrics;
+    window.__TEST_RESULTS__ = { results, passCount: results.filter(item => item.pass).length,
+      failCount: results.filter(item => !item.pass).length };
+    document.getElementById('metrics').textContent = JSON.stringify(metrics, null, 2);
+    document.getElementById('results').textContent = results.map(item => `${item.pass ? 'PASS' : 'FAIL'} ${item.name}${item.error ? ': ' + item.error : ''}`).join('\n');
+    window.__TEST_DONE__ = true;
+  }
+</script>
+</body>
+</html>

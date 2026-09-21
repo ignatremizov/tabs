@@ -4,6 +4,9 @@ What changed, and when?  You know the drill.
 
 ## Unreleased
 
+- Patch title/favicon DOM elements without rebuilding rows, identity badges,
+  or archived descendant statistics. General state changes still refresh
+  affected ancestry, with each row rendered once rather than twice.
 - Validate stored graphs before reconstruction or automatic cleanup and rebuild
   iteratively with depth/size bounds. Corrupt or inconsistent records stop in
   an explicit recovery state without rewriting originals; readiness requests

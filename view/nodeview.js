@@ -662,9 +662,8 @@ export class NodeView extends Node {
     const changed = await promise;
     // show it
     if (changed) {
-      this.$render();
-      // update affected parents
       if (updateParents) this.$refreshAncestry();
+      else this.$render();
     }
     return changed;
   }
@@ -786,8 +785,40 @@ export class NodeView extends Node {
     return changedNodes.length > 0;
   }
 
-  async setTabFields (...args) {
-    return await this.renderIfChanged(super.setTabFields(...args), true);
+  async setTabFields (changes, args) {
+    const fields = Object.keys(changes || {});
+    const presentationOnly = fields.length > 0
+      && fields.every(key => ['title', 'favIconUrl', 'faviconUrl'].includes(key));
+    const updating = super.setTabFields(changes, args);
+    if (! presentationOnly) return this.renderIfChanged(updating, true);
+    await this.tree.treeViewLoaded;
+    const changed = await updating;
+    // Titles and favicons cannot affect descendant counts or identity badges.
+    // An unrendered collapsed node will pick up these values when expanded.
+    if (! changed || ! this.$row) return changed;
+    if (Object.hasOwn(changes, 'title')) {
+      const title = this.$row.querySelector('.row-title .url-title');
+      if (title) title.textContent = this.title || this.url || '';
+    }
+    if (fields.some(key => key === 'favIconUrl' || key === 'faviconUrl')) {
+      let image = this.$row.querySelector('.favicon');
+      if (! this.faviconUrl) image?.remove();
+      else {
+        if (! image) {
+          image = this.tree.document.createElement('img');
+          image.className = 'favicon';
+          image.alt = '';
+          image.onerror = function () { this.style.display = 'none'; };
+          const next = this.$row.querySelector('.container-badge, .native-group-badge, '
+            + '.restore-error-icon, .node-note-icon, .row-title');
+          this.$row.insertBefore(image, next);
+        }
+        image.style.display = '';
+        image.src = this.faviconUrl;
+      }
+    }
+    if (this.isCursor()) this.$renderDetails(this.tree.$detailsBox);
+    return changed;
   }
 
   async load (...args) {
