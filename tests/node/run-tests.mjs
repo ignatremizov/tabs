@@ -398,6 +398,7 @@ test('background tree transfer returns one JSON payload', async () => {
   };
   const bkgd = new Bkgd();
   bkgd.tree = {
+    onMessageMutex: new Tree().onMessageMutex,
     serializeNodes: () => nodes
   };
   bkgd.resolveTreeLoaded();
@@ -9329,6 +9330,12 @@ async function runTests() {
   const { registerNativeContextTests } = await import('./native-context.test.mjs');
   await registerNativeContextTests({
     test, assert, assertEqual, api, Bkgd, Tree, Node, NodeStore, createTree, addChild
+  });
+
+  const { registerReliabilityTests } = await import('./reliability.test.mjs');
+  await registerReliabilityTests({
+    test, assert, assertEqual, api, emit, Bkgd, Tree, TreeStore, Node, NodeStore,
+    TreeView, createTree, addChild, jsonSchema, IDB
   });
 
   let passCount = 0;

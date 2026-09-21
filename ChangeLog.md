@@ -4,6 +4,10 @@ What changed, and when?  You know the drill.
 
 ## Unreleased
 
+- Resynchronize open sidebars from authoritative background data after repair
+  or reconnect instead of repainting stale models. Preserve cursor ancestry,
+  scrolling, and local expansion overrides; discard snapshots raced by a
+  newer delta or local action and coalesce repeated refresh requests.
 - Recover missed cross-window native-group events as whole groups before
   generic tab repair, preserving saved descendants and annotations. Abort
   recovery on unavailable or inconsistent native snapshots rather than

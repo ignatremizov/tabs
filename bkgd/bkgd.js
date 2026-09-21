@@ -1628,7 +1628,10 @@ export class Bkgd {
 
   async bkgd_getTree (msg) {
     await this.treeLoaded;  // ensure tree is loaded before sending it
-    return JSON.stringify(this.tree.serializeNodes());
+    // Do not overtake an earlier view mutation awaiting persistence/native APIs.
+    const unlock = await this.tree.onMessageMutex.lock();
+    try { return JSON.stringify(this.tree.serializeNodes()); }
+    finally { unlock(); }
   }
 
   async bkgd_generateTutorial (msg) {

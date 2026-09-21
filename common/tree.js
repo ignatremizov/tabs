@@ -301,6 +301,10 @@ export class Tree {
     if (! nodesJson)
       return error('Tree.loadTreeFromBkgd() failed, bkgd did not send tree');
 
+    this.replaceSerializedTree(nodesJson);
+  }
+
+  replaceSerializedTree (nodesJson) {
     const serializedNodes = JSON.parse(nodesJson);
     if ((! serializedNodes)
       || ('object' !== typeof serializedNodes)
@@ -317,6 +321,8 @@ export class Tree {
     // (maybe call derived class handler?)
 
     // restore session from serialized data
+    this.markedNodes = [];
+    this.pendingMoves.clear();
     this.createRootNode();
     const numLoaded = this.rebuildNodeFromSerializedHash(
       this.root, serializedNodes);

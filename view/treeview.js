@@ -113,12 +113,18 @@ export class TreeView extends Tree {
 
     // { nodeId: node, ... }
     this.expandOverrides = {};
+    this.modelGeneration = 0;
+    this.uiActionsInFlight = 0;
+    this.resyncRequested = false;
+    this.resyncTask = null;
+    this.resyncTimer = null;
   }
 
   destroy () {
     if (this.destroyed) return;
     this.flushPresentationState();
     this.destroyed = true;
+    if (this.resyncTimer) clearTimeout(this.resyncTimer);
     this.cursorScrollRequestId += 1;
     if (this.bkgdPing) {
       clearInterval(this.bkgdPing);
@@ -437,13 +443,77 @@ export class TreeView extends Tree {
   }
 
   async runUiAction (context, action) {
+    this.uiActionsInFlight++;
+    this.modelGeneration++;
     try {
       return await action();
     } catch (err) {
       error(`${context} failed`, err);
       this.setStatus(`${context} failed: ${err?.message || err}`);
       return undefined;
+    } finally {
+      this.uiActionsInFlight--;
+      this.modelGeneration++;
+      if (this.resyncRequested) this.requestTreeResync();
     }
+  }
+
+  requestTreeResync () {
+    this.resyncRequested = true;
+    if (this.destroyed || this.resyncTask || this.resyncTimer
+      || this.uiActionsInFlight) return;
+    this.resyncTask = this.resynchronizeTree().catch(err => {
+      this.resyncRequested = false;
+      error('Outline resynchronization failed', err);
+      this.setStatus(`Outline resynchronization failed: ${err?.message || err}`);
+    }).finally(() => {
+      this.resyncTask = null;
+      if (this.resyncRequested && ! this.destroyed && ! this.uiActionsInFlight) {
+        // Yield to queued deltas; do not spin or read parallel full snapshots.
+        this.resyncTimer = setTimeout(() => {
+          this.resyncTimer = null;
+          this.requestTreeResync();
+        }, 100);
+        this.resyncTimer.unref?.();
+      }
+    });
+  }
+
+  async resynchronizeTree () {
+    this.resyncRequested = false;
+    const generation = this.modelGeneration;
+    const nodesJson = await emit('bkgd_getTree');
+    const unlock = await this.onMessageMutex.lock();
+    try {
+      if (this.destroyed) return;
+      if (generation !== this.modelGeneration || this.uiActionsInFlight) {
+        // Discard a read raced by a delta/edit, process queued work, then
+        // fetch again. Replaying an old structural delta on a new snapshot
+        // could otherwise promote/move the same children twice.
+        this.resyncRequested = true;
+        return;
+      }
+      const state = this.capturePresentationState();
+      const cursorPath = [];
+      for (let node = this.cursor; node; node = node.isRoot() ? null : node.parent) {
+        cursorPath.push(node.id);
+      }
+      const overrides = Object.keys(this.expandOverrides);
+      const expanded = this.windowNode?.viewRootExpanded;
+      this.replaceSerializedTree(nodesJson);
+      this.windowNode = this.root.getWindowId(this.windowId);
+      if (this.windowNode && expanded !== undefined) {
+        this.windowNode.viewRootExpanded = expanded;
+      }
+      this.expandOverrides = Object.fromEntries(overrides
+        .filter(id => this.nodes[id]).map(id => [id, this.nodes[id]]));
+      this.cursor = null;
+      this.$renderWholeTree();
+      this.updateMarkedCount();
+      const cursor = cursorPath.map(id => this.nodes[id]).find(Boolean);
+      await this.setCursor(cursor, { instant: true, scroll: false });
+      this.restorePresentationScroll(state);
+    } finally { unlock(); }
   }
 
   get dialogActive () {
@@ -3658,6 +3728,7 @@ export class TreeView extends Tree {
         if (this.destroyed) return;
         this.initBkgdPort();
         this.registerWithBkgd();
+        this.requestTreeResync();
       });
     });
     // tell bkgd about us, after we've had a chance to load
@@ -3980,21 +4051,17 @@ export class TreeView extends Tree {
   }
 
   tree_refreshAll (msg, sender, sendResponse) {
-    // Re-render the entire tree (used after batch updates like favicon backfill)
-    try {
-      debug('TreeView.tree_refreshAll()');
-      if (! this.viewRoot || ! this.$treeRoot) {
-        debug('TreeView.tree_refreshAll() skipped before initial render');
-        return;
-      }
-      this.$renderWholeTree();
-    } catch (err) {
-      error('TreeView.tree_refreshAll() failed', err, msg);
-      throw err;
-    }
+    if (! this.viewRoot || ! this.$treeRoot) return;
+    this.modelGeneration++;
+    // Do not await this under Tree.onMessage's mutex. Queued deltas must
+    // finish before the fetched snapshot can be safely applied.
+    this.requestTreeResync();
   }
 
   async onMessage (msg, sender, sendResponse) {
+    if (msg?.msg?.startsWith('tree_') && msg.msg !== 'tree_refreshAll') {
+      this.modelGeneration++;
+    }
     // if message not for us, let parent class handle it
     try {
       if (!(msg && msg.msg && msg.msg.startsWith('treeview_')))
