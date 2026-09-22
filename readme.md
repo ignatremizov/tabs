@@ -102,6 +102,34 @@ Firefox profiles and retain synthetic diagnostics; they never use your normal
 profile. Recovery testing inserts a synthetic stored cycle, checks the actual
 failure view, and verifies the downloaded raw-record recovery file.
 
+## Browser restart and multi-view reliability
+
+```sh
+make test-firefox-restart
+make test-firefox-convergence
+```
+
+The restart test gracefully terminates one Firefox process and launches another
+using the same newly created test profile. It verifies preserved node/container
+identities, live and saved nesting, native group metadata/collapse, separate
+synthetic persistent cookies, an unrelated ungrouped tab, and restoration of a
+saved group member after restarting. Firefox removes temporary addons at exit,
+so the test reinstalls the same staged test addon into that test profile. This
+is a full process-restart test, not a signed upgrade or `runtime.reload` test.
+
+The convergence test opens two actual production TreeViews in one disposable
+profile. It deliberately drops field/structural updates, delays a snapshot while
+a newer browser update arrives, and checks that both rendered models converge.
+Cursor and scroll are checked at the resynchronization boundary, separately
+from the existing focus/active-tab scrolling behavior. A synthetic database
+failure must show a persistent warning in both views; clicking the real Retry
+saving button must persist the pending data and clear both warnings. Screenshot
+checks keep those warnings above, not over, the tree viewport.
+
+All diagnostic data is synthetic. These tests use fresh, marked workspaces,
+never the user's normal profile. The optional view handle exists only in the
+staged test addon, not the production source or packaged extension.
+
 ## Background / Inspiration
 
 I used Tabs Outliner for a long time.  It was great.  But it was missing some

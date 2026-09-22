@@ -4,6 +4,14 @@ What changed, and when?  You know the drill.
 
 ## Unreleased
 
+- Reserve durable session identities before resolving reused browser IDs or
+  URL matches during startup. Rebind restored windows before their tabs and
+  keep live originals distinct from saved descendants across browser restarts.
+- Add full Firefox process-restart and real two-view convergence/durability
+  tests using disposable profiles. Verify native/saved identities after
+  relaunch, delayed and missed updates, visible failed writes, and the actual
+  retry button; keep all test hooks out of production packages.
+
 - Reserve toolbar space for persistent storage/recovery warnings instead of
   placing them in the floating notification overlay, keeping text and retry
   controls readable without overlapping the tree.

@@ -53,7 +53,7 @@ def free_port():
         return listener.getsockname()[1]
 
 
-def stage_extension(work, trace_api=False):
+def stage_extension(work, trace_api=False, expose_views=False):
     staged = work / "extension"
     staged.mkdir()
     for source in ROOT.glob("*.js"):
@@ -111,6 +111,14 @@ def stage_extension(work, trace_api=False):
     (staged / "tests").mkdir()
     for name in ("firefox-native-context.html", "firefox-native-context.js"):
         shutil.copy2(ROOT / "tests" / name, staged / "tests" / name)
+    if expose_views:
+        view_path = staged / "view/view.js"
+        view_source = view_path.read_text()
+        marker = "  const tree = new TreeView();"
+        if view_source.count(marker) != 1:
+            raise RuntimeError("View test-hook location changed")
+        view_path.write_text(view_source.replace(marker,
+            marker + "\n  window.__isolatedTestTree = tree;"))
     package = work / "test-extension.zip"
     with zipfile.ZipFile(package, "w", zipfile.ZIP_DEFLATED) as archive:
         for file in staged.rglob("*"):
@@ -177,6 +185,7 @@ def main():
                 time.sleep(0.1)
         capabilities = request("POST", "/session", {"capabilities": {"alwaysMatch": {
             "browserName": "firefox", "moz:firefoxOptions": {
+                **({"binary": os.environ["FIREFOX_BIN"]} if os.environ.get("FIREFOX_BIN") else {}),
                 "args": ["-headless", "-no-remote"],
                 "prefs": {"privacy.userContext.enabled": True, "browser.tabs.groups.enabled": True,
                           "browser.startup.page": 0, "datareporting.policy.dataSubmissionEnabled": False}
