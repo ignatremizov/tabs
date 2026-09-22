@@ -128,6 +128,8 @@ foo {
   /***** cursor *****/
   --cursor-bg-top: #88f;
   --cursor-bg-bot: #44f;
+  --cursor-bg-top-unfocused: #8e8eb5;
+  --cursor-bg-bot-unfocused: #4d4d8b;
   --cursor-fg-override: #fff !important;
   /* --cursor-text-shadow: var(--medium-text-shadow); */
   --cursor-text-shadow: none;

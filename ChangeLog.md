@@ -4,6 +4,11 @@ What changed, and when?  You know the drill.
 
 ## Unreleased
 
+- Align container badges with neighboring favicons rather than the SVG's
+  baseline. Paint inactive cursor rows using muted palette gradients instead
+  of filtering the entire row, keeping container and favicon colors intact
+  without an extra filtered row surface.
+
 - Reserve durable session identities before resolving reused browser IDs or
   URL matches during startup. Rebind restored windows before their tabs and
   keep live originals distinct from saved descendants across browser restarts.

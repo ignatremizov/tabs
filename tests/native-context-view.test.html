@@ -144,6 +144,67 @@
           }
         } finally { probe.remove(); }
       });
+      await test('container badges align with favicons instead of the SVG baseline', () => {
+        const probe = document.createElement('div');
+        const row = work.$row.cloneNode(true);
+        const favicon = document.createElement('img');
+        favicon.className = 'favicon';
+        favicon.alt = '';
+        row.prepend(favicon);
+        probe.append(row); document.body.append(probe);
+        try {
+          const badge = row.querySelector('.container-badge');
+          const centerY = element => {
+            const bounds = element.getBoundingClientRect();
+            return bounds.top + bounds.height / 2;
+          };
+          for (const font of [10, 11.55, 13, 18.666667]) {
+            row.style.fontSize = `${font}px`;
+            for (const height of [1.2, 1.5, 2]) {
+              row.style.lineHeight = `${font * height}px`;
+              for (const zoom of [0.7, 1, 1.25]) {
+                probe.style.zoom = zoom;
+                for (const active of [false, true]) {
+                  row.classList.toggle('active', active);
+                  assert(Math.abs(centerY(badge) - centerY(favicon)) < 0.05,
+                    `Badge raised relative to favicon: ${font}px / ${height} / ${zoom} / ${active}`);
+                }
+              }
+            }
+          }
+        } finally { probe.remove(); }
+      });
+      await test('inactive cursor uses a muted background without filtering the row or its identities', async () => {
+        const theme = document.getElementById('fixture-theme');
+        const probe = document.createElement('div');
+        const row = work.$row.cloneNode(true);
+        row.classList.add('cursor');
+        probe.append(row); document.body.append(probe);
+        try {
+          for (const variant of ['day', 'night']) {
+            await new Promise((resolve, reject) => {
+              theme.onload = resolve; theme.onerror = reject;
+              theme.href = `/themes/tk-${variant}.css`;
+            });
+            probe.classList.remove('unfocused');
+            const activeBackground = getComputedStyle(row).backgroundImage;
+            const stroke = getComputedStyle(row.querySelector('.context-icon')).stroke;
+            probe.classList.add('unfocused');
+            assert(getComputedStyle(row).filter === 'none',
+              `${variant}: inactive row still needs a filtered composite surface`);
+            const mutedBackground = getComputedStyle(row).backgroundImage;
+            assert(mutedBackground !== 'none' && mutedBackground !== activeBackground,
+              `${variant}: keyboard focus indication lost`);
+            assert(getComputedStyle(row.querySelector('.context-icon')).stroke === stroke,
+              `${variant}: inactive identity accent changed`);
+          }
+        } finally {
+          probe.remove();
+          if (! theme.href.endsWith('/tk-night.css')) {
+            await new Promise(resolve => { theme.onload = resolve; theme.href = '/themes/tk-night.css'; });
+          }
+        }
+      });
       await test('container renames update hover and accessible names without adding inline text', () => {
         const oldName = work.containerName;
         work.containerName = 'Renamed work account'; work.$render();

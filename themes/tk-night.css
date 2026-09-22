@@ -80,6 +80,9 @@ foo {
   /***** cursor *****/
   --cursor-bg-top: #57b;
   --cursor-bg-bot: #235;
+  /* Muted equivalents of the active gradient, without a whole-row filter. */
+  --cursor-bg-top-unfocused: #6a758c;
+  --cursor-bg-bot-unfocused: #2d323d;
   /* --cursor-fg-override: #fff; */
   --cursor-text-shadow: var(--medium-text-shadow);
   --cursor-shadow: 0.1em 0.1em 0.2em var(--shadow-color);

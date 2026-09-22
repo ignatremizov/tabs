@@ -464,7 +464,9 @@ foo {
   color: var(--tab-loaded-fg);
   font-size: 0.86em;
   line-height: 1;
-  vertical-align: baseline;
+  /* Match the favicon's inline alignment; the SVG's synthesized baseline
+   * otherwise raises the entire badge above neighboring icons and text. */
+  vertical-align: middle;
 }
 .context-icon {
   display: inline-block;
@@ -827,12 +829,12 @@ foo {
 }
 
 .unfocused .cursor.row {
-  /* dim the keyboard cursor when it doesn't have keyboard focus */
-  /* too much, makes it look like the tab isn't loaded
-  opacity: 66%;
-  filter: saturate(66%);
-  */
-  filter: saturate(33%);
+  /* Dim only the background. Filtering the entire row creates an extra
+   * composite surface and also desaturates favicons/container identities.
+   * Keep the gradient on the row itself, including at fractional zoom. */
+  background: linear-gradient(
+    var(--cursor-bg-top-unfocused, var(--cursor-bg-top)),
+    var(--cursor-bg-bot-unfocused, var(--cursor-bg-bot)));
 }
 
 .cursor.leaf, .cursor.collapsed {
