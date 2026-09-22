@@ -68,10 +68,10 @@ class ReleaseTests(unittest.TestCase):
                 archive.writestr(member, data)
         return path
 
-    def fake_tool(self, *, status=0, produce=True, lint_status=0):
+    def fake_tool(self, *, status=0, produce=True, lint_status=0, require_upload_state=False):
         path = Path(self.temp.name) / "fake web-ext"
         path.write_text('''#!/usr/bin/env python3
-import json, os, pathlib, sys, zipfile
+import json, os, pathlib, stat, sys, zipfile
 args=sys.argv[1:]
 if args == ['--version']:
     print('10.6.0'); raise SystemExit(0)
@@ -85,6 +85,13 @@ assert os.environ['WEB_EXT_API_KEY'] == 'synthetic-issuer-private'
 assert os.environ['WEB_EXT_API_SECRET'] == 'synthetic-secret-private'
 source=pathlib.Path(args[args.index('--source-dir')+1])
 out=pathlib.Path(args[args.index('--artifacts-dir')+1])
+if REQUIRE_UPLOAD_STATE:
+    control=source/'.amo-upload-uuid'
+    assert control.is_file(), 'The pinned signer must be able to persist its upload UUID'
+    assert not stat.S_IMODE(source.stat().st_mode) & 0o222
+    assert not stat.S_IMODE((source/'manifest.json').stat().st_mode) & 0o222
+    assert stat.S_IMODE(control.stat().st_mode) == 0o600
+    control.write_text(json.dumps({'uploadUuid':'synthetic-upload','channel':'unlisted','xpiCrcHash':'synthetic-crc'}))
 (out/'argv.json').write_text(json.dumps(args))
 # Even unexpected tool output is redacted by the wrapper before logs/console.
 print(os.environ['WEB_EXT_API_SECRET'])
@@ -92,14 +99,15 @@ if PRODUCE:
     version=json.loads((source/'manifest.json').read_text())['version']
     with zipfile.ZipFile(out/f'test-{version}.xpi', 'w') as archive:
         for file in source.rglob('*'):
-            if file.is_file():
+            if file.is_file() and file.name != '.amo-upload-uuid':
                 data=file.read_bytes()
                 if file.name == 'manifest.json': data=json.dumps(json.loads(data)).encode()
                 archive.writestr(file.relative_to(source).as_posix(), data)
         for name in SIGNATURE_MEMBERS: archive.writestr(name,b'synthetic-signature')
 raise SystemExit(SIGN_STATUS)
 '''.replace("LINT_STATUS", str(lint_status)).replace("PRODUCE", str(produce))
-          .replace("SIGNATURE_MEMBERS", repr(sorted(release.SIGNATURES))).replace("SIGN_STATUS", str(status)))
+          .replace("SIGNATURE_MEMBERS", repr(sorted(release.SIGNATURES))).replace("SIGN_STATUS", str(status))
+          .replace("REQUIRE_UPLOAD_STATE", str(require_upload_state)))
         path.chmod(0o755)
         return path
 
@@ -415,6 +423,18 @@ for name in ('manifest.json', 'manifest-ff.json'):
                 self.assertNotIn("synthetic-issuer-private", path.read_text())
         for name, contents in self.before.items():
             self.assertEqual((self.root / name).read_bytes(), contents)
+
+    def test_pinned_signer_can_save_upload_state_without_writable_payload(self):
+        destination = self.output / "readonly payload with writable control state"
+        with self.signing_env(self.fake_tool(require_upload_state=True)), contextlib.redirect_stdout(io.StringIO()):
+            result = release.sign(self.root, self.unsigned, destination)
+        self.assertTrue(result["payloadVerified"])
+        state_files = list(destination.glob('.tabs-sign-*/source/.amo-upload-uuid'))
+        self.assertEqual(len(state_files), 1)
+        self.assertEqual(json.loads(state_files[0].read_text())["uploadUuid"], "synthetic-upload")
+        self.assertNotIn('.amo-upload-uuid', release.read_archive(result["archive"]))
+        for name, content in self.before.items():
+            self.assertEqual((self.root / name).read_bytes(), content)
 
     def test_ambiguous_no_artifact_submission_remains_reserved(self):
         tool = self.fake_tool(status=1, produce=False)

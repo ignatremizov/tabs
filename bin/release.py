@@ -454,6 +454,13 @@ def sign(source, unsigned, output, *, verify_only=False, allow_version_bump=Fals
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(data)
             dest.chmod(0o444)
+        # web-ext 10.6 persists its validated upload UUID in this excluded
+        # control file before creating the version. Pre-create only that file
+        # writable: payloads and directories stay read-only, and no upload can
+        # be orphaned merely because the signer cannot save its resume state.
+        upload_state = source_dir / '.amo-upload-uuid'
+        upload_state.write_text('{}\n')
+        upload_state.chmod(0o600)
         for path in sorted(source_dir.rglob("*"), reverse=True):
             if path.is_dir():
                 path.chmod(0o555)
