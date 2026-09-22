@@ -116,3 +116,14 @@ credentials/redaction, lint failures, single submission, and verify-only recover
 
 Keep release receipts and synthetic test diagnostics outside the repository's
 packaged source. CI must never sign automatically or receive AMO credentials.
+
+The `Extension reliability` workflow in `.github/workflows/tests.yml` runs on
+trunk pushes, pull requests, and manual dispatch with read-only repository
+permissions. Its jobs run the Node/DOM and synthetic release suites, reproduce
+both exact-version packages, and exercise Firefox lifecycle, failed-startup
+recovery, rendering, two-view convergence, and full process restart. Actions are
+pinned to full commit IDs; the Mozilla driver download has a verified checksum.
+Only synthetic evidence and unsigned test packages are uploaded. Browser test
+profiles are newly created on the runner, and no signing job or credentials are
+configured. A local pass of these commands is separate from a hosted workflow
+result, which is available after the commits are pushed.

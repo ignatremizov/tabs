@@ -1,0 +1,107 @@
+name: Extension reliability
+
+on:
+  push:
+    branches: [trunk]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tabs-tests-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  source-and-packages:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24.14.0'
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - uses: browser-actions/setup-chrome@48ad923757ca74d66703209fe939badbdf80f2f4 # v2.2.0
+        id: chrome
+        with:
+          chrome-version: stable
+          install-dependencies: true
+      - name: Node, DOM, and synthetic release tests
+        env:
+          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/tabs-ci"
+          make test-node 2>&1 | tee "$RUNNER_TEMP/tabs-ci/node.log"
+          node tests/node/browser-coverage.mjs "$RUNNER_TEMP/tabs-coverage" 2>&1 | tee "$RUNNER_TEMP/tabs-ci/browser.log"
+          make test-release 2>&1 | tee "$RUNNER_TEMP/tabs-ci/release-tools.log"
+      - name: Build exact clean source without signing or version changes
+        run: |
+          set -euo pipefail
+          ARTIFACTS_DIR="$RUNNER_TEMP/tabs-ci/packages" make release-current > "$RUNNER_TEMP/tabs-ci/build.log"
+          ARTIFACTS_DIR="$RUNNER_TEMP/tabs-ci/packages" make release-current > "$RUNNER_TEMP/tabs-ci/rebuild.log"
+          git diff --exit-code
+          git diff --cached --exit-code
+      - name: Retain synthetic verification evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: source-and-package-evidence
+          path: ${{ runner.temp }}/tabs-ci
+          if-no-files-found: warn
+          retention-days: 14
+
+  native-firefox:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.12'
+      - uses: browser-actions/setup-firefox@0bc507ddf224827e3b1af68e014d5e42ab93e795 # v1.7.2
+        id: firefox
+        with:
+          firefox-version: '156.0'
+      - name: Install pinned Mozilla geckodriver
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/tabs-geckodriver" "$RUNNER_TEMP/tabs-firefox"
+          curl --fail --location --retry 3 \
+            https://github.com/mozilla/geckodriver/releases/download/v0.37.1/geckodriver-v0.37.1-linux64.tar.gz \
+            --output "$RUNNER_TEMP/tabs-geckodriver/archive.tar.gz"
+          printf '%s  %s\n' e815130ea95983e162ae91843b48d3a3ce991735635fce83a647afde21e09f7e \
+            "$RUNNER_TEMP/tabs-geckodriver/archive.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/tabs-geckodriver/archive.tar.gz" -C "$RUNNER_TEMP/tabs-geckodriver" geckodriver
+          echo "$RUNNER_TEMP/tabs-geckodriver" >> "$GITHUB_PATH"
+      - name: Native lifecycle, recovery, rendering, and full process restart
+        env:
+          FIREFOX_BIN: ${{ steps.firefox.outputs.firefox-path }}
+        run: |
+          set -euo pipefail
+          "$FIREFOX_BIN" --version | tee "$RUNNER_TEMP/tabs-firefox/version.log"
+          geckodriver --version | tee -a "$RUNNER_TEMP/tabs-firefox/version.log"
+          python3 -B tests/firefox-native-context.py --output "$RUNNER_TEMP/tabs-firefox/lifecycle" 2>&1 | tee "$RUNNER_TEMP/tabs-firefox/lifecycle.log"
+          python3 -B tests/firefox-recovery.py --output "$RUNNER_TEMP/tabs-firefox/recovery" 2>&1 | tee "$RUNNER_TEMP/tabs-firefox/recovery.log"
+          python3 -B tests/firefox-presentation.py --output "$RUNNER_TEMP/tabs-firefox/presentation" 2>&1 | tee "$RUNNER_TEMP/tabs-firefox/presentation.log"
+          python3 -B tests/firefox-convergence.py --output "$RUNNER_TEMP/tabs-firefox/convergence" 2>&1 | tee "$RUNNER_TEMP/tabs-firefox/convergence.log"
+          python3 -B tests/firefox-restart.py --output "$RUNNER_TEMP/tabs-firefox/restart" 2>&1 | tee "$RUNNER_TEMP/tabs-firefox/restart.log"
+      - name: Retain synthetic Firefox diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: firefox-evidence
+          path: ${{ runner.temp }}/tabs-firefox
+          if-no-files-found: warn
+          retention-days: 14
