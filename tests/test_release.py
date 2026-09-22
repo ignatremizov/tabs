@@ -89,7 +89,8 @@ out=pathlib.Path(args[args.index('--artifacts-dir')+1])
 # Even unexpected tool output is redacted by the wrapper before logs/console.
 print(os.environ['WEB_EXT_API_SECRET'])
 if PRODUCE:
-    with zipfile.ZipFile(out/'test-0.0.3.10.xpi', 'w') as archive:
+    version=json.loads((source/'manifest.json').read_text())['version']
+    with zipfile.ZipFile(out/f'test-{version}.xpi', 'w') as archive:
         for file in source.rglob('*'):
             if file.is_file():
                 data=file.read_bytes()
@@ -107,6 +108,212 @@ raise SystemExit(SIGN_STATUS)
         with patch.dict(os.environ, {"WEB_EXT_BIN": str(tool), "WEB_EXT_API_KEY": "synthetic-issuer-private",
                                      "WEB_EXT_API_SECRET": "synthetic-secret-private"}, clear=False):
             yield
+
+    def install_entrypoints(self):
+        for name in ('Makefile', 'make-zip.sh', 'bin/release.py',
+                     'bin/firefox-sign.sh', 'bin/update-version.sh', 'bin/version-utils.sh'):
+            target = self.root / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / name, target)
+        (self.root / '.gitignore').write_text('dist/\n')
+        self.git('add', '.')
+        self.git('commit', '-qm', 'Synthetic build entrypoints')
+        self.git('tag', 'v0.0.3')
+
+    def run_make(self, *goals, succeeds=True):
+        # Never inherit the user's signing configuration into a child test.
+        env = {key: value for key, value in os.environ.items()
+               if key in {'PATH', 'HOME', 'LANG', 'SYSTEMROOT', 'PYTHONDONTWRITEBYTECODE'}}
+        env['ARTIFACTS_DIR'] = str(self.output / 'workflow')
+        if hasattr(self, 'workflow_signer'):
+            env.update(WEB_EXT_BIN=str(self.workflow_signer),
+                       WEB_EXT_API_KEY='synthetic-issuer-private',
+                       WEB_EXT_API_SECRET='synthetic-secret-private')
+        result = subprocess.run(['make', '--no-print-directory', *goals], cwd=self.root,
+                                env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        if succeeds:
+            self.assertEqual(result.returncode, 0, result.stdout)
+        else:
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+        return result
+
+    def assert_version(self, build):
+        for name in ('manifest.json', 'manifest-ff.json'):
+            self.assertEqual(json.loads((self.root / name).read_text())['version'], f'0.0.3.{build}')
+        self.assertEqual((self.root / 'VERSION_BUILD').read_text().split(), ['0.0.3', str(build)])
+
+    def test_default_make_and_all_bump_once_for_both_browsers(self):
+        self.install_entrypoints()
+        head = self.git('rev-parse', 'HEAD')
+        old = self.unsigned.read_bytes()
+        self.run_make()
+        self.assert_version(11)
+        destination = self.output / 'workflow'
+        first = {p.name: p.read_bytes() for p in destination.glob('*.zip')}
+        self.assertEqual(len(first), 2)
+        for contents in first.values():
+            with zipfile.ZipFile(io.BytesIO(contents)) as archive:
+                self.assertEqual(json.loads(archive.read('manifest.json'))['version'], '0.0.3.11')
+        self.run_make('all')
+        self.assert_version(12)
+        for name, contents in first.items():
+            self.assertEqual((destination / name).read_bytes(), contents)
+        self.assertEqual(self.unsigned.read_bytes(), old)
+        self.assertEqual(self.git('rev-parse', 'HEAD'), head, 'Building must not commit automatically')
+        self.assertEqual(self.git('diff', '--cached', '--name-only'), b'')
+
+    def test_single_browser_and_parallel_build_goals_increment_once(self):
+        self.install_entrypoints()
+        self.run_make('firefox-zip')
+        self.assert_version(11)
+        self.run_make('chrome-zip')
+        self.assert_version(12)
+        self.run_make('-j2', 'firefox-zip', 'chrome-zip')
+        self.assert_version(13)
+        for browser in ('firefox', 'chromium'):
+            self.assertTrue((self.output / 'workflow' / f'ignatremizov-tabs-0.0.3.13-{browser}.zip').is_file())
+
+    def test_chrome_dir_bumps_but_current_builds_do_not(self):
+        self.install_entrypoints()
+        self.run_make('chrome-dir')
+        self.assert_version(11)
+        destination = self.output / 'workflow'
+        self.assertEqual(json.loads((destination / 'chromium/manifest.json').read_text())['version'], '0.0.3.11')
+        self.run_make('firefox-zip-current', 'chrome-zip-current')
+        self.assert_version(11)
+        before = {p.name: p.read_bytes() for p in destination.glob('*.zip')}
+        self.run_make('firefox-zip-current', 'chrome-zip-current')
+        self.assertEqual({p.name: p.read_bytes() for p in destination.glob('*.zip')}, before)
+        self.assert_version(11)
+
+    def test_signing_default_bumps_builds_and_signs_same_new_version(self):
+        self.install_entrypoints()
+        self.workflow_signer = self.fake_tool()
+        self.run_make('firefox-sign')
+        self.assert_version(11)
+        destination = self.output / 'workflow'
+        result = json.loads((destination / 'test-0.0.3.11.verification.json').read_text())
+        self.assertTrue(result['payloadVerified'])
+        self.assertEqual(result['version'], '0.0.3.11')
+        self.assertTrue(result['versionOverrides'], 'Receipt must identify uncommitted version metadata')
+        first = (destination / 'test-0.0.3.11.xpi').read_bytes()
+        self.run_make('firefox-sign')
+        self.assert_version(12)
+        self.assertEqual(len(list(destination.rglob('argv.json'))), 2)
+        self.assertEqual((destination / 'test-0.0.3.11.xpi').read_bytes(), first)
+        self.assertTrue((destination / 'test-0.0.3.12.xpi').is_file())
+        self.assertEqual(self.git('diff', '--cached', '--name-only'), b'')
+
+    def test_sign_current_uses_configured_artifact_dir_and_resume_never_bumps(self):
+        self.install_entrypoints()
+        self.workflow_signer = self.fake_tool(status=1)
+        self.run_make('firefox-zip')
+        self.assert_version(11)
+        self.run_make('firefox-sign-current')
+        self.assert_version(11)
+        destination = self.output / 'workflow'
+        before = (destination / 'test-0.0.3.11.xpi').read_bytes()
+        self.run_make('firefox-sign-current', 'SIGN_ARGS=--verify-only')
+        self.assert_version(11)
+        self.assertEqual(len(list(destination.rglob('argv.json'))), 1)
+        self.assertEqual((destination / 'test-0.0.3.11.xpi').read_bytes(), before)
+
+    def test_new_signing_does_not_bypass_an_unresolved_submission(self):
+        self.install_entrypoints()
+        self.workflow_signer = self.fake_tool(status=1, produce=False)
+        self.run_make('firefox-sign', succeeds=False)
+        self.assert_version(11)
+        second = self.run_make('firefox-sign', succeeds=False)
+        self.assertIn('unresolved', second.stdout.lower())
+        self.assert_version(11)
+        self.assertEqual(len(list((self.output / 'workflow').rglob('argv.json'))), 1)
+
+    def test_default_signing_refuses_nonversion_changes_before_bumping(self):
+        self.install_entrypoints()
+        self.workflow_signer = self.fake_tool()
+        for filename in ('api.js', 'manifest-ff.json'):
+            with self.subTest(filename=filename):
+                original = (self.root / filename).read_bytes()
+                if filename.endswith('.json'):
+                    doc = json.loads(original); doc['permissions'].append('tabs')
+                    (self.root / filename).write_text(json.dumps(doc))
+                else:
+                    (self.root / filename).write_text('changed code')
+                self.run_make('firefox-sign', succeeds=False)
+                self.assert_version(10)
+                self.assertEqual(list((self.output / 'workflow').rglob('argv.json')), [])
+                (self.root / filename).write_bytes(original)
+
+    def test_version_overlay_rejects_code_changes_even_when_staged(self):
+        (self.root / 'api.js').write_text('staged different code')
+        self.git('add', 'api.js')
+        with self.assertRaises(ValueError):
+            release.source_payload(self.root, 'firefox', allow_version_bump=True)
+
+    def test_version_overlay_cannot_hide_staged_permission_changes(self):
+        name = 'manifest-ff.json'
+        original = (self.root / name).read_bytes()
+        doc = json.loads(original); doc['permissions'].append('tabs')
+        (self.root / name).write_text(json.dumps(doc))
+        self.git('add', name)
+        (self.root / name).write_bytes(original)
+        with self.assertRaises(ValueError):
+            release.source_payload(self.root, 'firefox', allow_version_bump=True)
+
+    def test_metadata_changes_during_auto_signing_retain_download_without_publication(self):
+        self.install_entrypoints()
+        self.workflow_signer = self.fake_tool()
+        code = self.workflow_signer.read_text()
+        where = code.rfind('raise SystemExit(0)')
+        edit = f"""root=pathlib.Path({str(self.root)!r})
+for name in ('manifest.json', 'manifest-ff.json'):
+    doc=json.loads((root/name).read_text()); doc['version']='0.0.3.12'
+    (root/name).write_text(json.dumps(doc))
+(root/'VERSION_BUILD').write_text('0.0.3 12\\n')
+"""
+        self.workflow_signer.write_text(code[:where] + edit + code[where:])
+        self.run_make('firefox-sign', succeeds=False)
+        destination = self.output / 'workflow'
+        self.assertEqual(list(destination.glob('*.xpi')), [])
+        self.assertEqual(len(list(destination.rglob('*.xpi'))), 1)
+        self.assertTrue((destination / '.tabs-submission-0.0.3.11.json').exists())
+        self.run_make('firefox-sign', succeeds=False)
+        self.assert_version(12)
+        self.assertEqual(len(list(destination.rglob('argv.json'))), 1)
+
+    def test_auto_signing_and_other_build_goals_cannot_race_the_counter(self):
+        self.install_entrypoints()
+        self.workflow_signer = self.fake_tool()
+        self.run_make('-j2', 'firefox-sign', 'all', succeeds=False)
+        self.assert_version(10)
+        self.assertEqual(list((self.output / 'workflow').rglob('argv.json')), [])
+
+    def test_clean_release_current_and_direct_verify_only_do_not_increment(self):
+        self.install_entrypoints()
+        self.workflow_signer = self.fake_tool()
+        self.run_make('release-current')
+        self.assert_version(10)
+        self.run_make('firefox-sign-current')
+        self.run_make('firefox-sign', 'SIGN_ARGS=--verify-only')
+        self.assert_version(10)
+        self.assertEqual(len(list((self.output / 'workflow').rglob('argv.json'))), 1)
+
+    def test_default_signing_rejects_prebuilt_override_before_bumping(self):
+        self.install_entrypoints()
+        self.workflow_signer = self.fake_tool()
+        result = self.run_make('firefox-sign', f'FIREFOX_ARCHIVE={self.unsigned}', succeeds=False)
+        self.assertIn('current', result.stdout.lower())
+        self.assert_version(10)
+
+    def test_build_counter_failure_leaves_manifests_and_packages_unchanged(self):
+        self.install_entrypoints()
+        for name in ('manifest.json', 'manifest-ff.json'):
+            doc = json.loads((self.root / name).read_text()); doc['version'] = '0.0.3.65535'
+            (self.root / name).write_text(json.dumps(doc))
+        (self.root / 'VERSION_BUILD').write_text('0.0.3 65535\n')
+        self.run_make('all', succeeds=False)
+        self.assert_version(65535)
+        self.assertEqual(list((self.output / 'workflow').glob('*.zip')), [])
 
     def test_build_is_reproducible_and_existing_archives_are_not_overwritten(self):
         before = self.unsigned.read_bytes(), self.unsigned.stat().st_mtime_ns

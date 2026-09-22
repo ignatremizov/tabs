@@ -19,8 +19,12 @@ What changed, and when?  You know the drill.
 - Treat native group movement and metadata editing separately: reordering an
   existing group no longer overwrites newer native names/colors/collapse state,
   and one-field outline edits preserve the other current native values.
-- Separate deliberate version selection from current-version builds/signing.
-  Package reproducible tracked inputs, refuse output replacement, and sign one
+- Keep automatic build-number increments for normal build/sign commands, with
+  one shared increment for paired browser builds and one for a build-and-sign
+  operation. Retain explicit current-version targets for verification/resume.
+  Record generated version metadata separately from committed source, without
+  automatically staging or committing it. Package reproducible tracked inputs,
+  refuse output replacement, and sign one
   immutable prebuilt archive with pinned tooling and environment-only secrets.
   Record uncertain submissions instead of retrying uploads; independently
   verify payloads and normal signature-enforcing Firefox installations.

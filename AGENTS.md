@@ -243,6 +243,14 @@ export const api = isFirefox ? browser : chrome;
 
 ### Commands
 
+Normal builds intentionally increment the visible build number. Preserve this
+workflow: `make` / `make all` bump once for both browsers, single-browser build
+targets bump once, and `make firefox-sign` bumps once before building/signing.
+Use explicit `*-current` targets for same-version verification or signing a ZIP
+already built. Signing may overlay generated version metadata on committed code;
+do not weaken the other source, artifact, or single-submission checks. See
+`docs/releasing.md`. CI uses `release-current` and never increments or signs.
+
 ```bash
 # Build for both browsers
 make all

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Exact-version packaging, immutable signing submissions, and payload verification.
 
-Signing is explicit and never increments versions or retries an AMO submission.
+The normal sign-next workflow increments once before building and signing.
+Low-level build/sign and verification retain an explicitly selected version;
+no workflow automatically retries an uncertain AMO submission.
 Payload verification is not cryptographic signature verification: finish a real
 release with tests/firefox-signed-smoke.py in a fresh, signature-enforcing profile.
 """
@@ -29,6 +31,7 @@ SIGNATURES = {"META-INF/cose.manifest", "META-INF/cose.sig", "META-INF/manifest.
               "META-INF/mozilla.sf", "META-INF/mozilla.rsa"}
 MAX_FILE_BYTES = 64 * 1024 * 1024
 MAX_ARCHIVE_BYTES = 256 * 1024 * 1024
+VERSION_FILES = ("manifest-ff.json", "manifest.json", "VERSION_BUILD")
 
 
 def sha256(data):
@@ -89,10 +92,42 @@ def package_path(path):
     return parts[0] in ASSET_DIRS and parts[:2] != ("docs", "dev")
 
 
-def source_payload(source, browser, *, index=False, allow_dirty=False):
+def version_snapshot(source, commit):
+    """Permit only generated version edits over otherwise committed source.
+
+    An automatic bump must not require an implicit git commit, nor become a
+    blanket permission to sign other dirty code or changed manifest privileges.
+    Return exact metadata bytes so receipts and later checks record the overlay.
+    """
+    changed = set()
+    for args in (("diff", "--name-only", "-z"), ("diff", "--cached", "--name-only", "-z")):
+        changed.update(filter(None, git(source, *args).decode().split("\0")))
+    if changed - set(VERSION_FILES):
+        raise ValueError("Signing source/index has non-version changes; commit reviewed code first")
+    metadata(source)
+    snapshot = {name: (source / name).read_bytes() for name in VERSION_FILES}
+    for name in VERSION_FILES[:2]:
+        previous = strict_json(git(source, "show", f"{commit}:{name}"))
+        current = strict_json(snapshot[name])
+        staged = strict_json(git(source, "show", f":{name}"))
+        staged.pop('version')
+        previous_version, current_version = previous.pop("version"), current.pop("version")
+        if previous != current or previous != staged:
+            raise ValueError(f"Only the version field may differ from committed {name}")
+        if tuple(map(int, current_version.split('.'))) < tuple(map(int, previous_version.split('.'))):
+            raise ValueError("Automatic version metadata must not downgrade the committed release")
+    if git(source, "rev-parse", "HEAD").decode().strip() != commit:
+        raise ValueError("Source commit changed during version validation")
+    return snapshot
+
+
+def source_payload(source, browser, *, index=False, allow_dirty=False, allow_version_bump=False):
     source = source.resolve()
     info = metadata(source)
-    commit = git(source, "rev-parse", "HEAD").decode().strip() if allow_dirty else require_clean(source)
+    if allow_dirty and allow_version_bump:
+        raise ValueError("Version-only signing cannot enable general dirty-source packaging")
+    commit = git(source, "rev-parse", "HEAD").decode().strip() if allow_dirty or allow_version_bump else require_clean(source)
+    versions = version_snapshot(source, commit) if allow_version_bump else None
     tracked = set(git(source, "ls-files", "-z").decode().split("\0"))
     for name in ("manifest-ff.json", "manifest.json", "VERSION_BUILD"):
         if name not in tracked:
@@ -127,8 +162,14 @@ def source_payload(source, browser, *, index=False, allow_dirty=False):
             raise ValueError(f"Package member too large: {name}")
         payload[name] = data
     manifest_name = "manifest-ff.json" if browser == "firefox" else "manifest.json"
-    payload["manifest.json"] = git(source, "show", f"{commit}:{manifest_name}") if (index or not allow_dirty) else (source / manifest_name).read_bytes()
-    if not allow_dirty and require_clean(source) != commit:
+    payload["manifest.json"] = versions[manifest_name] if versions is not None else (
+        git(source, "show", f"{commit}:{manifest_name}") if (index or not allow_dirty) else (source / manifest_name).read_bytes())
+    if versions is not None:
+        if version_snapshot(source, commit) != versions or metadata(source) != info:
+            raise ValueError("Version metadata changed during packaging")
+        info["versionOverrides"] = {name: sha256(data) for name, data in versions.items()
+                                    if data != git(source, "show", f"{commit}:{name}")}
+    elif not allow_dirty and require_clean(source) != commit:
         raise ValueError("Release source changed while taking its snapshot")
     if sum(map(len, payload.values())) > MAX_ARCHIVE_BYTES:
         raise ValueError("Package payload exceeds size limit")
@@ -195,8 +236,8 @@ def write_json(path, value):
     exclusive_write(path, (json.dumps(value, indent=2, sort_keys=True) + "\n").encode())
 
 
-def build(source, browser, output, allow_dirty=False):
-    payload, info = source_payload(source, browser, allow_dirty=allow_dirty)
+def build(source, browser, output, allow_dirty=False, *, allow_version_bump=False):
+    payload, info = source_payload(source, browser, allow_dirty=allow_dirty, allow_version_bump=allow_version_bump)
     data = io.BytesIO()
     with zipfile.ZipFile(data, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         for name, content in sorted(payload.items()):
@@ -217,7 +258,7 @@ def build(source, browser, output, allow_dirty=False):
     return {**info, "archive": str(package)}
 
 
-def verify(unsigned, signed, source=None):
+def verify(unsigned, signed, source=None, *, allow_version_bump=False):
     expected = read_archive(unsigned)
     if any(name.startswith("META-INF/") for name in expected):
         raise ValueError("Unsigned input unexpectedly contains signing metadata")
@@ -229,7 +270,7 @@ def verify(unsigned, signed, source=None):
     if not isinstance(addon_id, str) or not addon_id:
         raise ValueError("The signed Firefox payload requires a stable addon ID")
     if source:
-        payload, info = source_payload(Path(source), "firefox", index=True)
+        payload, info = source_payload(Path(source), "firefox", index=True, allow_version_bump=allow_version_bump)
         if expected != payload:
             raise ValueError("Unsigned payload differs from the clean source index")
     actual = read_archive(signed)
@@ -257,7 +298,8 @@ def verify(unsigned, signed, source=None):
             "payloadFiles": len(expected), "normalizedFiles": normalized,
             "signatureMembers": sorted(signatures), "payloadVerified": True,
             "signatureVerified": False, "requiresFirefoxInstallCheck": True,
-            "sourceCommit": info["sourceCommit"] if source else None}
+            "sourceCommit": info["sourceCommit"] if source else None,
+            "versionOverrides": info.get("versionOverrides", {}) if source else {}}
 
 
 def load_signing_environment(source):
@@ -332,39 +374,78 @@ def run_tool(args, logfile, *, credentials=False):
             raise
 
 
-def sign(source, unsigned, output, *, verify_only=False):
+def signing_tool(source):
+    load_signing_environment(source)
+    timeout = int(os.environ.get("WEB_EXT_TIMEOUT_MS", "900000"))
+    if timeout <= 0:
+        raise ValueError("WEB_EXT_TIMEOUT_MS must be a positive integer")
+    tool = os.environ.get("WEB_EXT_BIN") or shutil.which("web-ext")
+    if not tool:
+        raise ValueError(f"Install web-ext@{WEB_EXT_VERSION} in a private tool directory and set WEB_EXT_BIN; no unpinned npx fallback is used")
+    installed = subprocess.check_output([tool, "--version"], env=tool_environment(), text=True).strip()
+    if installed != WEB_EXT_VERSION:
+        raise ValueError(f"Expected web-ext {WEB_EXT_VERSION}, found a different version")
+    tool_environment(credentials=True)
+    return tool, timeout
+
+
+def require_resolved_submissions(output, addon_id):
+    for marker in output.glob('.tabs-submission-*.json'):
+        state = strict_json(marker.read_bytes())
+        if state['addonId'] != addon_id:
+            continue
+        completed = output / f".tabs-completed-{state['version']}.json"
+        message = f"An unresolved signing submission exists for {state['version']}; collect it with --verify-only before starting a new version"
+        if not completed.is_file():
+            raise ValueError(message)
+        result = strict_json(completed.read_bytes())
+        if any(result.get(key) != state.get(key) for key in ('version', 'addonId', 'sourceCommit', 'unsignedSha256')):
+            raise ValueError(message)
+        archive = Path(result['archive'])
+        if archive.parent != output or archive.is_symlink() or not archive.is_file() or sha256(archive.read_bytes()) != result['sha256']:
+            raise ValueError(message)
+
+
+def sign_next(source, output):
+    source, output = Path(source).resolve(), Path(output).resolve()
+    _, before = source_payload(source, 'firefox', allow_version_bump=True)
+    require_resolved_submissions(output, before['addonId'])
+    signing_tool(source)  # Fail configuration checks before changing a version.
+    if source_payload(source, 'firefox', allow_version_bump=True)[1] != before:
+        raise ValueError('Source changed during signing preflight; no version was incremented')
+    subprocess.run([str(source / 'bin/update-version.sh')], cwd=source,
+                   env=tool_environment(), check=True)
+    if tuple(map(int, metadata(source)['version'].split('.'))) <= tuple(map(int, before['version'].split('.'))):
+        raise ValueError('The build counter did not increase; no signing submission was made')
+    built = build(source, 'firefox', output, allow_version_bump=True)
+    if built['sourceCommit'] != before['sourceCommit']:
+        raise ValueError('Source commit changed while building; no signing submission was made')
+    return sign(source, built['archive'], output, allow_version_bump=True)
+
+
+def sign(source, unsigned, output, *, verify_only=False, allow_version_bump=False):
     source, unsigned, output = Path(source).resolve(), Path(unsigned).resolve(), Path(output).resolve()
-    payload, info = source_payload(source, "firefox", index=True)
+    payload, info = source_payload(source, "firefox", index=True, allow_version_bump=allow_version_bump)
     if read_archive(unsigned) != payload:
         raise ValueError("Prebuilt Firefox archive does not match the clean reviewed source index")
     output.mkdir(parents=True, exist_ok=True)
     marker = output / f".tabs-submission-{info['version']}.json"
     if verify_only:
         state = strict_json(marker.read_bytes())
-        if state["unsignedSha256"] != sha256(unsigned.read_bytes()) or state["sourceCommit"] != info["sourceCommit"]:
+        if (state["unsignedSha256"] != sha256(unsigned.read_bytes()) or state["sourceCommit"] != info["sourceCommit"]
+            or state.get('versionOverrides', {}) != info.get('versionOverrides', {})):
             raise ValueError("Recorded submission differs from this source/archive")
         stage = Path(state["stage"]).resolve()
         if not stage.is_relative_to(output) or not stage.name.startswith(".tabs-sign-"):
             raise ValueError("Recorded signing workspace is outside the artifact directory")
         status = None
     else:
-        load_signing_environment(source)
-        timeout = int(os.environ.get("WEB_EXT_TIMEOUT_MS", "900000"))
-        if timeout <= 0:
-            raise ValueError("WEB_EXT_TIMEOUT_MS must be a positive integer")
         if marker.exists():
             raise ValueError("This version was already submitted. Do not resubmit; collect its existing process/artifact, then use --verify-only")
         for path in output.glob("*.xpi"):
             if strict_json(read_archive(path)["manifest.json"]).get("version") == info["version"]:
                 raise FileExistsError("A signed artifact with this version already exists")
-        tool = os.environ.get("WEB_EXT_BIN") or shutil.which("web-ext")
-        if not tool:
-            raise ValueError(f"Install web-ext@{WEB_EXT_VERSION} in a private tool directory and set WEB_EXT_BIN; no unpinned npx fallback is used")
-        installed = subprocess.check_output([tool, "--version"], env=tool_environment(), text=True).strip()
-        if installed != WEB_EXT_VERSION:
-            raise ValueError(f"Expected web-ext {WEB_EXT_VERSION}, found a different version")
-        # Validate credentials before reserving an external submission.
-        tool_environment(credentials=True)
+        tool, timeout = signing_tool(source)
         stage = Path(tempfile.mkdtemp(prefix=f".tabs-sign-{info['version']}-", dir=output))
         source_dir = stage / "source"
         source_dir.mkdir()
@@ -379,6 +460,9 @@ def sign(source, unsigned, output, *, verify_only=False):
         source_dir.chmod(0o555)
         if run_tool([tool, "lint", "--source-dir", str(source_dir), "--no-config-discovery"], stage / "lint.log"):
             raise ValueError("Prebuilt source failed lint; no AMO submission was made")
+        current_payload, current_info = source_payload(source, 'firefox', index=True, allow_version_bump=allow_version_bump)
+        if current_payload != payload or current_info != info:
+            raise ValueError('Source changed before signing; no submission was made')
         state = {**info, "unsignedSha256": sha256(unsigned.read_bytes()), "stage": str(stage), "phase": "submitted"}
         # Exclusive reservation, including ambiguous failures and timeouts.
         with marker.open("x") as handle:
@@ -391,10 +475,11 @@ def sign(source, unsigned, output, *, verify_only=False):
     candidates = list((stage / "artifacts").glob("*.xpi"))
     if len(candidates) != 1:
         raise ValueError("No unique downloaded XPI. Submission remains recorded; do not restart signing automatically")
-    if require_clean(source) != info["sourceCommit"]:
+    current_payload, current_info = source_payload(source, 'firefox', index=True, allow_version_bump=allow_version_bump)
+    if current_payload != payload or current_info != info:
         raise ValueError("Source commit changed while signing; downloaded artifact retained without publication")
     candidate = candidates[0]
-    result = verify(unsigned, candidate, source)
+    result = verify(unsigned, candidate, source, allow_version_bump=allow_version_bump)
     target = output / candidate.name
     exclusive_write(target, candidate.read_bytes())
     result.update(archive=str(target), webExtExitCode=status)
@@ -406,6 +491,9 @@ def sign(source, unsigned, output, *, verify_only=False):
         result = previous
     else:
         write_json(receipt, result)
+    write_json(output / f".tabs-completed-{info['version']}.json", {
+        **info, 'unsignedSha256': state['unsignedSha256'],
+        'archive': str(target), 'sha256': result['sha256']})
     return result
 
 
@@ -439,11 +527,13 @@ def main():
     packaging.add_argument("--browser", choices=("firefox", "chromium"), required=True)
     packaging.add_argument("--output", type=Path, required=True)
     packaging.add_argument("--allow-dirty", action="store_true", help="Development build only; package files must still be tracked/staged")
+    packaging.add_argument("--allow-version-bump", action="store_true", help="Permit generated version fields over otherwise committed source")
     verification = commands.add_parser("verify", help="Verify source payload; does not replace Firefox signature enforcement")
     verification.add_argument("--unsigned", type=Path, required=True)
     verification.add_argument("--signed", type=Path, required=True)
     verification.add_argument("--source", type=Path)
     verification.add_argument("--receipt", type=Path)
+    verification.add_argument("--allow-version-bump", action="store_true")
     extraction = commands.add_parser("unpack", help="Extract a validated package into a new development directory")
     extraction.add_argument("--unsigned", type=Path, required=True)
     extraction.add_argument("--output", type=Path, required=True)
@@ -452,18 +542,24 @@ def main():
     signing.add_argument("--unsigned", type=Path, required=True)
     signing.add_argument("--output", type=Path, required=True)
     signing.add_argument("--verify-only", action="store_true")
+    signing.add_argument("--allow-version-bump", action="store_true")
+    next_signing = commands.add_parser("sign-next", help="Increment once, build, and sign the new Firefox version")
+    next_signing.add_argument("--source", type=Path, default=ROOT)
+    next_signing.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     try:
         if args.command == "build":
-            result = build(args.source, args.browser, args.output, args.allow_dirty)
+            result = build(args.source, args.browser, args.output, args.allow_dirty, allow_version_bump=args.allow_version_bump)
         elif args.command == "unpack":
             result = unpack(args.unsigned, args.output)
         elif args.command == "verify":
-            result = verify(args.unsigned, args.signed, args.source)
+            result = verify(args.unsigned, args.signed, args.source, allow_version_bump=args.allow_version_bump)
             if args.receipt:
                 write_json(args.receipt, result)
+        elif args.command == 'sign-next':
+            result = sign_next(args.source, args.output)
         else:
-            result = sign(args.source, args.unsigned, args.output, verify_only=args.verify_only)
+            result = sign(args.source, args.unsigned, args.output, verify_only=args.verify_only, allow_version_bump=args.allow_version_bump)
         print(json.dumps(result, indent=2, sort_keys=True))
         return 0
     except (OSError, ValueError, KeyError, zipfile.BadZipFile, subprocess.SubprocessError) as err:

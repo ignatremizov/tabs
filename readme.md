@@ -259,20 +259,29 @@ Upstream: https://github.com/ToyKeeper/tktsto
 
 ### Firefox
 
-Use `make all` or `make firefox-zip-current` to package the current manifest
-version without incrementing it. Package inputs must be tracked or staged, and
-a different archive with the same output filename is never overwritten. For
-an unreleased development build, choose a separate artifact directory:
+Use `make` or `make all` to increment the build number once and produce both
+browser ZIPs with that new version. `make firefox-zip` increments and builds
+Firefox only; `make chrome-zip` and `make chrome-dir` also increment. Each normal
+build invocation produces a visibly newer iteration for installation.
+
+Package inputs must be tracked or staged, and a different archive with the same
+output filename is never overwritten. For an unreleased development build:
 
 ```sh
-ARTIFACTS_DIR=/tmp/tabs-development make firefox-zip-current
+ARTIFACTS_DIR=/tmp/tabs-development make firefox-zip
 ```
 
 The unsigned ZIP can be loaded temporarily using
-`about:debugging#/runtime/this-firefox`. Signing requires a clean, committed
-source tree, a prebuilt matching ZIP, AMO credentials, and the tested pinned
-`web-ext` tool. **Signing never increments the version or rebuilds the input.**
-Use `make bump-version` only when deliberately selecting a new release version.
+`about:debugging#/runtime/this-firefox`. **`make firefox-sign` increments once,
+builds that new version, and signs the exact resulting ZIP.** Signing requires
+committed code, AMO credentials, and the tested pinned `web-ext` tool. Generated
+version changes may remain uncommitted; their hashes are recorded separately.
+No automatic staging, commit, or push occurs.
+
+Use `firefox-zip-current`, `chrome-zip-current`, or `firefox-sign-current` only
+when deliberately keeping the already-selected version. For example, after
+building a ZIP, `make firefox-sign-current` signs that same iteration instead
+of incrementing again. `make release-current` is the no-bump clean build for CI.
 
 See [Release verification](docs/releasing.md) for exact commands, single-submission
 safeguards, manifest/payload verification, and normal signed-installation checks.
@@ -289,7 +298,8 @@ API credentials:
 
 - Create API keys at https://addons.mozilla.org/developers/ ("API Keys").
 - Put them in `.env` as `JWT_ISSUER` and `JWT_SECRET`.
-- Build the clean current version, then run `make firefox-sign`; see the
+- Commit the reviewed code, then run `make firefox-sign` to increment, build,
+  and sign the next iteration; see the
   [release verification guide](docs/releasing.md) before submitting.
 
 FUTURE: I also recommend installing [the backup/sync server](server/readme.md),

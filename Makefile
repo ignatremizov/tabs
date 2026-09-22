@@ -2,8 +2,10 @@
 # Copyright (C) 2025 Selene ToyKeeper & Ignat Remizov
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
+.DEFAULT_GOAL := all
+
 .PHONY: all help firefox-zip firefox-zip-current chrome-zip \
-	chrome-zip-current chrome-dir firefox-sign tag test test-node todo \
+	chrome-zip-current chrome-dir chrome-dir-current firefox-sign firefox-sign-current tag test test-node todo \
 	coverage test-firefox-context test-firefox-recovery test-firefox-restart test-firefox-presentation test-firefox-convergence test-release release-current bump-version v
 
 ifneq ($(filter v,$(MAKECMDGOALS)),)
@@ -18,9 +20,19 @@ ARTIFACTS_DIR ?= $(CURDIR)/dist
 export ARTIFACTS_DIR
 CHROMIUM_DIR ?= $(ARTIFACTS_DIR)/chromium
 
-all: firefox-zip-current chrome-zip-current
+# Signing owns its bump/build sequence. Do not race it with another version
+# selection in a multi-goal (possibly parallel) make invocation.
+ifneq ($(filter firefox-sign,$(MAKECMDGOALS)),)
+ifneq ($(filter all firefox-zip chrome-zip chrome-dir bump-version firefox-sign-current,$(MAKECMDGOALS)),)
+$(error Run firefox-sign separately; it increments, builds, and signs once)
+endif
+endif
 
-# Version selection is deliberate and independent of building/signing.
+all: bump-version
+	./make-zip.sh firefox
+	./make-zip.sh chromium
+
+# One shared prerequisite means a paired/parallel browser build increments once.
 bump-version:
 	./bin/update-version.sh
 
@@ -33,13 +45,16 @@ test-release:
 
 help:
 	@echo "Available targets:"
-	@echo "  all          - Build both current-version development ZIPs (no bump)"
-	@echo "  firefox-zip  - Alias for firefox-zip-current (no bump)"
+	@echo "  all          - Increment once and build both browser ZIPs (default)"
+	@echo "  firefox-zip  - Increment the build number and build Firefox"
 	@echo "  firefox-zip-current - Build Firefox zip with current manifest version"
-	@echo "  chrome-zip   - Alias for chrome-zip-current (no bump)"
+	@echo "  chrome-zip   - Increment the build number and build Chromium"
 	@echo "  chrome-zip-current - Build Chromium zip with current manifest version"
-	@echo "  chrome-dir   - Extract into a NEW CHROMIUM_DIR for Load Unpacked"
-	@echo "  firefox-sign - Sign prebuilt, clean current-version Firefox archive ONCE"
+	@echo "  chrome-dir   - Increment, build, and extract into a NEW CHROMIUM_DIR"
+	@echo "  chrome-dir-current - Extract current version without incrementing"
+	@echo "  firefox-sign - Increment once, build, and sign the new Firefox version"
+	@echo "  firefox-sign-current - Sign a prebuilt current version without incrementing"
+	@echo "  SIGN_ARGS=--verify-only - Collect an existing submission without uploading"
 	@echo "  bump-version - Explicitly increment the build counter in both manifests"
 	@echo "  release-current - Build clean committed source without version changes"
 	@echo "  test-release - Synthetic signing and packaging safety tests (no AMO)"
@@ -57,22 +72,31 @@ help:
 
 # make a zip file suitable for loading into
 # about:debugging#/runtime/this-firefox -> Load Temporary Add-On
-firefox-zip: firefox-zip-current
+firefox-zip: bump-version
+	./make-zip.sh firefox
 
 firefox-zip-current:
 	./make-zip.sh firefox
 
-chrome-zip: chrome-zip-current
+chrome-zip: bump-version
+	./make-zip.sh chromium
 
 chrome-zip-current:
 	./make-zip.sh chromium
 
-chrome-dir: chrome-zip-current
+chrome-dir: chrome-zip
+	@version=$$(python3 -c 'import json; print(json.load(open("manifest.json"))["version"])'); \
+	python3 -B bin/release.py unpack --unsigned "$(ARTIFACTS_DIR)/ignatremizov-tabs-$$version-chromium.zip" --output "$(CHROMIUM_DIR)"
+
+chrome-dir-current: chrome-zip-current
 	@version=$$(python3 -c 'import json; print(json.load(open("manifest.json"))["version"])'); \
 	python3 -B bin/release.py unpack --unsigned "$(ARTIFACTS_DIR)/ignatremizov-tabs-$$version-chromium.zip" --output "$(CHROMIUM_DIR)"
 
 firefox-sign:
-	./bin/firefox-sign.sh
+	./bin/firefox-sign.sh $(SIGN_ARGS)
+
+firefox-sign-current:
+	./bin/firefox-sign.sh --current $(SIGN_ARGS)
 
 tag:
 	./bin/tag-version.sh $(TAG_ARGS)

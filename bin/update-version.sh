@@ -6,6 +6,7 @@
 set -eu
 
 ROOT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT_DIR"
 . "$ROOT_DIR/bin/version-utils.sh"
 ensure_git_repo
 
@@ -54,19 +55,17 @@ NEW_VERSION="${MAJOR}.${MINOR}.${PATCH}.${BUILD}"
 
 echo "Updating version to: $NEW_VERSION"
 
-MANIFESTS="$ROOT_DIR/manifest.json $ROOT_DIR/manifest-ff.json"
-
 # Update version in manifests using sed (GNU/BSD compatible)
 if sed --version >/dev/null 2>&1; then
-  for manifest in $MANIFESTS; do
+  for manifest in "$ROOT_DIR/manifest.json" "$ROOT_DIR/manifest-ff.json"; do
     sed -i "s/\"version\": \"[^\"]*\"/\"version\": \"$NEW_VERSION\"/" "$manifest"
   done
 else
-  for manifest in $MANIFESTS; do
+  for manifest in "$ROOT_DIR/manifest.json" "$ROOT_DIR/manifest-ff.json"; do
     sed -i '' "s/\"version\": \"[^\"]*\"/\"version\": \"$NEW_VERSION\"/" "$manifest"
   done
 fi
 
 echo "$BASE_VERSION $BUILD" > "$BUILD_FILE"
 
-echo "Version updated in: $MANIFESTS"
+echo "Version updated in: $ROOT_DIR/manifest.json $ROOT_DIR/manifest-ff.json"
