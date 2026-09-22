@@ -2451,7 +2451,7 @@ export class Tree {
   // Further tie-breaking prefers the window with the most metadata,
   // so a window with a label beats one without... and further ties are
   // broken by which window occurs first in the session tree.
-  async findMatchingWindow (window, excludeNodeIds) {
+  async findMatchingWindow (window, excludeNodeIds, { attachTabs = true } = {}) {
     // find the "needle" (realTabList) in the "haystack"
     const result = {};  // data to return
     result.loadedTabNodesWithNoTab = [];
@@ -2481,6 +2481,12 @@ export class Tree {
       await bestMatch.winNode.setTabFields({
         windowId: window.id
       }, { reason: 'mergeOpenWindowsIntoTree' });
+      if (! attachTabs) {
+        // Startup has already reserved durable tab-session identities across
+        // every window. Leave all tab assignment to that authoritative pass.
+        result.winNode = bestMatch.winNode;
+        return result;
+      }
       // update the tabId and loaded / wasLoaded state of this window's tabs
       // search loaded tabs first, then wasLoaded, then unloaded
       // (to avoid attaching to an unloaded tab when a loaded tab exists)

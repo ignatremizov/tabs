@@ -333,6 +333,69 @@ export async function registerNativeContextTests(h) {
     eq(one.tabId, 21); eq(two.tabId, 22);
   }));
 
+  test('startup session identities survive reused numeric IDs without borrowing saved descendants', () => fixture(async ({ state, bkgd, tree, win, addTab }) => {
+    const outside = await addTab(win);
+    const a = await addTab(win, {cookieStoreId: 'firefox-container-1'});
+    const b = await addTab(a, {cookieStoreId: 'firefox-container-2', url: a.url});
+    const saved = await addChild(a, {url: 'https://example.test/saved', wasLoaded: true,
+      cookieStoreId: b.cookieStoreId, containerProfileId: 'test-profile'});
+    const identities = new Map();
+    for (const [index, node] of [outside, a, b].entries()) {
+      const tab = state.tabs[index];
+      tab.id += 1; // Every restored ID collides with a different persisted tab.
+      identities.set(tab.id, node);
+    }
+    tree.getTabNodeFromSession = async id => identities.get(id);
+    tree.getWindowNodeFromSession = async () => win;
+    await bkgd.mergeOpenWindowsIntoTree();
+    eq(outside.tabId, 2); eq(a.tabId, 3); eq(b.tabId, 4);
+    assert(outside.loaded && a.loaded && b.loaded);
+    eq(b.parent, a); eq(saved.parent, a);
+    eq(saved.loaded, false); eq(saved.tabId, undefined);
+    eq(saved.url, 'https://example.test/saved');
+    eq(win.getLoadedTabs().length, 3);
+    eq(tree.root.findNodes(node => node.url === a.url).length, 2);
+  }));
+
+  test('startup heuristics reserve nodes with an authoritative session match elsewhere in the snapshot', () => fixture(async ({ state, bkgd, tree, win, addTab }) => {
+    const original = await addTab(win, {url: 'https://example.test/repeated'});
+    const saved = await addChild(original, {url: 'https://example.test/history'});
+    state.tabs[0].id = 100;
+    // A newly opened same-URL tab is enumerated before the restored original.
+    state.tabs.unshift({...state.tabs[0], id: 99, index: 0});
+    state.tabs[1].index = 1;
+    tree.getTabNodeFromSession = async id => id === 100 ? original : null;
+    tree.getWindowNodeFromSession = async () => win;
+    await bkgd.mergeOpenWindowsIntoTree();
+    eq(original.tabId, 100); eq(saved.parent, original);
+    eq(saved.url, 'https://example.test/history'); eq(saved.loaded, false);
+    assert(tree.getNodeByTabId(99) !== original);
+    eq(tree.getNodeByTabId(100), original);
+  }));
+
+  test('startup assigns restored window IDs before attaching their nested tabs', () => fixture(async ({ state, bkgd, tree, win, addTab }) => {
+    const parent = await addTab(win);
+    const child = await addTab(parent);
+    const saved = await addChild(parent, { url: 'https://example.test/saved-history' });
+    // The native window and its tabs were restored with different IDs. The
+    // durable session values, not the old numbers, identify the saved tree.
+    state.windows[0].id = 12;
+    const identities = new Map();
+    for (const [index, node] of [parent, child].entries()) {
+      state.tabs[index].id += 100;
+      state.tabs[index].windowId = 12;
+      identities.set(state.tabs[index].id, node);
+    }
+    tree.getWindowNodeFromSession = async id => id === 12 ? win : null;
+    tree.getTabNodeFromSession = async id => identities.get(id);
+    await bkgd.mergeOpenWindowsIntoTree();
+    eq(win.windowId, 12, 'Bind the restored window before a later reconciliation is needed');
+    eq(tree.root.getWindowId(12), win);
+    eq(parent.windowId, 12); eq(child.windowId, 12);
+    eq(parent.parent, win); eq(child.parent, parent); eq(saved.parent, parent);
+    eq(saved.loaded, false);
+  }));
+
   test('native grouping preserves member nesting and promotes live and saved nonmembers', () => fixture(async ({ state, bkgd, tree, win, addTab, addGroup }) => {
     const a = await addTab(win);
     const b = await addTab(a);

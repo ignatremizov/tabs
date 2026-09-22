@@ -861,6 +861,27 @@ export class Bkgd {
     }
 
     const mergeStartedAt = Date.now();
+    // Read durable browser-session identities before any numeric/URL binding
+    // repair can clear or claim them. Browser IDs are reused after restart.
+    const sessionWindowNodesById = new Map();
+    const sessionTabNodesById = new Map();
+    await Promise.all(windows.map(async window => {
+      const winNode = await this.tree.getWindowNodeFromSession?.(window.id);
+      if (winNode) sessionWindowNodesById.set(window.id, winNode);
+      await Promise.all(window.tabs.map(async tab => {
+        const node = await this.tree.getTabNodeFromSession?.(tab.id);
+        if (node && this.tree.browserTabContextMatches(node, tab, true)) {
+          sessionTabNodesById.set(tab.id, node);
+        }
+      }));
+    }));
+    const reservedWindowIds = new Set(
+      [...sessionWindowNodesById.values()].map(node => node.id)
+    );
+    const reservedTabIds = new Set(
+      [...sessionTabNodesById.values()].map(node => node.id)
+    );
+    const hasSessionTabBindings = sessionTabNodesById.size > 0;
     // attach browser windows to window nodes
     const attachedWindows = [];
     const attachedNodeIds = new Set();
@@ -873,15 +894,14 @@ export class Bkgd {
       debug(`Window ID: ${window.id}`);
       // Firefox session values survive restored browser IDs, so consult them
       // before stale numeric IDs or URL-based matching.
-      let winNode = null;
-      let matchedBySession = false;
-      if (this.tree.getWindowNodeFromSession) {
-        winNode = await this.tree.getWindowNodeFromSession(window.id);
-        matchedBySession = Boolean(winNode);
-      }
+      let winNode = sessionWindowNodesById.get(window.id) || null;
+      const matchedBySession = Boolean(winNode);
       // Otherwise prefer an already-loaded exact windowId match within the
       // same browser session.
-      if (! winNode) winNode = this.tree.root.getWindowId(window.id);
+      if (! winNode) {
+        const numeric = this.tree.root.getWindowId(window.id);
+        if (numeric && ! reservedWindowIds.has(numeric.id)) winNode = numeric;
+      }
       if (winNode && attachedNodeIds.has(winNode.id)) {
         winNode = null;
       }
@@ -900,7 +920,11 @@ export class Bkgd {
       };
       let matchedByContents = false;
       if (! winNode) {
-        match = await this.tree.findMatchingWindow(window, attachedNodeIds);
+        match = await this.tree.findMatchingWindow(
+          window,
+          new Set([...attachedNodeIds, ...reservedWindowIds]),
+          { attachTabs: false }
+        );
         winNode = match.winNode;
         matchedByContents = Boolean(winNode);
       }
@@ -908,35 +932,15 @@ export class Bkgd {
         // findMatchingWindow() already claimed this browser ID through
         // setTabFields(), including its uniqueness check.
         if (! matchedByContents) {
-          await this.tree.clearConflictingWindowBindings(
-            winNode,
-            window.id,
+          await winNode.setTabFields(
+            { windowId: window.id },
             { reason: 'mergeOpenWindowsIntoTree' }
           );
         }
         //debug('winNode before loading:', winNode.asTextBranch());
         await winNode.load({ reason: 'mergeOpenWindowsIntoTree' });
-        // reload any extension pages which failed to re-open
-        // after browser restart or extension restart
-        // (but do it slowly, to give the browser time to load)
-        const previouslyLoaded = match.loadedTabNodesWithNoTab;
-        if (previouslyLoaded?.length > 0) {
-          const deferredLoad = async () => {
-            for (const node of previouslyLoaded) {
-              if (extUrl && node.url?.startsWith(extUrl)) {
-                debug(`restoreLoadedTab: ${node.toLine()}`);
-                await node.load({reason: 'restoreLoadedTab' });
-                await new Promise(r => setTimeout(r, delayPerTab));
-              }
-            }
-          };
-          setTimeout(() => {
-            deferredLoad().catch((err) => {
-              error('Deferred extension-tab restore failed', err);
-            });
-          }, delay);
-          delay += (delayPerTab + 10) * previouslyLoaded.length;
-        }
+        // Reopen missing extension pages only after the tab-assignment pass
+        // below has distinguished them from restored session-bound tabs.
       }
       // if nothing found, add new window node to the tree
       else {
@@ -979,7 +983,8 @@ export class Bkgd {
       oldTabNodesById
     } = this.tree.buildTabBindingIndex();
     const liveTabNodesById = new Map();
-    const unavailableTabNodeIds = new Set();
+    // Heuristics cannot borrow a node reserved for a later session match.
+    const unavailableTabNodeIds = new Set(reservedTabIds);
     const getIndexedTabNodes = (tabId) => {
       const direct = (tabNodesById.get(tabId) || []).filter((node) =>
         (this.tree.nodes[node.id] === node) && (node.tabId === tabId)
@@ -1006,20 +1011,6 @@ export class Bkgd {
       const winNode = obj.winNode;
       const window = obj.window;
       const candidates = buildStartupTabCandidateIndex(this.tree, winNode);
-      const sessionTabNodesById = new Map();
-      if (this.tree.getTabNodeFromSession) {
-        const sessionNodes = await Promise.all(
-          window.tabs.map((tab) =>
-            this.tree.getTabNodeFromSession(tab.id)
-          )
-        );
-        for (let index = 0; index < window.tabs.length; index += 1) {
-          const sessionNode = sessionNodes[index];
-          if (sessionNode) {
-            sessionTabNodesById.set(window.tabs[index].id, sessionNode);
-          }
-        }
-      }
       const rememberTabPromises = [];
       let pinnedPrefixCount = 0;
       for (const browserTab of window.tabs) {
@@ -1050,14 +1041,14 @@ export class Bkgd {
             tabNode
           );
         };
-        // detect whether tab is already in tree
-        // (it usually should be, since findMatchingWindow() attaches tabIds)
-        const attachedTabNode = getIndexedTabNode(tab.id);
+        // Prefer durable session identity to reused numeric IDs. Retain the
+        // numeric fallback for browsers/old sessions without those identities.
+        const attachedTabNode = hasSessionTabBindings ? null : getIndexedTabNode(tab.id);
         const sessionTabNode = sessionTabNodesById.get(tab.id);
         let tabNode = null;
         if (sessionTabNode
           && this.tree.browserTabContextMatches(sessionTabNode, tab, true)
-          && (! unavailableTabNodeIds.has(sessionTabNode.id))) {
+          && (! claimedTabNodeIds.has(sessionTabNode.id))) {
           tabNode = sessionTabNode;
         }
         if ((! tabNode)
@@ -1067,7 +1058,7 @@ export class Bkgd {
           && (attachedTabNode.getWindowNode(false) === winNode)) {
           tabNode = attachedTabNode;
         }
-        if (! tabNode) {
+        if (! tabNode && ! hasSessionTabBindings) {
           tabNode = candidates.findByTabId(
             tab.id,
             unavailableTabNodeIds,
@@ -1084,7 +1075,9 @@ export class Bkgd {
             tab
           );
         }
-        if (! tabNode) {
+        if (! tabNode && ! hasSessionTabBindings) {
+          // With durable session identities present, a new unmatched tab is
+          // not evidence that an unrelated saved page navigated elsewhere.
           tabNode = candidates.findFallback(
             Boolean(tab.pinned),
             unavailableTabNodeIds,
