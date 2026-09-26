@@ -5,12 +5,14 @@
 "use strict";
 import { log, warn } from '/common/common.js';
 import { isRecord } from '/common/serialized-tree.js';
-import { historyDefaults, historyPolicy, historyPruneIds } from '/common/deletion-history.js';
+import { historyDefaults, historyPolicy, historyPruneIds, historyBytes } from '/common/deletion-history.js';
 
 export class IDB {
 
   constructor () {
-    this.dbSchemaNum = 2;
+    // Version 2 was used by an older Ops-store experiment. Advance past it
+    // so those profiles also run the additive history-store migration.
+    this.dbSchemaNum = 3;
     this.dbName = 'TKTSTO';
     this.nodeDbName = 'Nodes';
     this.historyDbName = 'DeletedBranches';
@@ -186,7 +188,8 @@ export class IDB {
               throw new Error('This history entry changed or was already restored');
             }
             rows.set(old.key, { key: old.key, deletedAt: old.deletedAt,
-              status: 'restored', result: consumption.result, bytes: 0 });
+              status: 'restored', result: consumption.result,
+              bytes: historyBytes(consumption.result) + 128 });
           }
           for (const key of purge) rows.delete(key);
           const pruned = historyPruneIds([...rows.values()], limits, now, addition?.key);

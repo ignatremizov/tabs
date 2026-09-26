@@ -32,6 +32,8 @@ export class NodeStore extends Node {
   }
 
   async withPersistenceBatch (mutator, args) {
+    if (this.tree.historyBarrier) await this.tree.historyBarrier;
+    if (this.id && this.tree.nodes[this.id] !== this) return false;
     const inherited = args?._persistNodesLater instanceof Set;
     const persistNodesLater = inherited
       ? args._persistNodesLater
@@ -196,6 +198,8 @@ export class NodeStore extends Node {
   }
 
   async addChild (index, details, ...extra) {
+    if (this.tree.historyBarrier) await this.tree.historyBarrier;
+    if (this.id && this.tree.nodes[this.id] !== this) return false;
     // index is required; assume 1st child if not given
     if (undefined === index) index = 0;
 

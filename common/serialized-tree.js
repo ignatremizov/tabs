@@ -10,7 +10,7 @@ const strings = new Set([
   'id', 'type', 'cookieStoreId', 'containerProfileId', 'containerName',
   'containerColor', 'containerIcon', 'restoreError', 'groupTitle', 'groupColor',
   'windowState', 'label', 'note', 'title', 'url', 'faviconUrl', 'checkbox',
-  'parent', 'parentId'
+  'parent', 'parentId', 'recoveryId'
 ]);
 const booleans = new Set([
   'containerMissing', 'nativeGroup', 'groupCollapsed', 'incognito', 'bookmark',

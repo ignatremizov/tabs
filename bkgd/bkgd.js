@@ -26,6 +26,7 @@ import { createNewUserTutorialNodes } from '/bkgd/new-user.js';
 import { runReconcile } from '/bkgd/reconcile.js';
 import { Containers } from '/bkgd/containers.js';
 import { TabGroups } from '/bkgd/tab-groups.js';
+import { DeletionHistory } from '/bkgd/deletion-history.js';
 import { validateNodeGraph, nestedRecordsToHash, isRecord } from '/common/serialized-tree.js';
 import { commitImportedGraph } from '/bkgd/import-tree.js';
 
@@ -123,6 +124,7 @@ export class Bkgd {
     this.deferredCreatedTabs = new Map();
     this.containers = new Containers(this);
     this.tabGroups = new TabGroups(this);
+    this.deletionHistory = new DeletionHistory(this);
 
     // Reorder requests are debounced per browser window, then executed
     // serially because the browser tab strip APIs are shared mutable state.
@@ -146,6 +148,7 @@ export class Bkgd {
     // local backups
     this.localBackupAlarmName = 'periodicLocalBackup';
     this.reconcileAlarmName = 'periodicReconcile';
+    this.historyAlarmName = 'pruneDeletedBranches';
     this.reconcileIntervalMinutes = 5;
     this.reconcileInFlight = false;
 
@@ -223,6 +226,9 @@ export class Bkgd {
         this.startupReady = true;
         this.resolveTreeLoaded();  // let listeners know the tree is loaded
         this.tree.resolveTreeLoaded();
+        this.initHistoryRetention().catch(err => {
+          warn('Deletion-history maintenance failed; records were retained', err);
+        });
       });
     }).catch((err) => {
       this.failInitialization(err);
@@ -789,7 +795,9 @@ export class Bkgd {
   async onAlarm (alarm) {
     await this.treeLoaded;
     debug(`Bkgd.onAlarm(${alarm.name})`, alarm);
-    if (this.localBackupAlarmName === alarm.name) {
+    if (this.historyAlarmName === alarm.name) {
+      return this.deletionHistory.prune();
+    } else if (this.localBackupAlarmName === alarm.name) {
       debug(this.localBackupAlarmName);
       return await this.tree.downloadBackupNow();
     } else if (this.reconcileAlarmName === alarm.name) {
@@ -797,6 +805,12 @@ export class Bkgd {
         () => runReconcile.call(this, { reason: 'alarm' })
       );
     }
+  }
+
+  async initHistoryRetention () {
+    await this.treeLoaded;
+    await api.alarms.create(this.historyAlarmName, {periodInMinutes: 1440});
+    await this.deletionHistory.prune();
   }
 
   async initReconcileAlarm (reset = false) {
@@ -1551,7 +1565,7 @@ export class Bkgd {
         : null;
       if (! resultPromise) {
         resultPromise = Promise.resolve().then(
-          () => handler.bind(this)(msg, sender)
+          () => this.invokeTreeCommand(handler, msg, sender)
         );
         if (requestKey) {
           const limit = Math.max(1, this.bkgdRequestResultLimit || 1);
@@ -1588,13 +1602,25 @@ export class Bkgd {
     return error(err);
   }
 
+  async invokeTreeCommand (handler, msg, sender) {
+    const serialized = ['bkgd_generateTutorial', 'bkgd_wrapNodeInWindow',
+      'bkgd_convertNodeToLoadedWindow', 'bkgd_convertNodeFromLoadedWindow',
+      'bkgd_importBackupFile', 'bkgd_importTabsOutliner', 'bkgd_backfillFavicons',
+      'bkgd_loadSavedNode', 'bkgd_loadSavedWindow'];
+    if (! serialized.includes(msg.msg)) return handler.call(this, msg, sender);
+    await this.treeLoaded;
+    const unlock = await this.tree.onMessageMutex.lock();
+    try { return await handler.call(this, msg, sender); }
+    finally { unlock(); }
+  }
+
   getBkgdRequestKey (msg) {
     if (! msg?.sourceId || ! msg?.requestId) return null;
     // These requests are read-only or naturally repeatable, and getTree may
     // contain megabytes of data which should not be retained in the cache.
     if (['bkgd_ping', 'bkgd_getTree', 'bkgd_focusWindow',
       'bkgd_getPersistenceState', 'bkgd_retryPersistence',
-      'bkgd_getStartupState', 'bkgd_getRecoveryData'].includes(msg.msg)) {
+      'bkgd_getStartupState', 'bkgd_getRecoveryData', 'bkgd_listDeleted'].includes(msg.msg)) {
       return null;
     }
     return `${msg.sourceId}\u0000${msg.requestId}\u0000${msg.msg}`;
@@ -1665,6 +1691,12 @@ export class Bkgd {
     await this.cfg.set('clientId', this.clientId);
     return { clientId: this.clientId };
   }
+
+  bkgd_listDeleted () { return this.deletionHistory.list(); }
+  bkgd_deleteSelection (msg) { return this.deletionHistory.delete(msg); }
+  bkgd_restoreDeleted (msg) { return this.deletionHistory.restore(msg.entryId); }
+  bkgd_purgeDeleted (msg) { return this.deletionHistory.purge(msg.ids); }
+  bkgd_historyPolicy (msg) { return this.deletionHistory.configure(msg.policy); }
 
   async bkgd_getTree (msg) {
     await this.treeLoaded;  // ensure tree is loaded before sending it
@@ -2644,7 +2676,10 @@ export class Bkgd {
       // Bkgd can handle this
       const handler = this[`command_${command}`];
       // actually handle the event
-      await handler.bind(this)(tab);
+      await this.treeLoaded;
+      const unlock = await this.tree.onMessageMutex.lock();
+      try { await handler.bind(this)(tab); }
+      finally { unlock(); }
       return;
     }
 

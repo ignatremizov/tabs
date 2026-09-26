@@ -19,6 +19,9 @@ export class Node {
     this.parent = parent;
     // '', 'window', or 'tab'
     this.type = '';
+    // Durable recovery generation, so an old deletion request cannot act on
+    // the same node ID after restoration and bounded receipt expiry.
+    this.recoveryId = undefined;
     // browser attachment
     this.windowId = undefined;
     this.tabId = undefined;

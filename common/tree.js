@@ -70,6 +70,7 @@ export class Tree {
     // fields to copy when serializing Nodes to/from dict
     this.dictable = [
       'id',
+      'recoveryId',
       'type',
       'windowId',
       'tabId',
@@ -2238,6 +2239,10 @@ export class Tree {
       }
     }
   }
+
+  // History management pages listen separately; ordinary outlines use the
+  // authoritative refresh notification after a committed delete or restore.
+  tree_historyChanged () {}
 
   async tree_nodeAdded (msg, sender, sendResponse) {
     await this.treeLoaded;  // wait until tree is ready

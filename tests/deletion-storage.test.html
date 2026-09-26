@@ -25,8 +25,12 @@
   async function fixture(run, old = false) {
     const idb = new IDB(); idb.dbName = `tabs-history-test-${crypto.randomUUID()}`;
     if (old) await new Promise((resolve,reject)=>{
-      const request=indexedDB.open(idb.dbName,1);
-      request.onupgradeneeded=()=>request.result.createObjectStore('Nodes',{keyPath:'key'}).put({key:record.id,data:JSON.stringify(record)});
+      const version=old===true?1:old;
+      const request=indexedDB.open(idb.dbName,version);
+      request.onupgradeneeded=()=>{
+        request.result.createObjectStore('Nodes',{keyPath:'key'}).put({key:record.id,data:JSON.stringify(record)});
+        if(version===2)request.result.createObjectStore('Ops',{keyPath:'key'}).put({key:'old-operation',data:'never replay'});
+      };
       request.onsuccess=()=>{request.result.close();resolve();}; request.onerror=()=>reject(request.error);
     });
     idb.init();
@@ -36,11 +40,18 @@
     }); }
   }
   await test('schema migration adds history stores without altering old node bytes', ()=>fixture(async db=>{
-    assert((await db.db).version===2);
+    assert((await db.db).version===3);
     const raw=await db.loadRawRecords();
     assert(raw.length===1 && raw[0].value.data===JSON.stringify(record));
     const state=await db.loadHistoryState(); assert(state.rows.length===0 && state.policy.days===30);
   },true));
+  await test('older schema-2 Ops databases gain history without replaying or deleting old data', ()=>fixture(async db=>{
+    const raw=await db.loadRawRecords();assert(raw[0].value.data===JSON.stringify(record));
+    assert((await db.db).objectStoreNames.contains('Ops'),'Legacy records must not be silently deleted');
+    const state=await db.loadHistoryState();assert(state.rows.length===0);
+    await db.commitHistoryChange({add:entry('from-old-schema')});
+    assert((await db.loadHistoryState()).rows.length===1);
+  },2));
   await test('deletion and history commit in one transaction, separately from active records', ()=>fixture(async db=>{
     await db.saveNode(node(record)); const saved=entry();
     await db.commitHistoryChange({nodes:[{id:'root',nodes:[]}],deleteNodeIds:['original'],add:saved});

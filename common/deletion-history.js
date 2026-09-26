@@ -2,6 +2,7 @@
 // Copyright (C) 2026 Ignat Remizov
 // SPDX-License-Identifier: AGPL-3.0-or-later
 "use strict";
+import { treeDataLimits } from '/common/serialized-tree.js';
 
 export const historyDefaults = Object.freeze({
   days: 30,
@@ -40,6 +41,14 @@ export function historyBytes(value) {
 
 export function historyPruneIds(rows, policy, now = Date.now(), protectedId = null) {
   const limits = historyPolicy(policy);
+  for (const row of rows) {
+    historyKey(row?.key);
+    if (! Number.isFinite(row.deletedAt) || row.deletedAt < 0
+      || ! ['deleted', 'restored'].includes(row.status)
+      || ! Number.isSafeInteger(row.bytes) || row.bytes < 0) {
+      throw new TypeError('Invalid stored history metadata; history was not changed');
+    }
+  }
   const cutoff = now - limits.days * 86400000;
   const sorted = [...rows].sort((a, b) => b.deletedAt - a.deletedAt
     || String(b.key).localeCompare(String(a.key)));
@@ -71,6 +80,37 @@ export function historyPruneIds(rows, policy, now = Date.now(), protectedId = nu
   }
   // Small consumed-action receipts make restore retries idempotent across
   // background restarts without retaining the deleted browsing data twice.
-  expired.push(...receipts.slice(limits.entries).map(row => row.key));
+  let receiptBytes = 0;
+  for (const [index, row] of receipts.entries()) {
+    receiptBytes += row.bytes;
+    if (index >= limits.entries || receiptBytes > 1024 * 1024) expired.push(row.key);
+  }
   return expired;
+}
+
+// Compare user data and structure, not volatile titles, favicons, or access
+// timestamps. A delayed confirmation must not delete a newly edited branch.
+export function deletionSelection(node, mode = 'branch') {
+  if (! ['branch', 'promoteKids'].includes(mode)) throw new TypeError('Invalid deletion mode');
+  const stack = [node], seen = new Set(), records = [];
+  const fields = ['id', 'recoveryId', 'type', 'label', 'note', 'url', 'bookmark', 'checkbox',
+    'checkboxPx', 'cookieStoreId', 'containerProfileId', 'incognito',
+    'nativeGroup', 'groupTitle', 'groupColor'];
+  while (stack.length) {
+    const next = stack.pop();
+    if (! next || seen.has(next.id) || seen.size >= treeDataLimits.nodes) {
+      throw new TypeError('Invalid or oversized deletion selection');
+    }
+    seen.add(next.id);
+    records.push([next.parent?.id, next.nodes.map(child => child.id),
+      ...fields.map(field => next[field] ?? null)]);
+    if (mode === 'branch') stack.push(...next.nodes.slice().reverse());
+  }
+  return { mode, records };
+}
+
+export async function deletionFingerprint(node, mode = 'branch') {
+  const data = new TextEncoder().encode(JSON.stringify(deletionSelection(node, mode)));
+  const hash = await crypto.subtle.digest('SHA-256', data);
+  return [...new Uint8Array(hash)].map(value => value.toString(16).padStart(2, '0')).join('');
 }
