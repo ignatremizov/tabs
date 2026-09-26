@@ -4,10 +4,14 @@ What changed, and when?  You know the drill.
 
 ## Unreleased
 
+## 0.0.3.12
+
 - Align container badges with neighboring favicons rather than the SVG's
   baseline. Paint inactive cursor rows using muted palette gradients instead
   of filtering the entire row, keeping container and favicon colors intact
   without an extra filtered row surface.
+
+## 0.0.3.11
 
 - Reserve durable session identities before resolving reused browser IDs or
   URL matches during startup. Rebind restored windows before their tabs and
@@ -114,7 +118,7 @@ What changed, and when?  You know the drill.
 
 # 0.0.3 (2026-08-16)
 
-The latest signed Firefox package for this release line is build `0.0.3.10`.
+The latest signed Firefox package for this release line is build `0.0.3.12`.
 
 This is the cumulative fork-versus-upstream inventory for 0.0.3.  It compares
 the fork with upstream `r0.1.181.0` (`e0031c2`) and includes work first shipped

@@ -166,3 +166,13 @@ Only synthetic evidence and unsigned test packages are uploaded. Browser test
 profiles are newly created on the runner, and no signing job or credentials are
 configured. A local pass of these commands is separate from a hosted workflow
 result, which is available after the commits are pushed.
+
+## Recorded signed 0.0.3.12
+
+The supplied Firefox build includes all reliability fixes first shipped in .11
+and the badge/inactive-cursor styling from `cb5f8c7`. Its SHA256 is
+`d9ba6619a14229fe16e83726d171e05b65aaced01ef109591c9eb9f8dc480c74`.
+The generated version metadata was recorded afterward in `3b4d8d9`; publishing
+these commits does not rebuild, modify, or resubmit the existing signed XPI.
+The later changelog organization is documentation bookkeeping, not a claim
+that those documentation bytes were in the original signed package.
