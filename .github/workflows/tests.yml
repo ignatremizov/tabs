@@ -35,13 +35,21 @@ jobs:
         with:
           chrome-version: stable
           install-dependencies: true
+      - name: Install this Chrome build's sandbox helper in the disposable runner
+        env:
+          CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          set -euo pipefail
+          helper="$(dirname "$CHROME_BIN")/chrome_sandbox"
+          test -f "$helper"
+          sudo install -D -o root -g root -m 4755 "$helper" /usr/local/libexec/tabs-chrome-sandbox
       - name: Node, DOM, and synthetic release tests
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
           # Chrome for Testing lives outside Ubuntu's AppArmor allowlist.
-          # Use the runner's installed, root-owned sandbox helper rather than
+          # Use its matching, root-owned sandbox helper rather than
           # disabling Chromium's sandbox or changing host-wide userns policy.
-          CHROME_DEVEL_SANDBOX: /opt/google/chrome/chrome-sandbox
+          CHROME_DEVEL_SANDBOX: /usr/local/libexec/tabs-chrome-sandbox
         run: |
           set -euo pipefail
           test -u "$CHROME_DEVEL_SANDBOX"
