@@ -130,6 +130,29 @@ All diagnostic data is synthetic. These tests use fresh, marked workspaces,
 never the user's normal profile. The optional view handle exists only in the
 staged test addon, not the production source or packaged extension.
 
+## Recently deleted
+
+The **Deleted** toolbar button opens persistent local deletion recovery. A whole
+branch or marked batch is one action. **Restore as saved** preserves removed
+notes, nesting, container references, and native-group metadata without opening
+pages. It restores to the original location where possible, or a recovery
+folder/group when the parent no longer exists.
+
+Defaults are 30 days, 200 actions, and 32 MiB, with configurable bounded retention
+and explicit permanent removal. Private selections require confirmation and
+leave no recoverable copy. Failed transactions change neither the outline nor
+its browser tabs. This is deletion recovery, not Undo for edits or moves;
+ordinary browser closes and automatic cleanup do not create entries.
+
+See [deletion recovery](docs/deletion-history.html) for node-only deletion,
+retention, privacy, backup limits, and the additive database-v3 migration.
+Older database-v1 extension builds cannot be used for an in-place downgrade
+once a profile has been upgraded. Existing signed `.12` packages are unchanged.
+
+`make test-firefox-history` exercises real deletion rollback, two-view
+convergence, a full process restart, and the actual Restore as saved button
+using a fresh disposable Firefox profile.
+
 ## Background / Inspiration
 
 I used Tabs Outliner for a long time.  It was great.  But it was missing some
@@ -530,7 +553,9 @@ Client (browser extension):
 - Transactions / snapshots / server
     - [x] Unique ID generator for node and transaction IDs
     - [ ] Snapshots
-    - [ ] Transactions
+    - [x] Atomic deletion/recovery transactions
+    - [x] Persistent Recently deleted
+    - [ ] General edit/move transactions
     - [ ] Undo
     - [ ] Sync to/from server
     - [ ] Sync conflict resolution

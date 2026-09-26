@@ -4,6 +4,21 @@ What changed, and when?  You know the drill.
 
 ## Unreleased
 
+- Add persistent Recently deleted, accessed through the Deleted toolbar button.
+  Capture branch and marked-batch deletions atomically with their recovery
+  records; restore as saved into original or recovery locations, retaining
+  notes, nesting, container scope, and native-group metadata without reopening
+  pages. Preserve surviving promoted children rather than overwriting edits.
+- Add configurable 30-day/200-action/32-MiB default retention, confirmed
+  permanent removal, saved-only browser bindings, additive database-v3
+  migration, and bounded duplicate-action receipts. Private selections require
+  explicit permanent-deletion confirmation and retain no browsing-data copy.
+- Serialize recovery with other outline/browser mutations and pause delayed
+  writes during publication. Reject stale deletion confirmations and use a
+  recovery generation to prevent old requests deleting restored IDs again.
+- Add actual IndexedDB migration/rollback tests, history interface tests, and
+  an isolated two-process Firefox history/restore integration test.
+
 ## 0.0.3.12
 
 - Align container badges with neighboring favicons rather than the SVG's

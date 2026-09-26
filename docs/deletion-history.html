@@ -1,0 +1,68 @@
+<!doctype html>
+<!-- Copyright (C) 2026 Ignat Remizov; SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="en"><head><meta charset="utf-8"><title>Recently deleted</title>
+<script type="module" src="./docs.js"></script></head><body class="docs">
+<h1>Recently deleted</h1>
+<p>The <strong>Deleted</strong> toolbar button opens local recovery history.
+Explicit outline deletions are recorded as actions containing the removed
+nodes, notes, page addresses, nesting, and browser-context references.
+A branch deletion is one action, not a separate entry for every child.</p>
+<h2>Recover without reopening pages</h2>
+<p>Choose <strong>Restore as saved</strong>. The recovered outline is saved-only:
+no pages, tabs, or windows open automatically. Existing container references
+and native-group information are retained, but obsolete live browser IDs are
+not reused. When you later open a saved page, the usual exact-container checks
+apply; a missing or incompatible container does not silently switch accounts.</p>
+<p>Recovery uses the original parent and neighboring nodes when they still
+exist. Otherwise, it uses a surviving original native-group note or a clearly
+named <strong>Recovered deletions</strong> folder. A missing original group is
+recreated as a saved group note. Newer existing nodes are never overwritten.</p>
+<p>Deleting a marked node offers to delete all marked branches in the current
+window/session scope, with one confirmation and one recovery entry. Descendants
+already covered by a selected ancestor are not counted twice.</p>
+<h2>This is deletion recovery, not universal Undo</h2>
+<p>Existing one-node deletion can promote children rather than delete a whole
+branch. In that case, history contains only the removed node. Restoring it does
+not move the surviving children back or overwrite their newer edits. Window
+unwrap/conversion operations likewise do not become a general edit journal.</p>
+<p>Ordinary browser tab/window closes, automatic empty-window cleanup,
+reconciliation, title updates, and favicon changes do not fill this history.
+Use the browser's own recently closed controls or the existing saved outline
+for those cases. Undo for edits and moves is a separate future feature.</p>
+<h2>Retention and permanent removal</h2>
+<p>The defaults are <strong>30 days, 200 deletion actions, and 32 MiB of recovery
+data</strong>. The first limit reached removes the oldest entries. You can
+change the bounds under Retention settings. Reducing a limit requires
+confirmation and may remove entries immediately. Expired data is pruned at
+startup, daily, and when history is accessed or changed.</p>
+<p>An action too large for the configured budget is rejected <em>before</em>
+the outline or browser tabs are changed. Increase the limit, export a separate
+backup, or delete smaller branches instead. Small consumed-action receipts
+are retained separately with bounded size/count/age to prevent repeated
+restores from duplicating data; they do not retain the deleted branch payload.</p>
+<p><strong>Delete permanently</strong> removes a selected entry from local
+recovery history after confirmation. It does not erase exported backups or a
+branch that has already been restored. Normal outline backups do not include
+Recently deleted. Keep a separate backup for disk/profile loss.</p>
+<h2>Private windows and failures</h2>
+<p>A selection containing private-window data requires an additional explicit
+permanent-deletion confirmation. The entire selection is then removed without
+a recoverable history copy. No private URLs, labels, or notes are retained in
+the small duplicate-request receipt. Delete non-private branches separately
+when you want to retain their recovery data.</p>
+<p>History and the tree deletion are committed in one database transaction.
+A failed write leaves the existing outline and open tabs intact. Closing the
+selected browser tabs happens only after that commit. If the browser refuses
+a close or group change, history is still available and reconciliation repairs
+the surviving browser bindings.</p>
+<p>Selections changed in another view while you were confirming are rejected;
+review the updated outline before deleting. During an in-progress browser
+restore, wait for its tabs to settle and try again.</p>
+<h2>Storage version</h2>
+<p>This feature adds two stores through an IndexedDB version 3 migration. The
+existing node records are not rewritten by migration. Earlier schema-2 Ops
+records are also preserved, without replaying their old browser operations. Older extension builds
+that only understand database version 1 cannot open a profile after it has
+been upgraded. Keep a JSON backup before upgrading, and use a compatible newer
+build rather than downgrading that profile in place.</p>
+</body></html>

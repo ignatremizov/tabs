@@ -27,10 +27,12 @@ code {
 
   <h2>Database layout</h2>
   <p>
-  Database name: <code>TKTSTO</code>. Object store:
+  Database name: <code>TKTSTO</code>, schema version 3. Object stores:
   </p>
   <ul>
     <li><code>Nodes</code> — node records keyed by node ID.</li>
+    <li><code>DeletedBranches</code> — bounded recovery actions and consumed-action receipts.</li>
+    <li><code>DeletionHistorySettings</code> — retention policy.</li>
   </ul>
 
   <h2>Reconciliation</h2>
@@ -50,9 +52,10 @@ code {
   soon as the live tab strip changes.
   </p>
   <p>
-  The former schema-2 <code>Ops</code> store has no compatibility migration.
-  Moving from a build which used that schema requires exporting a backup,
-  clearing extension data, and restoring the export.
+  Schema version 3 advances past the former schema-2 <code>Ops</code>
+  experiment. Its existing Nodes and Ops records are preserved; old queued
+  browser operations are never replayed. Both schema-1 and schema-2 profiles
+  receive the additive history stores without clearing extension data.
   </p>
   <p>
   See <code>bkgd/reconcile.js</code> for the repair pass which keeps tree
@@ -159,5 +162,25 @@ Recovery export does not advance normal backup scheduling timestamps.</p>
 inserts a synthetic cycle, reloads the test addon, verifies the actual failure
 UI and prompt rejection, and downloads/compares the lossless recovery file.
 It never opens an existing user profile.</p>
+<h2>Deletion recovery (database v3)</h2>
+<p>An additive migration creates <code>DeletedBranches</code> and
+<code>DeletionHistorySettings</code> beside the existing <code>Nodes</code>
+store. Deletion captures affected records, not a full session snapshot. The
+history record, parent/child repairs, tombstones, and retention pruning commit
+in one transaction before the background publishes the mutation or closes tabs.</p>
+<p>Restoration validates both the saved graph and the final combined graph,
+strips live browser bindings, and atomically consumes the history entry while
+adding recovered records. Existing IDs can be reused only when free; collisions
+allocate fresh IDs. Each recovered node records <code>recoveryId</code>, included
+in semantic deletion fingerprints, so a replayed old request cannot delete a
+restored node after a bounded idempotence receipt has expired.</p>
+<p>Message, browser, native-context, and persistence locks protect the commit.
+A short history publication barrier also holds delayed NodeStore callbacks;
+a stale reference cannot attach a new child to a deleted parent. History
+notifications request authoritative view replacement after publication.</p>
+<p>Recovery payloads obey user count/age/size bounds; small consumed receipts
+have a separate count limit and 1-MiB bound. These are logical data budgets,
+not exact filesystem sizes. History does not form part of normal tree JSON
+backups. Database-v1 builds cannot open the upgraded profile in place.</p>
 </body>
 </html>

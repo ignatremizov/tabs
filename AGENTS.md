@@ -203,11 +203,20 @@ const response = await emit('bkgd_getTree');
 ```
 
 ### IndexedDB Schema
-Database name: `TKTSTO`
+Database name: `TKTSTO` (schema version 3; additive history-store migration)
 
 | Object Store | Key | Purpose |
 |-------------|-----|---------|
 | `Nodes` | node ID | Individual node data (JSON) |
+| `DeletedBranches` | action ID | Bounded deletion recovery and consumed-action receipts |
+| `DeletionHistorySettings` | setting key | Validated retention policy |
+
+User deletions enter `bkgd/deletion-history.js`; history and tree changes must
+commit together before publication or tab closure. Restoration is saved-only.
+Keep `recoveryId` in serialization and semantic deletion fingerprints. Do not
+replay old schema-2 Ops records or clear user data to migrate; v3 is additive.
+The history UI is `view/deleted.html`. Run `make test-firefox-history` for the
+real two-process recovery/restore test. General edit/move Undo is not implemented.
 
 ---
 
@@ -731,7 +740,7 @@ New test files should follow the pattern established in `tests/dom-safety.test.h
 
 - Service worker changes require extension reload
 - Side panel CSS/JS changes often only need panel reload
-- IndexedDB schema changes may require clearing extension data
+- IndexedDB schema changes require additive migrations and preserved recovery data; never clear the user’s extension data as a development shortcut
 
 ### Common Development Gotchas
 

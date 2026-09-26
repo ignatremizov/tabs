@@ -176,3 +176,12 @@ The generated version metadata was recorded afterward in `3b4d8d9`; publishing
 these commits does not rebuild, modify, or resubmit the existing signed XPI.
 The later changelog organization is documentation bookkeeping, not a claim
 that those documentation bytes were in the original signed package.
+
+## Database-v2 recovery migration
+
+The unreleased Recently deleted feature adds two stores without rewriting the
+existing Nodes records. Validate schema-v1 and old Ops/schema-v2 migration, transaction rollback,
+process restart, and saved-only restore before its first signed release.
+Once used, database-v1-only builds (including `.12`) cannot read that profile in
+place; export a normal JSON backup before upgrading. This source work does not
+change, replace, or resubmit any existing signed `.12` archive.
