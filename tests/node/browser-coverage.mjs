@@ -17,6 +17,7 @@ let debugPort = 9222;
 
 const testPages = [
   '/tests/dom-safety.test.html',
+  '/tests/deletion-storage.test.html',
   '/tests/native-context-view.test.html',
   '/tests/render-cost.test.html',
   '/tests/tree-node.test.html?env=chrome',

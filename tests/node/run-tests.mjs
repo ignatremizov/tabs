@@ -9338,6 +9338,12 @@ async function runTests() {
     TreeView, createTree, addChild, jsonSchema, IDB
   });
 
+  const { registerDeletionHistoryTests } = await import('./deletion-history.test.mjs');
+  await registerDeletionHistoryTests({
+    test, assert, assertEqual, api, emit, Bkgd, Tree, TreeStore, Node, NodeStore,
+    TreeView, createTree, addChild, IDB
+  });
+
   let passCount = 0;
   let failCount = 0;
 

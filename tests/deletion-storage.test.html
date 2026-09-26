@@ -1,0 +1,86 @@
+<!doctype html>
+<!-- Copyright (C) 2026 Ignat Remizov; SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="en"><head><meta charset="utf-8"><title>Deletion history storage tests</title>
+<script>
+  window.__TKTSTO_TEST__ = true; window.__TKTSTO_TEST_QUIET__ = true;
+  window.chrome = {runtime:{sendMessage:async()=>({}),onMessage:{addListener(){}}},
+    storage:{local:{get:async()=>({})},onChanged:{addListener(){}}},i18n:{getMessage:key=>key}};
+  window.browser = window.chrome;
+</script></head><body><h1>Transactional deletion history</h1><pre id="results"></pre>
+<script type="module">
+  import { IDB } from '/bkgd/idb.js';
+  import { historyDefaults, historyBytes } from '/common/deletion-history.js';
+  const results = [];
+  const assert = (value, message = 'Assertion failed') => { if (!value) throw new Error(message); };
+  async function test(name, run) {
+    try { await run(); results.push({name, pass:true}); }
+    catch (err) { results.push({name, pass:false, error:err.message}); console.error(name,err); }
+  }
+  const record = {id:'original',parent:'root',url:'https://example.test/saved',nodes:[]};
+  const node = data => ({id:data.id,toDict:()=>structuredClone(data)});
+  const entry = (key = 'entry-1', now = Date.now()) => {
+    const data = JSON.stringify({schema:1, records:{original:record}});
+    return {key, deletedAt:now, status:'deleted', data, bytes:historyBytes(data), summary:{label:'Synthetic branch'}};
+  };
+  async function fixture(run, old = false) {
+    const idb = new IDB(); idb.dbName = `tabs-history-test-${crypto.randomUUID()}`;
+    if (old) await new Promise((resolve,reject)=>{
+      const request=indexedDB.open(idb.dbName,1);
+      request.onupgradeneeded=()=>request.result.createObjectStore('Nodes',{keyPath:'key'}).put({key:record.id,data:JSON.stringify(record)});
+      request.onsuccess=()=>{request.result.close();resolve();}; request.onerror=()=>reject(request.error);
+    });
+    idb.init();
+    try { await idb.db; await run(idb); }
+    finally { (await idb.db).close(); await new Promise((resolve,reject)=>{
+      const request=indexedDB.deleteDatabase(idb.dbName); request.onsuccess=resolve; request.onerror=()=>reject(request.error);
+    }); }
+  }
+  await test('schema migration adds history stores without altering old node bytes', ()=>fixture(async db=>{
+    assert((await db.db).version===2);
+    const raw=await db.loadRawRecords();
+    assert(raw.length===1 && raw[0].value.data===JSON.stringify(record));
+    const state=await db.loadHistoryState(); assert(state.rows.length===0 && state.policy.days===30);
+  },true));
+  await test('deletion and history commit in one transaction, separately from active records', ()=>fixture(async db=>{
+    await db.saveNode(node(record)); const saved=entry();
+    await db.commitHistoryChange({nodes:[{id:'root',nodes:[]}],deleteNodeIds:['original'],add:saved});
+    assert(await db.loadNode('original')===null);
+    assert((await db.loadNode('root')).nodes.length===0);
+    const state=await db.loadHistoryState(); assert(state.rows.length===1 && state.rows[0].data===saved.data);
+    assert(Object.keys(await db.loadAllNodes()).join(',')==='root');
+  }));
+  await test('history write failure rolls back deletion and parent updates', ()=>fixture(async db=>{
+    await db.saveNode(node(record)); const saved=entry(); delete saved.key;
+    let failed=false;
+    try { await db.commitHistoryChange({nodes:[{id:'root',nodes:[]}],deleteNodeIds:['original'],add:saved}); }
+    catch { failed=true; }
+    assert(failed); assert((await db.loadNode('original')).url===record.url);
+    assert(await db.loadNode('root')===null); assert((await db.loadHistoryState()).rows.length===0);
+  }));
+  await test('restoration consumes history atomically and rejects a duplicate commit', ()=>fixture(async db=>{
+    const saved=entry(); await db.commitHistoryChange({add:saved});
+    const consume={key:saved.key,expectedData:saved.data,result:{ids:['restored-1']}};
+    await db.commitHistoryChange({nodes:[{...record,id:'restored-1'}],consume});
+    const row=(await db.loadHistoryState()).rows[0];
+    assert(row.status==='restored' && !row.data && row.result.ids[0]==='restored-1');
+    let failed=false; try {await db.commitHistoryChange({nodes:[{...record,id:'duplicate'}],consume});}catch{failed=true;}
+    assert(failed && await db.loadNode('duplicate')===null);
+  }));
+  await test('retention settings and pruning commit together without removing active nodes', ()=>fixture(async db=>{
+    await db.saveNode(node(record)); await db.commitHistoryChange({add:entry('entry-1',Date.now()-1000)});
+    await db.commitHistoryChange({add:entry('entry-2'),policy:{...historyDefaults,entries:1}});
+    const state=await db.loadHistoryState(); assert(state.policy.entries===1 && state.rows.length===1);
+    assert(state.rows[0].key==='entry-2'); assert((await db.loadNode('original')).url===record.url);
+    await db.commitHistoryChange({purge:['entry-2']}); assert((await db.loadHistoryState()).rows.length===0);
+  }));
+  await test('a branch larger than the history limit is not deleted', ()=>fixture(async db=>{
+    await db.saveNode(node(record)); const saved=entry(); saved.bytes=1048577;
+    let failed=false;
+    try {await db.commitHistoryChange({deleteNodeIds:['original'],add:saved,policy:{...historyDefaults,bytes:1048576}});}catch{failed=true;}
+    assert(failed && (await db.loadNode('original')).url===record.url);
+    assert((await db.loadHistoryState()).rows.length===0);
+  }));
+  window.__TEST_RESULTS__={results,passCount:results.filter(x=>x.pass).length,failCount:results.filter(x=>!x.pass).length};
+  document.querySelector('#results').textContent=results.map(x=>`${x.pass?'PASS':'FAIL'} ${x.name}${x.error?': '+x.error:''}`).join('\n');
+  window.__TEST_DONE__=true;
+</script></body></html>
