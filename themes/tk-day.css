@@ -108,6 +108,7 @@ foo {
   --tab-active-fg: #000;
   --tab-loaded-fg: #222;
   --tab-was-loaded-fg: #f73f96;
+  --history-danger-fg: #a21e5b;
   --tab-unloaded-fg: #999;
   /***** tree lines *****/
   --tree-line: #b5b5d0;

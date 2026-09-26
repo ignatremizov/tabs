@@ -60,6 +60,7 @@ foo {
   --tab-active-fg: #fff;
   --tab-loaded-fg: #eee;
   --tab-was-loaded-fg: #f73f96;
+  --history-danger-fg: #f73f96;
   --tab-unloaded-fg: #999;
   /***** tree lines *****/
   --tree-line: #567;

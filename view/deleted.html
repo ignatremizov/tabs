@@ -1,0 +1,46 @@
+<!doctype html>
+<!-- Copyright (C) 2026 Ignat Remizov; SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Recently deleted — Tab Outliner</title>
+  <link id="theme-base" rel="stylesheet" href="/themes/tk.css">
+  <link id="theme-variant" rel="stylesheet" href="/themes/tk-night.css">
+  <link rel="stylesheet" href="/view/deleted.css">
+  <script type="module" src="/view/deleted.js"></script>
+</head>
+<body>
+  <main class="history-page">
+    <header class="history-header">
+      <div><p class="eyebrow">TAB OUTLINER · LOCAL RECOVERY</p><h1>Recently deleted</h1></div>
+      <button id="history-refresh" type="button">Refresh</button>
+    </header>
+    <p class="history-intro">Recover a deleted branch, including its notes and saved sessions.
+      <strong>Restored pages stay saved. Nothing opens automatically.</strong></p>
+    <p id="history-error" role="alert" class="history-error" hidden></p>
+    <p id="history-status" role="status" aria-live="polite">Loading deletion history…</p>
+    <div class="history-search"><label for="history-search">Find a branch</label>
+      <input type="search" id="history-search" placeholder="Name or original location" autocomplete="off"></div>
+    <section id="history-list" aria-label="Deleted branches" aria-busy="true"></section>
+    <p id="history-empty" hidden>No deleted branches to recover. Future outline deletions will appear here.</p>
+    <details id="history-settings"><summary>Retention settings</summary>
+      <p>Older entries are permanently removed when any limit is reached. Reducing a limit can remove entries immediately.</p>
+      <form id="history-policy">
+        <label>Keep for (days)<input id="history-days" type="number" min="1" max="3650" required></label>
+        <label>Maximum actions<input id="history-entries" type="number" min="1" max="1000" required></label>
+        <label>Storage limit (MiB)<input id="history-size" type="number" min="1" max="256" required></label>
+        <button type="submit">Apply limits</button>
+      </form>
+      <p class="history-footnote">Stored locally in this browser profile. Private selections are not retained.
+        Removing history does not erase exported backups. Ordinary outline backups do not include this history.</p>
+    </details>
+    <footer><a href="/docs/deletion-history.html">About deletion recovery</a><span>Not a replacement for a separate backup.</span></footer>
+  </main>
+  <dialog id="history-confirm" aria-labelledby="history-confirm-title">
+    <h2 id="history-confirm-title">Confirm permanent change</h2>
+    <p id="history-confirm-message"></p>
+    <form method="dialog"><button value="cancel" autofocus>Cancel</button><button value="confirm" id="history-confirm-yes">Continue</button></form>
+  </dialog>
+</body>
+</html>

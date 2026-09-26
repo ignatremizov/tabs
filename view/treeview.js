@@ -19,6 +19,7 @@ import { inputDialog, checkboxDialog, nodeEditDialog } from '/common/dialog.js';
 import { NodeView } from './nodeview.js';
 import { Tree } from '/common/tree.js';
 import { Mutex } from '/common/mutex.js';
+import { deletionFingerprint } from '/common/deletion-history.js';
 
 
 export class TreeView extends Tree {
@@ -2148,6 +2149,60 @@ export class TreeView extends Tree {
     return 'all';
   }
 
+  async requestDeletion (selection) {
+    const items = await Promise.all(selection.map(async ({node, mode, fingerprint}) => ({
+      nodeId: node.id, mode, fingerprint: fingerprint || await deletionFingerprint(node, mode)
+    })));
+    const request = { entryId: `delete-${crypto.randomUUID()}`, items };
+    let result = await emit('bkgd_deleteSelection', request);
+    if (result?.requiresPrivateConfirmation) {
+      const confirmed = await this.confirmDialog('Delete private selection',
+        'This selection includes private-window data. It will be deleted permanently, without a Recently deleted copy. Delete the entire selection?');
+      if (! confirmed) return false;
+      result = await emit('bkgd_deleteSelection', {...request, privateConfirmed: true});
+    }
+    if (! result || result.requiresPrivateConfirmation
+      || (! Array.isArray(result.deleted) && ! result.alreadyApplied)) {
+      throw new Error('Deletion was not acknowledged. Refresh before trying again.');
+    }
+    // The background is authoritative. Apply the committed result locally so
+    // cursor handling can finish without waiting for a resync blocked by this
+    // UI action. Other views receive the full refresh after the transaction.
+    for (const item of result.deleted || []) {
+      await this.tree_nodeDeleted({...item, reason:'tree_nodeDeleted', emit:false});
+    }
+    this.requestTreeResync();
+    if (result.closeFailures || result.groupFailures) {
+      const outcome = result.privateDeletion ? 'Private selection deleted without a history copy'
+        : 'Deletion saved in Recently deleted';
+      // Do not let the ordinary success status overwrite a partial browser
+      // operation warning. The tree/history already committed, and resync is
+      // queued; this error never rolls back or repeats that transaction.
+      throw new Error(`${outcome}; ${result.closeFailures || 0} tabs could not close and ${result.groupFailures || 0} group changes failed. Review the surviving browser tabs.`);
+    }
+    return true;
+  }
+
+  async deleteMarkedSelection (cursor) {
+    const candidates = this.markedNodes.map(value => typeof value === 'string' ? this.nodes[value] : value)
+      .filter(node => node && node !== this.viewRoot && node.isChildOf(this.viewRoot, false));
+    const chosen = new Set(candidates.map(node => node.id));
+    const roots = candidates.filter(node => {
+      for (let parent = node.parent; parent && ! parent.isRoot(); parent = parent.parent) {
+        if (chosen.has(parent.id)) return false;
+      }
+      return true;
+    });
+    if (! roots.length || ! chosen.has(cursor.id)) return false;
+    const selection = await Promise.all(roots.map(async node => ({node,mode:'branch',
+      fingerprint:await deletionFingerprint(node,'branch')})));
+    const count = roots.reduce((total,node) => total + 1 + node.countNodes(), 0);
+    if (! await this.confirmDialog('Delete marked branches',
+      `Delete ${count} nodes in ${roots.length} marked branches? Open tabs will close. This is one action in Recently deleted.`)) return true;
+    if (await this.requestDeletion(selection)) this.setStatus(`Deleted ${count} nodes; see Recently deleted.`);
+    return true;
+  }
+
   async action_deleteNode(event) {
     debug('deleteNode');
     // abort if nothing to delete
@@ -2160,7 +2215,15 @@ export class TreeView extends Tree {
     if (cursor.isRoot()) return;
     if (cursor === this.viewRoot) return;
     // do nothing if cursor is outside of viewRoot
-    if (! this.cursor.isChildOf(this.viewRoot, false)) return;
+    if (! cursor.isChildOf(this.viewRoot, false)) return;
+
+    if (! this.isInert && cursor.marked && await this.deleteMarkedSelection(cursor)) return;
+    // Capture confirmation intent before a dialog, not after another view may
+    // have changed the same branch while the user was reading the prompt.
+    const intent = this.isInert ? {} : {
+      branch: await deletionFingerprint(cursor, 'branch'),
+      promoteKids: await deletionFingerprint(cursor, 'promoteKids')
+    };
 
     // figure out where to put the cursor after deletion
     let newCursor = this.cursor;  // default if cursor === mouseNode
@@ -2263,8 +2326,12 @@ export class TreeView extends Tree {
           `This will close the window and delete ${tabCount} ${tabLabel}.${warning} Continue?`
         );
         if (! confirmed) return;
-        await toDelete.unload({ reason: 'userAction' });
-        await toDelete.deleteSelf({ reason: 'userAction' });
+        // Capture the live window's complete branch before closing anything.
+        // Inert fixtures retain their existing legacy behavior.
+        if (this.isInert) await toDelete.unload({ reason: 'userAction' });
+        const changed = await toDelete.deleteSelf({ reason: 'userAction',
+          deletionFingerprint: intent.branch });
+        if (! changed) return;
         this.setStatus(`deleted ${line}`);
         await restoreCursor();
         return;
@@ -2365,7 +2432,8 @@ export class TreeView extends Tree {
     // if leaf, just delete it... simple
     if (cursor.isLeaf()) {
       //debug('delete leaf node');
-      await toDelete.deleteSelf({ reason: 'userAction' });
+      if (! await toDelete.deleteSelf({ reason: 'userAction',
+        deletionFingerprint: intent.branch })) return;
       this.setStatus(`deleted ${line}`);
     }
     // don't delete an open window; unload it instead
@@ -2382,7 +2450,8 @@ export class TreeView extends Tree {
       if (! dStyle) return;
 
       if ('one' === dStyle) {
-        await toDelete.deleteSelfAndPromoteKids({ reason: 'userAction' });
+        if (! await toDelete.deleteSelfAndPromoteKids({ reason: 'userAction',
+          deletionFingerprint: intent.promoteKids })) return;
         this.setStatus(`deleted ${line}`);
       }
       //else if ('row1' === dStyle) {
@@ -2391,7 +2460,8 @@ export class TreeView extends Tree {
       //  this.setStatus(`deleted ${line}`);
       //}
       else if ('all' === dStyle) {
-        await toDelete.deleteSelf({ reason: 'userAction' });
+        if (! await toDelete.deleteSelf({ reason: 'userAction',
+          deletionFingerprint: intent.branch })) return;
         this.setStatus(`deleted ${numToDelete} nodes`);
       }
     }
@@ -3889,6 +3959,9 @@ export class TreeView extends Tree {
       'Open tree view',
       () => this.onTreeViewInTabBtnClick()
     );
+    const historyButton = this.document.getElementById('deleted-history-btn');
+    if (historyButton) handleClick(historyButton, 'Recently deleted',
+      () => this.openInternalPage('/view/deleted.html'));
     // zoom in and out
     handleClick(this.$zoomOutBtn, 'Zoom update', () => this.onZoomBtn(-1));
     handleClick(this.$zoomInBtn, 'Zoom update', () => this.onZoomBtn(1));

@@ -18,6 +18,7 @@ let debugPort = 9222;
 const testPages = [
   '/tests/dom-safety.test.html',
   '/tests/deletion-storage.test.html',
+  '/tests/deletion-view.test.html',
   '/tests/native-context-view.test.html',
   '/tests/render-cost.test.html',
   '/tests/tree-node.test.html?env=chrome',
@@ -306,8 +307,12 @@ async function run() {
         + `${testResults.failCount} failed`
       );
       if (testResults.failCount > 0) {
+        const failures = (testResults.results || []).filter(result => result.pass === false);
+        fs.writeFileSync(path.join(coverageDir, 'failed-tests.json'),
+          JSON.stringify({ page, failures }, null, 2));
         throw new Error(
           `Browser tests failed: ${page}\n`
+          + failures.map(result => `${result.name}: ${result.error}`).join('\n') + '\n'
           + pageLogs.slice(-20).join('\n')
         );
       }

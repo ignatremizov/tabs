@@ -668,7 +668,19 @@ export class NodeView extends Node {
     return changed;
   }
 
+  async deleteSelfAndPromoteKids (args) {
+    if (! this.tree.isInert && args?.reason === 'userAction') {
+      return this.tree.requestDeletion([{node: this, mode: 'promoteKids',
+        fingerprint: args.deletionFingerprint}]);
+    }
+    return super.deleteSelfAndPromoteKids(args);
+  }
+
   async deleteSelf (...extra) {
+    if (! this.tree.isInert && extra[0]?.reason === 'userAction') {
+      return this.tree.requestDeletion([{node: this, mode: 'branch',
+        fingerprint: extra[0].deletionFingerprint}]);
+    }
     await this.tree.treeViewLoaded;
     if (this.isRoot()) return;  // never delete root
     let newCursor;

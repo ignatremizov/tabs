@@ -1,0 +1,48 @@
+/* Local deletion recovery, using the existing theme palette. */
+/* Copyright (C) 2026 Ignat Remizov; SPDX-License-Identifier: AGPL-3.0-or-later */
+html, body { height: auto; min-height: 100%; display: block; }
+.history-page { width: min(920px, calc(100% - 40px)); margin: 36px auto; font-size: 16px; line-height: 1.5; color: var(--doc-text-fg); }
+.history-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.history-header h1 { font-size: 30px; color: var(--tab-loaded-fg); margin: 2px 0; }
+.eyebrow { font-size: 12px; margin: 0; color: var(--tree-line-cursor); }
+.history-intro { max-width: 740px; margin: 22px 0; }
+.history-intro strong { display: block; font-weight: 500; color: var(--tab-loaded-fg); }
+.history-page button, #history-confirm button { font: inherit; color: var(--button-fg); background: var(--button-bg); border: var(--button-border); border-radius: 6px; padding: 7px 12px; cursor: pointer; }
+.history-page button:hover, #history-confirm button:hover { background: var(--button-hover-bg); }
+.history-page button:disabled { cursor: wait; opacity: .55; }
+.history-page input { box-sizing: border-box; font: inherit; color: var(--dialog-fg); background: var(--dialog-input-bg); border: 1px solid var(--tree-line); border-radius: 4px; padding: 8px; min-width: 0; }
+.history-page input::placeholder { color: var(--details-value-fg); opacity: 1; }
+.history-page :focus-visible, #history-confirm :focus-visible { outline: 2px solid var(--tree-line-cursor); outline-offset: 3px; }
+.history-search { display: flex; align-items: center; gap: 14px; margin: 20px 0 12px; }
+.history-search input { flex: 1; }
+#history-list { border-top: 1px solid var(--tree-line); }
+.history-entry { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px 20px; padding: 20px 0; border-bottom: 1px solid var(--tree-line); }
+.history-entry h2 { background: none; padding: 0; margin: 0 0 4px; font-size: 18px; color: var(--tab-loaded-fg); font-weight: 600; overflow-wrap: anywhere; text-shadow: none; }
+.history-entry p { margin: 3px 0; }
+.history-entry .history-location { font-size: 13px; overflow-wrap: anywhere; }
+.history-entry .history-meta { font-size: 13px; }
+.history-actions { display: flex; flex-direction: column; justify-content: center; align-items: stretch; gap: 8px; }
+.history-page .history-remove { background: transparent; border-color: transparent; font-size: 13px; color: var(--history-danger-fg); }
+.history-page .history-remove:hover { border-color: currentColor; }
+.history-error { color: var(--history-danger-fg); border-inline-start: 3px solid currentColor; padding: 10px 14px; overflow-wrap: anywhere; }
+#history-status { min-height: 24px; color: var(--tab-loaded-fg); }
+#history-empty { padding: 24px 0; }
+#history-settings { margin: 28px 0; }
+#history-settings summary { cursor: pointer; color: var(--tab-loaded-fg); }
+#history-policy { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)) auto; gap: 16px; align-items: end; }
+#history-policy label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+.history-footnote { font-size: 13px; }
+.history-page footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 13px; border-top: 1px solid var(--tree-line); padding-top: 18px; }
+.history-page a { color: var(--tree-line-cursor); }
+#history-confirm { box-sizing: border-box; max-width: min(480px, calc(100vw - 24px)); padding: 24px; color: var(--tab-loaded-fg); background: var(--tree-view-bg); border: 1px solid var(--tree-line); border-radius: 10px; }
+#history-confirm::backdrop { background: #0009; }
+#history-confirm h2 { background: none; padding: 0; font-size: 20px; text-shadow: none; }
+#history-confirm form { display: flex; justify-content: flex-end; gap: 12px; }
+@media (max-width: 600px) {
+  .history-page { width: calc(100% - 28px); margin-top: 20px; }
+  .history-entry { grid-template-columns: 1fr; }
+  .history-actions { flex-direction: row; flex-wrap: wrap; justify-content: flex-start; }
+  .history-search { flex-direction: column; align-items: stretch; gap: 4px; }
+  #history-policy { grid-template-columns: 1fr; }
+  .history-header h1 { font-size: 25px; }
+}

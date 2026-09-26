@@ -1,0 +1,111 @@
+<!doctype html>
+<!-- Copyright (C) 2026 Ignat Remizov; SPDX-License-Identifier: AGPL-3.0-or-later -->
+<html lang="en"><head><meta charset="utf-8"><title>Deletion recovery interface tests</title>
+<link rel="stylesheet" href="/themes/tk.css"><link rel="stylesheet" href="/themes/tk-night.css"><link rel="stylesheet" href="/view/deleted.css">
+<script>
+window.__TKTSTO_TEST__ = true; window.__TKTSTO_TEST_QUIET__ = true;
+window.chrome={runtime:{sendMessage:async()=>({}),onMessage:{addListener(){}}},storage:{local:{get:async()=>({})},onChanged:{addListener(){}}}};
+window.browser=window.chrome;
+</script></head><body><div id="test-fixture"></div><pre id="test-results"></pre>
+<script type="module">
+import {DeletedHistoryView} from '/view/deleted.js';
+import {historyDefaults} from '/common/deletion-history.js';
+const results=[], assert=(ok,msg='Assertion failed')=>{if(!ok)throw new Error(msg);};
+const test=async(name,fn)=>{try{await fn();results.push({name,pass:true});}catch(e){results.push({name,pass:false,error:e.message});console.error(name,e);}};
+const parsed=new DOMParser().parseFromString(await(await fetch('/view/deleted.html')).text(),'text/html');
+const fixture=document.querySelector('#test-fixture');
+for(const node of parsed.body.children) fixture.append(document.importNode(node,true));
+const entries=[{id:'history-1',label:'Research notes',location:'Window / Payments research',deletedAt:Date.now()-50000,nodeCount:14,tabCount:8,bytes:4096},
+{id:'history-2',label:'<img src=x data-injected=1>Not markup',location:'<b>Original folder</b>',deletedAt:Date.now()-90000,nodeCount:3,tabCount:2,bytes:1200}];
+let rows=structuredClone(entries),calls=[];
+const data=()=>({entries:rows,policy:{...historyDefaults},bytes:5296});
+const send=async(name,args)=>{
+ calls.push({name,args});
+ if(name==='bkgd_listDeleted')return data();
+ if(name==='bkgd_restoreDeleted'){rows=rows.filter(row=>row.id!==args.entryId);return{restored:14,fallbackCount:0};}
+ if(name==='bkgd_purgeDeleted'){rows=rows.filter(row=>!args.ids.includes(row.id));return{purged:args.ids.length};}
+ if(name==='bkgd_historyPolicy')return data();
+ throw new Error('Unexpected endpoint');
+};
+const page=new DeletedHistoryView(document,send);await page.bind();
+await test('history renders literal names, locations, and semantic controls without external images',async()=>{
+ assert(document.querySelectorAll('.history-entry').length===2);
+ assert(!fixture.querySelector('[data-injected]') && !fixture.querySelector('img'));
+ assert(fixture.textContent.includes('<img src=x data-injected=1>Not markup'));
+ assert(document.querySelector('[data-action=restore]').type==='button');
+ assert(document.querySelector('#history-status').getAttribute('aria-live')==='polite');
+});
+await test('local search filters history by name and original location',async()=>{
+ const input=document.querySelector('#history-search');input.value='payments';input.dispatchEvent(new Event('input'));
+ assert(document.querySelectorAll('.history-entry').length===1);
+ input.value='nothing matches';page.render();assert(!document.querySelector('#history-empty').hidden);
+ input.value='';page.render();
+});
+await test('restore is a single background action and never creates or navigates a browser tab',async()=>{
+ calls=[];const before=location.href;
+ await page.restore(entries[0]);
+ assert(calls.filter(c=>c.name==='bkgd_restoreDeleted').length===1);
+ assert(calls.every(c=>['bkgd_restoreDeleted','bkgd_listDeleted'].includes(c.name)));
+ assert(document.querySelector('#history-status').textContent.includes('No pages were opened'));
+ assert(location.href===before && document.querySelectorAll('.history-entry').length===1);
+});
+await test('permanent removal requires confirmation and targets only the selected entry',async()=>{
+ page.confirm=async()=>false;calls=[];await page.purge(entries[1]);assert(calls.length===0);
+ page.confirm=async message=>message.includes('Exported backups are unchanged');
+ await page.purge(entries[1]);assert(calls.some(c=>c.name==='bkgd_purgeDeleted'&&c.args.ids.join(',')==='history-2'));
+ assert(!document.querySelector('#history-empty').hidden);
+});
+await test('failed restoration retains the entry and presents a persistent error',async()=>{
+ rows=structuredClone(entries);await page.refresh();
+ page.send=async(name,args)=>{if(name==='bkgd_restoreDeleted')throw new Error('Synthetic disk failure');return send(name,args);};
+ await page.restore(entries[0]);
+ assert(!document.querySelector('#history-error').hidden && document.querySelector('#history-error').textContent.includes('disk failure'));
+ assert(document.querySelectorAll('.history-entry').length===2 && !page.busy);
+ assert(!document.querySelector('[data-action=restore]').disabled);page.send=send;
+});
+await test('retention edits survive background refresh and are validated before confirmation',async()=>{
+ const days=document.querySelector('#history-days');days.value='90';page.settingsDirty=true;
+ await page.refresh();assert(days.value==='90');
+ days.value='0';calls=[];await page.savePolicy();assert(calls.length===0);
+ days.value='90';page.confirm=async()=>true;await page.savePolicy();
+ assert(calls.some(c=>c.name==='bkgd_historyPolicy'&&c.args.policy.days===90));
+});
+await test('an older history response cannot replace a newer refresh result',async()=>{
+ let resolve;const delayed=new Promise(done=>{resolve=done;});let count=0;
+ page.send=async()=>++count===1?delayed:{...data(),entries:[]};
+ const old=page.refresh();await page.refresh();resolve(data());await old;
+ assert(page.rows.length===0);page.send=send;await page.refresh();
+});
+await test('restore remains single-flight through the post-commit history refresh',async()=>{
+ let finish;let restores=0;
+ const pending=new Promise(resolve=>{finish=resolve;});
+ page.send=async(name)=>{
+   if(name==='bkgd_restoreDeleted'){restores++;return {restored:1};}
+   if(name==='bkgd_listDeleted')return pending;
+ };
+ const first=page.restore(entries[0]);await Promise.resolve();await Promise.resolve();
+ assert(page.busy && document.querySelector('[data-action=restore]').disabled);
+ await page.restore(entries[1]);assert(restores===1);
+ finish(data());await first;assert(!page.busy);page.send=send;
+});
+await test('history text, warnings, and headings stay readable in day and night themes',async()=>{
+ const theme=document.querySelector('link[href="/themes/tk-night.css"]');
+ const luminance=rgb=>{
+   const values=rgb.match(/[0-9.]+/g).slice(0,3).map(value=>Number(value)/255)
+     .map(value=>value<=0.04045?value/12.92:((value+0.055)/1.055)**2.4);
+   return values[0]*0.2126+values[1]*0.7152+values[2]*0.0722;
+ };
+ for(const mode of ['day','night']){
+   await new Promise((resolve,reject)=>{theme.onload=resolve;theme.onerror=reject;theme.href=`/themes/tk-${mode}.css`;});
+   const bg=luminance(getComputedStyle(document.body).backgroundColor);
+   for(const selector of ['.history-intro','.history-location','.history-meta','.history-footnote','.history-remove','.history-error']){
+     const fg=luminance(getComputedStyle(document.querySelector(selector)).color);
+     assert((Math.max(bg,fg)+0.05)/(Math.min(bg,fg)+0.05)>=4.5,`${mode} low contrast: ${selector}`);
+   }
+   assert(getComputedStyle(document.querySelector('.history-entry h2')).textShadow==='none',`${mode} inherited tree title shadow`);
+ }
+});
+window.__TEST_RESULTS__={results,passCount:results.filter(x=>x.pass).length,failCount:results.filter(x=>!x.pass).length};
+document.querySelector('#test-results').textContent=results.map(x=>`${x.pass?'PASS':'FAIL'} ${x.name}${x.error?': '+x.error:''}`).join('\n');
+window.__TEST_DONE__=true;
+</script></body></html>

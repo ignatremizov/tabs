@@ -310,6 +310,10 @@
         buildViewScaffold();
         const view = new TreeView();
         view.resolveTreeViewLoaded();
+        view.resolveTreeLoaded();
+        // These action tests exercise a single view with an acknowledged
+        // background stub. Full resync/convergence is covered separately.
+        view.requestTreeResync = () => { view.resyncRequests = (view.resyncRequests || 0) + 1; };
         view.viewRoot = view.root;
         view.root.window = view.window;
         view.openWindowOnRootLoadTopmost = true;
@@ -320,6 +324,12 @@
             const id = `test-${nextId}`;
             nextId += 1;
             return id;
+          }
+          if (args?.msg === 'bkgd_deleteSelection') {
+            for (const item of args.items) {
+              if (! view.nodes[item.nodeId]) throw new Error('View deleted before persistence acknowledgement');
+            }
+            return { entryId: args.entryId, deleted: args.items };
           }
           return {};
         };
@@ -3198,6 +3208,62 @@
         return { before, after };
       });
 
+      test('marked deletion is one scoped request with nested selections counted once', async () => {
+        const view = createView();
+        const win = await addChild(view.root, {id:'batch-window',type:'window'});
+        const other = await addChild(view.root, {id:'other-window',type:'window'});
+        const parent = await addChild(win, {id:'batch-parent',label:'Parent'});
+        const child = await addChild(parent, {id:'batch-child',label:'Child'});
+        const sibling = await addChild(win, {id:'batch-sibling',label:'Sibling'});
+        const outside = await addChild(other, {id:'outside-marked',label:'Other window'});
+        for (const node of [parent,child,sibling,outside]) await node.setMarked(true,{reason:'test'});
+        view.viewRoot = win; view.cursor = parent;
+        const api = (env === 'firefox') ? window.browser : window.chrome;
+        const original = api.runtime.sendMessage, requests = [];
+        api.runtime.sendMessage = async msg => { if(msg.msg === 'bkgd_deleteSelection')requests.push(msg); return original(msg); };
+        try { await view.action_deleteNode({type:'command'}); }
+        finally { api.runtime.sendMessage = original; }
+        assertEqual(requests.length,1,'Batch must be a single durable action');
+        assertEqual(requests[0].items.map(item=>item.nodeId).sort().join(','),'batch-parent,batch-sibling','Nested and outside-scope marks must be excluded');
+        assertEqual(win.nodes.length,0,'Selected branches must be removed after acknowledgement');
+        assert(view.nodes[outside.id] === outside && outside.marked,'Other window must stay untouched');
+        assert(view.lastConfirm.description.includes('3 nodes in 2'),'Confirmation must count unique descendants');
+      });
+
+      test('deletion failure keeps the view intact until an authoritative acknowledgement', async () => {
+        const view = createView();
+        const node = await addChild(view.root,{id:'fail-delete',label:'Original'}); view.cursor=node;
+        const api = (env === 'firefox') ? window.browser : window.chrome;
+        const original = api.runtime.sendMessage;
+        api.runtime.sendMessage = async msg => msg.msg === 'bkgd_deleteSelection' ? {error:'Synthetic transaction failure'} : original(msg);
+        let failed=false;
+        try { await view.action_deleteNode({type:'command'}); } catch { failed=true; }
+        finally { api.runtime.sendMessage=original; }
+        assert(failed && view.nodes[node.id]===node && node.parent===view.root,'Failed deletion must not optimistically remove data');
+        assertEqual(view.resyncRequests || 0,0,'A failed transaction has nothing to publish');
+      });
+
+      test('confirmation keeps the original semantic fingerprint after a concurrent note edit', async () => {
+        const view=createView();
+        const node=await addChild(view.root,{id:'confirmed-branch',label:'Branch',expanded:false});
+        await addChild(node,{id:'confirmed-child',note:'Original note'});view.cursor=node;
+        const {deletionFingerprint}=await import('/common/deletion-history.js');
+        const expected=await deletionFingerprint(node,'branch');
+        view.inputDialog=async()=>{await view.nodes['confirmed-child'].setNotes('','Edited elsewhere',{reason:'test'});return {button:'OK'};};
+        const api=(env==='firefox')?window.browser:window.chrome;
+        const original=api.runtime.sendMessage;let submitted;
+        api.runtime.sendMessage=async msg=>{
+          if(msg.msg==='bkgd_deleteSelection'){submitted=msg.items[0].fingerprint;return {error:'Selection changed in another view'};}
+          return original(msg);
+        };
+        let rejected=false;
+        try {await view.action_deleteNode({type:'command'});}catch{rejected=true;}
+        finally {api.runtime.sendMessage=original;}
+        assert(rejected && submitted===expected,'The confirmation must not silently include later edits');
+        assert(submitted!==await deletionFingerprint(node,'branch'),'Fixture must contain a meaningful concurrent edit');
+        assert(view.nodes[node.id]===node,'Rejected confirmation must preserve the branch');
+      });
+
       test('native close removes selected parent and promotes its children', async () => {
         const view = createView();
         view.resolveTreeLoaded();
@@ -3303,7 +3369,7 @@
         return { before, after };
       });
 
-      test('delete root restore wrapper emits one atomic promote-delete', async () => {
+      test('delete root restore wrapper requests one authoritative promote-delete', async () => {
         const view = createView();
         const wrapper = await addChild(view.root, {
           id: 'restore',
@@ -3325,7 +3391,7 @@
         const messages = [];
         api.runtime.sendMessage = async (msg) => {
           messages.push({ ...msg });
-          return {};
+          return originalSendMessage(msg);
         };
         try {
           view.cursor = wrapper;
@@ -3341,12 +3407,12 @@
           'Every restored child should survive at root');
         assertEqual(view.root.nodes[0], first,
           'Promoted children should preserve order');
-        assertEqual(treeMessages.length, 1,
-          'Unwrap should broadcast one atomic tree operation');
-        assertEqual(treeMessages[0].msg, 'tree_nodeDeleted',
-          'Atomic operation should use the delete message');
-        assertEqual(treeMessages[0].mode, 'promoteKids',
-          'Delete message should instruct receivers to promote children');
+        assertEqual(treeMessages.length, 0,
+          'The view must not broadcast deletions before durability');
+        const requests = messages.filter(msg => msg.msg === 'bkgd_deleteSelection');
+        assertEqual(requests.length, 1, 'Unwrap requests one durable action');
+        assertEqual(requests[0].items[0].mode, 'promoteKids',
+          'The background request must preserve surviving children');
         assert(! messages.some((msg) => msg.msg === 'tree_nodeMoved'),
           'Unwrap must not race per-child moves against parent deletion');
       });
