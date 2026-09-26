@@ -38,8 +38,14 @@ jobs:
       - name: Node, DOM, and synthetic release tests
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.chrome-path }}
+          # Chrome for Testing lives outside Ubuntu's AppArmor allowlist.
+          # Use the runner's installed, root-owned sandbox helper rather than
+          # disabling Chromium's sandbox or changing host-wide userns policy.
+          CHROME_DEVEL_SANDBOX: /opt/google/chrome/chrome-sandbox
         run: |
           set -euo pipefail
+          test -u "$CHROME_DEVEL_SANDBOX"
+          test "$(stat -c %u "$CHROME_DEVEL_SANDBOX")" = 0
           mkdir -p "$RUNNER_TEMP/tabs-ci"
           make test-node 2>&1 | tee "$RUNNER_TEMP/tabs-ci/node.log"
           node tests/node/browser-coverage.mjs "$RUNNER_TEMP/tabs-coverage" 2>&1 | tee "$RUNNER_TEMP/tabs-ci/browser.log"
