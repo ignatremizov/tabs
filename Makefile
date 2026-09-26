@@ -6,7 +6,7 @@
 
 .PHONY: all help firefox-zip firefox-zip-current chrome-zip \
 	chrome-zip-current chrome-dir chrome-dir-current firefox-sign firefox-sign-current tag test test-node todo \
-	coverage test-firefox-context test-firefox-recovery test-firefox-restart test-firefox-presentation test-firefox-convergence test-release release-current bump-version v
+	coverage test-firefox-context test-firefox-recovery test-firefox-restart test-firefox-history test-firefox-presentation test-firefox-convergence test-release release-current bump-version v
 
 ifneq ($(filter v,$(MAKECMDGOALS)),)
 VERBOSE=1
@@ -63,6 +63,7 @@ help:
 	@echo "  test-node    - Run node-based tests only"
 	@echo "  test-firefox-context - Native container/group tests in a disposable Firefox profile"
 	@echo "  test-firefox-recovery - Corrupt-startup warning and lossless raw export test"
+	@echo "  test-firefox-history - Persistent deletion recovery and real restore UI after restart"
 	@echo "  test-firefox-restart - Two Firefox processes using the same NEW test profile"
 	@echo "  test-firefox-convergence - Two real views, lost/delayed updates, and failed-write retry"
 	@echo "  test-firefox-presentation - Firefox DOM and archive-rendering cost checks"
@@ -120,6 +121,9 @@ test-firefox-context:
 # Explicit output path keeps recovery diagnostics in a disposable directory.
 test-firefox-recovery:
 	@PYTHONDONTWRITEBYTECODE=1 python3 -B tests/firefox-recovery.py --output "$$(mktemp -d /tmp/tabs-recovery-results-XXXXXX)"
+
+test-firefox-history:
+	@PYTHONDONTWRITEBYTECODE=1 python3 -B tests/firefox-deletion-history.py --output "$$(mktemp -d /tmp/tabs-history-results-XXXXXX)"
 
 test-firefox-restart:
 	@PYTHONDONTWRITEBYTECODE=1 python3 -B tests/firefox-restart.py --output "$$(mktemp -d /tmp/tabs-restart-results-XXXXXX)"

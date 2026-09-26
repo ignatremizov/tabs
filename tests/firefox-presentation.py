@@ -42,7 +42,7 @@ def main():
     results = {}
     try:
         with FirefoxSession(args.geckodriver, work, args.output) as browser:
-            for page in ("native-context-view", "render-cost"):
+            for page in ("native-context-view", "render-cost", "deletion-storage", "deletion-view"):
                 browser.navigate(f"http://127.0.0.1:{server.server_port}/tests/{page}.test.html")
                 browser.wait("return window.__TEST_DONE__;", timeout=45)
                 result = browser.script("return window.__TEST_RESULTS__;")
@@ -52,7 +52,7 @@ def main():
                     results["renderMetrics"] = browser.script("return window.__RENDER_METRICS__;")
                 print(f"{page}: {result['passCount']} passed, {result['failCount']} failed", flush=True)
             (args.output / "results.json").write_text(json.dumps(results, indent=2))
-            assert all(results[page]["failCount"] == 0 for page in ("native-context-view", "render-cost")), results
+            assert all(results[page]["failCount"] == 0 for page in ("native-context-view", "render-cost", "deletion-storage", "deletion-view")), results
             print(json.dumps(results["renderMetrics"], indent=2))
     finally:
         server.shutdown()

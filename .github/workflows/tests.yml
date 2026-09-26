@@ -110,6 +110,7 @@ jobs:
           python3 -B tests/firefox-recovery.py --output "$RUNNER_TEMP/tabs-firefox/recovery" 2>&1 | tee "$RUNNER_TEMP/tabs-firefox/recovery.log"
           python3 -B tests/firefox-presentation.py --output "$RUNNER_TEMP/tabs-firefox/presentation" 2>&1 | tee "$RUNNER_TEMP/tabs-firefox/presentation.log"
           python3 -B tests/firefox-convergence.py --output "$RUNNER_TEMP/tabs-firefox/convergence" 2>&1 | tee "$RUNNER_TEMP/tabs-firefox/convergence.log"
+          python3 -B tests/firefox-deletion-history.py --output "$RUNNER_TEMP/tabs-firefox/history" 2>&1 | tee "$RUNNER_TEMP/tabs-firefox/history.log"
           python3 -B tests/firefox-restart.py --output "$RUNNER_TEMP/tabs-firefox/restart" 2>&1 | tee "$RUNNER_TEMP/tabs-firefox/restart.log"
       - name: Retain synthetic Firefox diagnostics
         if: always()
