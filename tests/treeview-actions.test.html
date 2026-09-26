@@ -3208,6 +3208,21 @@
         return { before, after };
       });
 
+      test('native recovery buttons retain Enter and Space instead of triggering outline commands', () => {
+        const view=createView();let commands=0;
+        view.keyBindings={'Enter':'deleteNode','Space':'deleteNode'};
+        view.action_deleteNode=()=>{commands++;};
+        const button=document.createElement('button');button.textContent='Deleted';document.body.append(button);
+        button.addEventListener('keydown',event=>view.keyHandler(event));
+        try {
+          for(const key of ['Enter',' ']){
+            const event=new KeyboardEvent('keydown',{key,bubbles:true,cancelable:true});
+            button.dispatchEvent(event);assert(!event.defaultPrevented,'Native button activation was intercepted');
+          }
+          assertEqual(commands,0,'Focused recovery control must not delete or open tree nodes');
+        } finally {button.remove();}
+      });
+
       test('marked deletion is one scoped request with nested selections counted once', async () => {
         const view = createView();
         const win = await addChild(view.root, {id:'batch-window',type:'window'});

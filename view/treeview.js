@@ -1298,6 +1298,10 @@ export class TreeView extends Tree {
   keyHandler (event) {
     // don't try to handle key events while a dialog is visible
     if (this.dialogActive) return;
+    // Native buttons need Enter/Space and their own keyboard behavior. In
+    // particular, Deleted and Retry saving must not activate/edit a tree node
+    // merely because the outline's document-level handler sees their keys.
+    if (event.target?.closest?.('button')) return;
     // pause regular handling while user is typing in search terms
     if (this.searchCaptureInput) {
       const passThru = this.searchKeyHandler(event);

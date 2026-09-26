@@ -133,7 +133,14 @@ def main():
             first.command('POST', 'window', {'handle':second_handle})
             first.script('window.__deletedId=arguments[0];', checkpoint['ids']['group'])
             first.wait('return !window.__isolatedTestTree.nodes[window.__deletedId];')
-            first.navigate(base + 'view/deleted.html')
+            handles=set(first.command('GET','window/handles'))
+            first.script("document.querySelector('#deleted-history-btn').focus();")
+            first.command('POST','actions',{'actions':[{'type':'key','id':'recovery-keyboard','actions':[
+                {'type':'keyDown','value':'\ue007'},{'type':'keyUp','value':'\ue007'}]}]})
+            first.wait("return browser.extension.getViews({type:'tab'}).some(view=>view.location.href.endsWith('/view/deleted.html'));")
+            opened=set(first.command('GET','window/handles'))-handles
+            assert len(opened)==1, 'Keyboard activation did not open exactly one recovery view'
+            first.command('POST','window',{'handle':opened.pop()})
             first.wait("return document.querySelectorAll('.history-entry').length === 1;")
             first.screenshot('recently-deleted.png')
             first.command('POST','window/rect',{'width':390,'height':850})
@@ -218,7 +225,7 @@ def main():
             summary = {'passed':True,'firefox':second.capabilities['browserVersion'],'workspace':str(work),
                 'rollbackVerified':result['rollbackVerified'],'twoViewsConverged':True,
                 'fullProcessRestart':True,'historySurvived':before['historySurvived'],
-                'realRestoreButton':True,'restored':restored,'groupOnlyRecovery':promoted}
+                'realRestoreButton':True,'keyboardToolbarActivation':True,'restored':restored,'groupOnlyRecovery':promoted}
             (args.output/'results.json').write_text(json.dumps(summary,indent=2))
             print(json.dumps(summary,indent=2))
     finally:
